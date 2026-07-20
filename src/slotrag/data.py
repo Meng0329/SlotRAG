@@ -54,7 +54,7 @@ def sha256_file(path: Path) -> str:
 
 def fetch_dataset(url: str, destination: Path, expected_sha256: str = "", timeout: float = 120.0) -> Path:
     if not url:
-        raise DatasetError("dataset URL is empty; set data.qobench_url")
+        raise DatasetError("dataset URL is empty")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_path = destination.with_suffix(destination.suffix + ".part")
     try:
@@ -112,46 +112,62 @@ def load_questions(path: str | Path) -> list[QuestionRecord]:
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             raise DatasetError(f"record {index} is not an object")
-        question = str(record.get("question") or record.get("query") or record.get("input") or "").strip()
-        if not question:
-            raise DatasetError(f"record {index} has no question")
-        raw_passages = record.get("passages") or record.get("documents") or record.get("context") or []
-        if isinstance(raw_passages, str):
-            raw_passages = [{"text": raw_passages}]
-        passages = [_passage_from_record(item, index * 10000 + offset) if isinstance(item, dict) else Passage(id=f"{index}#{offset}", text=str(item)) for offset, item in enumerate(raw_passages)]
-        answers = record.get("answers") or record.get("answer") or []
-        if isinstance(answers, str):
-            answers = [answers]
-        evidence = record.get("gold_evidence") or record.get("supporting_facts") or []
-        if isinstance(evidence, dict):
-            evidence = list(evidence)
-        questions.append(QuestionRecord(
-            id=str(record.get("id") or record.get("_id") or f"q-{index}"),
-            question=question,
-            passages=passages,
-            answers=[str(answer) for answer in answers],
-            gold_evidence=[str(item) for item in evidence],
-            metadata={k: v for k, v in record.items() if k not in {"question", "query", "input", "passages", "documents", "context", "answers", "answer", "gold_evidence", "supporting_facts"}},
-        ))
+        questions.append(question_from_record(record, index=index))
     return questions
 
 
-class QOBenchAdapter:
-    """Normalize a downloaded QO-Bench JSON/JSONL file into SlotRAG records.
-
-    QO-Bench releases have used both ``documents`` and ``context`` names, so
-    the adapter deliberately accepts the common wire variants while preserving
-    unknown operation metadata for later evaluation.
-    """
-
-    def __init__(self, source: str | Path) -> None:
-        self.source = Path(source)
-
-    def load(self) -> list[QuestionRecord]:
-        return load_questions(self.source)
-
-    def normalize(self, destination: str | Path) -> Path:
-        return normalize_jsonl(self.load(), destination)
+def question_from_record(record: dict[str, Any], *, index: int = 0) -> QuestionRecord:
+    """Normalize one source object without loading the surrounding dataset."""
+    question = str(record.get("question") or record.get("query") or record.get("input") or "").strip()
+    if not question:
+        raise DatasetError(f"record {index} has no question")
+    raw_passages = record.get("passages") or record.get("documents") or record.get("context") or []
+    if isinstance(raw_passages, str):
+        raw_passages = [{"text": raw_passages}]
+    passages = [
+        _passage_from_record(item, index * 10000 + offset)
+        if isinstance(item, dict)
+        else Passage(id=f"{index}#{offset}", text=str(item))
+        for offset, item in enumerate(raw_passages)
+    ]
+    answers = record.get("answers") if "answers" in record else record.get("answer", [])
+    if not isinstance(answers, list):
+        answers = [answers]
+    evidence = record.get("gold_evidence") or record.get("supporting_facts") or []
+    if isinstance(evidence, dict):
+        evidence = list(evidence)
+    explicit_metadata = record.get("metadata")
+    metadata = dict(explicit_metadata) if isinstance(explicit_metadata, dict) else {}
+    metadata.update({
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "id",
+            "_id",
+            "question",
+            "query",
+            "input",
+            "passages",
+            "documents",
+            "context",
+            "answers",
+            "answer",
+            "gold_evidence",
+            "supporting_facts",
+            "gold_plan",
+            "metadata",
+        }
+    })
+    return QuestionRecord(
+        id=str(record.get("id") or record.get("_id") or f"q-{index}"),
+        question=question,
+        passages=passages,
+        answers=[str(answer) for answer in answers if answer is not None],
+        gold_evidence=[str(item) for item in evidence],
+        gold_plan=record.get("gold_plan"),
+        metadata=metadata,
+    )
 
 
 def normalize_jsonl(records: Iterable[QuestionRecord], destination: str | Path) -> Path:

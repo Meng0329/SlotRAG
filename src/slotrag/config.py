@@ -17,6 +17,8 @@ class ServiceConfig(BaseModel):
     model: str
     api_key_env: str
     timeout_seconds: float = Field(gt=0)
+    max_retries: int = Field(default=2, ge=0, le=8)
+    retry_backoff_seconds: float = Field(default=0.25, ge=0, le=30)
 
     @property
     def api_key(self) -> str:
@@ -64,6 +66,9 @@ class ExecutionConfig(BaseModel):
     default_slot_cost: float = Field(default=1.0, gt=0)
     unbound_argument_cost: float = Field(default=2.0, gt=0)
     random_seed: int = 2027
+    materialization_top_k: int = Field(default=5, gt=0, le=50)
+    max_binding_contexts: int = Field(default=2, gt=0, le=50)
+    max_retrieval_calls: int = Field(default=4, gt=0, le=100)
 
 
 class DataConfig(BaseModel):
@@ -71,8 +76,6 @@ class DataConfig(BaseModel):
 
     cache_dir: Path = Path("data/raw")
     processed_dir: Path = Path("data/processed")
-    qobench_url: str = ""
-    qobench_sha256: str = ""
 
 
 class AppConfig(BaseModel):

@@ -8,6 +8,10 @@ import typer
 
 from .config import AppConfig
 from .baseline import run_whole_question_baseline
+from .benchmarking.config import BenchmarkSuite
+from .benchmarking.datasets import audit_suite
+from .benchmarking.runner import BenchmarkRunner
+from .benchmarking.statistics import summarize_run
 from .data import chunk_passages, fetch_dataset, load_questions, normalize_jsonl
 from .doctor import check_services
 from .evaluation import result_row, summarize, write_csv, write_jsonl
@@ -19,7 +23,9 @@ from .retrieval import EmbeddingCache, HybridRetriever
 
 app = typer.Typer(help="SlotRAG research prototype")
 data_app = typer.Typer(help="Dataset operations")
+benchmark_app = typer.Typer(help="Reproducible multi-dataset benchmark operations")
 app.add_typer(data_app, name="data")
+app.add_typer(benchmark_app, name="benchmark")
 
 
 def load_config(config: Path) -> AppConfig:
@@ -44,19 +50,99 @@ def doctor(config: Path = typer.Option(Path("configs/default.yaml"), exists=True
 
 
 @data_app.command("fetch")
-def data_fetch(config: Path = typer.Option(Path("configs/default.yaml"), exists=True, readable=True), output: Optional[Path] = typer.Option(None), url: Optional[str] = typer.Option(None), sha256: Optional[str] = typer.Option(None)) -> None:
-    """Download and checksum the configured QO-Bench archive/file."""
-    cfg = load_config(config)
-    destination = output or cfg.data.cache_dir / "qobench.download"
-    path = fetch_dataset(url or cfg.data.qobench_url, destination, sha256 or cfg.data.qobench_sha256)
+def data_fetch(
+    url: str = typer.Option(..., help="Public dataset URL"),
+    output: Path = typer.Option(..., help="Destination file"),
+    sha256: str = typer.Option("", help="Optional expected SHA-256"),
+) -> None:
+    """Download a public dataset file with an optional checksum."""
+    path = fetch_dataset(url, output, sha256)
     typer.echo(f"downloaded: {path}")
 
 
 @data_app.command("normalize")
-def data_normalize(source: Path = typer.Argument(..., exists=True, readable=True), output: Path = typer.Option(Path("data/processed/qobench.jsonl"))) -> None:
+def data_normalize(source: Path = typer.Argument(..., exists=True, readable=True), output: Path = typer.Option(Path("data/processed/questions.jsonl"))) -> None:
     """Normalize JSON/JSONL records into the SlotRAG question schema."""
     path = normalize_jsonl(load_questions(source), output)
     typer.echo(f"normalized: {path}")
+
+
+def load_benchmark_suite(path: Path) -> BenchmarkSuite:
+    return BenchmarkSuite.from_yaml(path)
+
+
+@benchmark_app.command("audit")
+def benchmark_audit(
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
+) -> None:
+    """Validate all configured public dataset splits and report checksums."""
+    cfg = load_benchmark_suite(suite)
+    report = audit_suite(cfg.benchmark_root, cfg.datasets)
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(payload)
+
+
+@benchmark_app.command("prepare")
+def benchmark_prepare(
+    stage: str = typer.Argument(...),
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    config: Path = typer.Option(Path("configs/default.yaml"), exists=True, readable=True),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1")),
+) -> None:
+    """Create and persist the deterministic stratified sample for one stage."""
+    runner = BenchmarkRunner(load_benchmark_suite(suite), load_config(config), output_dir)
+    typer.echo(json.dumps(runner.prepare(stage), ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("run")
+def benchmark_run(
+    stage: str = typer.Argument(...),
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    config: Path = typer.Option(Path("configs/default.yaml"), exists=True, readable=True),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1")),
+    dataset: Optional[list[str]] = typer.Option(None, "--dataset", help="Repeat to run a configured dataset subset"),
+    method: Optional[list[str]] = typer.Option(None, "--method", help="Repeat to run a configured method subset"),
+) -> None:
+    """Run or resume one benchmark stage with atomic per-question results."""
+    runner = BenchmarkRunner(load_benchmark_suite(suite), load_config(config), output_dir)
+    typer.echo(json.dumps(runner.run(stage, datasets=dataset, methods=method), ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("summarize")
+def benchmark_summarize(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+) -> None:
+    """Aggregate metrics and paired bootstrap comparisons for one stage."""
+    report = summarize_run(output_dir, stage)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("inspect-plan")
+def benchmark_inspect_plan(
+    dataset: str = typer.Argument(...),
+    stage: str = typer.Option("preflight"),
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    config: Path = typer.Option(Path("configs/default.yaml"), exists=True, readable=True),
+    output_dir: Path = typer.Option(Path("runs/plan-inspection")),
+) -> None:
+    """Compile one persisted stage sample without retrieval or materialization."""
+    runner = BenchmarkRunner(load_benchmark_suite(suite), load_config(config), output_dir)
+    if dataset not in runner.suite.datasets:
+        raise typer.BadParameter(f"dataset is not configured: {dataset}")
+    question = runner.sample(stage, dataset)[0]
+    plan, metrics = SlotCompiler(runner.agnes).compile(question.question)
+    typer.echo(json.dumps({
+        "dataset": dataset,
+        "question_id": question.id,
+        "question": question.question,
+        "plan": plan.model_dump(mode="json"),
+        "compiler_metrics": metrics.model_dump(mode="json"),
+    }, ensure_ascii=False, indent=2))
 
 
 @app.command()
@@ -97,10 +183,28 @@ def run(
                 result = run_whole_question_baseline(question, retriever, agnes)
                 rows.append(result_row(question, result))
                 continue
-            plan, compiler_result = SlotCompiler(agnes).compile(question.question)
-            materializer = SlotMaterializer(agnes, retriever)
-            result = AdaptiveExecutor(materializer, default_slot_cost=cfg.execution.default_slot_cost, unbound_argument_cost=cfg.execution.unbound_argument_cost, max_replans=cfg.execution.max_replans, random_seed=cfg.execution.random_seed).execute(plan, strategy=strategy)
-            result = result.model_copy(update={"plan": plan, "metrics": result.metrics.model_copy(update={"llm_calls": result.metrics.llm_calls + 1, "prompt_tokens": result.metrics.prompt_tokens + compiler_result.usage.prompt_tokens, "completion_tokens": result.metrics.completion_tokens + compiler_result.usage.completion_tokens, "latency_ms": result.metrics.latency_ms + compiler_result.latency_ms, "provider_request_ids": result.metrics.provider_request_ids + ([compiler_result.request_id] if compiler_result.request_id else [])})})
+            plan, compiler_metrics = SlotCompiler(agnes).compile(question.question)
+            materializer = SlotMaterializer(agnes, retriever, max_passages=cfg.execution.materialization_top_k)
+            result = AdaptiveExecutor(
+                materializer,
+                default_slot_cost=cfg.execution.default_slot_cost,
+                unbound_argument_cost=cfg.execution.unbound_argument_cost,
+                max_replans=cfg.execution.max_replans,
+                max_retrieval_calls=cfg.execution.max_retrieval_calls,
+                max_binding_contexts=cfg.execution.max_binding_contexts,
+                random_seed=cfg.execution.random_seed,
+            ).execute(plan, strategy=strategy)
+            result = result.model_copy(update={"plan": plan, "metrics": result.metrics.model_copy(update={
+                "llm_calls": result.metrics.llm_calls + compiler_metrics.llm_calls,
+                "prompt_tokens": result.metrics.prompt_tokens + compiler_metrics.prompt_tokens,
+                "completion_tokens": result.metrics.completion_tokens + compiler_metrics.completion_tokens,
+                "latency_ms": result.metrics.latency_ms + compiler_metrics.latency_ms,
+                "structured_output_failures": result.metrics.structured_output_failures + compiler_metrics.structured_output_failures,
+                "structured_output_repairs": result.metrics.structured_output_repairs + compiler_metrics.structured_output_repairs,
+                "plan_fallbacks": result.metrics.plan_fallbacks + compiler_metrics.plan_fallbacks,
+                "plan_validation_errors": result.metrics.plan_validation_errors + compiler_metrics.plan_validation_errors,
+                "provider_request_ids": result.metrics.provider_request_ids + compiler_metrics.provider_request_ids,
+            })})
             if result.rows:
                 answer, prompt, completion, latency = generate_answer(agnes, question.question, result)
                 result = result.model_copy(update={"answer": answer, "metrics": result.metrics.model_copy(update={"llm_calls": result.metrics.llm_calls + 1, "prompt_tokens": result.metrics.prompt_tokens + prompt, "completion_tokens": result.metrics.completion_tokens + completion, "latency_ms": result.metrics.latency_ms + latency})})

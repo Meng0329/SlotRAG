@@ -47,3 +47,30 @@ def test_reranker_accepts_top_level_array(monkeypatch):
     values = client.rerank("q", ["a", "b"], top_n=2)
     assert values[0].index == 1
     assert values[0].document == "b"
+
+
+def test_provider_retries_transient_status_and_records_attempts(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "secret")
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, json={"error": "busy"})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    config = EmbeddingConfig(
+        base_url="http://test/v1",
+        model="m",
+        api_key_env="TEST_KEY",
+        timeout_seconds=1,
+        dimension=2,
+        max_retries=1,
+        retry_backoff_seconds=0,
+    )
+    client = EmbeddingClient(config, _transport(handler))
+    assert client.embed("a") == [[1.0, 0.0]]
+    assert client.stats.attempts == 2
+    assert client.stats.retries == 1
+    assert client.stats.successes == 1

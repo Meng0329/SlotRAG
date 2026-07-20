@@ -15,6 +15,8 @@ class Slot(StrictModel):
     arguments: list[str] = Field(min_length=1)
     constraints: dict[str, Any] = Field(default_factory=dict)
     importance: float = Field(default=1.0, gt=0)
+    estimated_cardinality: float = Field(default=100.0, gt=0)
+    estimated_cost: float = Field(default=1.0, gt=0)
 
     @field_validator("arguments")
     @classmethod
@@ -22,6 +24,12 @@ class Slot(StrictModel):
         if any(not arg.strip() for arg in value):
             raise ValueError("slot arguments cannot be empty")
         return value
+
+    @model_validator(mode="after")
+    def requires_variable(self) -> "Slot":
+        if not self.variables:
+            raise ValueError("a slot must expose at least one ?variable")
+        return self
 
     @property
     def variables(self) -> set[str]:
@@ -70,10 +78,61 @@ class JoinSpec(StrictModel):
         return value
 
 
+class RelationalOperator(StrictModel):
+    """A typed post-materialization operation in a SlotPlan."""
+
+    id: str = Field(min_length=1)
+    kind: Literal[
+        "filter",
+        "project",
+        "intersect",
+        "count",
+        "sort",
+        "argmin",
+        "argmax",
+        "compare",
+        "boolean",
+        "arithmetic",
+    ]
+    fields: list[str] = Field(default_factory=list)
+    field: str | None = None
+    output: str | None = None
+    comparator: Literal["eq", "ne", "lt", "le", "gt", "ge", "contains"] | None = None
+    operation: Literal["add", "subtract", "multiply", "divide"] | None = None
+    value: str | float | int | bool | None = None
+    descending: bool = False
+    limit: int | None = Field(default=None, gt=0)
+
+    @field_validator("fields")
+    @classmethod
+    def normalize_fields(cls, value: list[str]) -> list[str]:
+        return [field.lstrip("?") for field in value]
+
+    @field_validator("field", "output")
+    @classmethod
+    def normalize_optional_field(cls, value: str | None) -> str | None:
+        return value.lstrip("?") if value else value
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "RelationalOperator":
+        if self.kind == "project" and not self.fields:
+            raise ValueError("project requires fields")
+        if self.kind in {"filter", "sort", "argmin", "argmax"} and not self.field:
+            raise ValueError(f"{self.kind} requires field")
+        if self.kind == "filter" and (self.comparator is None or self.value is None):
+            raise ValueError("filter requires comparator and value")
+        if self.kind in {"count", "compare", "boolean"} and not self.output:
+            raise ValueError(f"{self.kind} requires output")
+        if self.kind == "arithmetic" and (len(self.fields) < 2 or not self.output or not self.operation):
+            raise ValueError("arithmetic requires at least two fields, an operation, and an output")
+        return self
+
+
 class SlotPlan(StrictModel):
     slots: list[Slot] = Field(min_length=1)
     joins: list[JoinSpec] = Field(default_factory=list)
     outputs: list[str] = Field(min_length=1)
+    operators: list[RelationalOperator] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_references(self) -> "SlotPlan":
@@ -89,6 +148,8 @@ class SlotPlan(StrictModel):
                 raise ValueError("join references a field that is not a slot variable")
             if join.left_slot == join.right_slot:
                 raise ValueError("a slot cannot join with itself")
+            if join.left_field != join.right_field:
+                raise ValueError("joined fields must reuse the same variable name for the same entity")
             adjacency[join.left_slot].add(join.right_slot)
             adjacency[join.right_slot].add(join.left_slot)
         if len(slot_ids) > 1:
@@ -103,6 +164,7 @@ class SlotPlan(StrictModel):
             if visited != slot_ids:
                 raise ValueError("slot join graph must be connected")
         available = set().union(*(slot.variables for slot in self.slots))
+        available.update(operator.output for operator in self.operators if operator.output)
         if any(output.startswith("?") and output[1:] not in available for output in self.outputs):
             raise ValueError("output references an unknown variable")
         return self
@@ -153,14 +215,36 @@ class RunMetrics(StrictModel):
     documents_accessed: int = 0
     passages_processed: int = 0
     llm_calls: int = 0
+    retrieval_calls: int = 0
+    embedding_calls: int = 0
+    reranker_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: float = 0.0
+    provider_latency_ms: float = 0.0
+    wall_latency_ms: float = 0.0
+    index_build_latency_ms: float = 0.0
+    retry_count: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    materialization_requests: int = 0
+    materialization_cache_hits: int = 0
+    binding_contexts_pruned: int = 0
+    join_input_rows: int = 0
+    join_output_rows: int = 0
+    early_stops: int = 0
+    structured_output_failures: int = 0
+    structured_output_repairs: int = 0
+    plan_fallbacks: int = 0
+    operators_executed: int = 0
+    peak_rss_mb: float = 0.0
+    index_bytes: int = 0
     intermediate_binding_sizes: list[int] = Field(default_factory=list)
     reoptimizations: int = 0
     slot_selectivity_errors: list[float] = Field(default_factory=list)
     planner_regret: float | None = None
     provider_request_ids: list[str] = Field(default_factory=list)
+    plan_validation_errors: list[str] = Field(default_factory=list)
 
 
 class ExecutionResult(StrictModel):
@@ -169,6 +253,6 @@ class ExecutionResult(StrictModel):
     answer: str | None = None
     order: list[str] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
-    status: Literal["ok", "empty", "failed"] = "ok"
+    status: Literal["ok", "empty", "failed", "budget_exceeded"] = "ok"
     error: str | None = None
     plan: SlotPlan | None = None

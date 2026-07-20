@@ -8,6 +8,7 @@ from .models import (
     ExecutionResult,
     Passage,
     QuestionRecord,
+    RelationalOperator,
     Slot,
     SlotPlan,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "ExecutionResult",
     "Passage",
     "QuestionRecord",
+    "RelationalOperator",
     "Slot",
     "SlotPlan",
 ]

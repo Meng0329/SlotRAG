@@ -3,6 +3,8 @@ agnes:
   model: agnes-2.0-flash
   api_key_env: SLOTRAG_AGNES_API_KEY
   timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: 0.25
   max_tokens: 2048
   temperature: 0.0
 
@@ -11,6 +13,8 @@ embedding:
   model: Qwen3-Embedding-0.6B
   api_key_env: SLOTRAG_EMBEDDING_API_KEY
   timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: 0.25
   dimension: 1024
   batch_size: 32
 
@@ -19,6 +23,8 @@ reranker:
   model: bge-reranker-v2-m3
   api_key_env: SLOTRAG_RERANKER_API_KEY
   timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: 0.25
   enabled: true
   top_n: 10
 
@@ -37,9 +43,10 @@ execution:
   default_slot_cost: 1.0
   unbound_argument_cost: 2.0
   random_seed: 2027
+  materialization_top_k: 5
+  max_binding_contexts: 2
+  max_retrieval_calls: 4
 
 data:
   cache_dir: data/raw
   processed_dir: data/processed
-  qobench_url: ""
-  qobench_sha256: ""

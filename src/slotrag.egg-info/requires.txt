@@ -1,0 +1,10 @@
+httpx<1,>=0.27
+numpy<3,>=1.26
+pydantic<3,>=2.7
+PyYAML<7,>=6
+rank-bm25<1,>=0.2
+typer<1,>=0.12
+
+[dev]
+pytest<10,>=8
+pytest-httpx<1,>=0.30

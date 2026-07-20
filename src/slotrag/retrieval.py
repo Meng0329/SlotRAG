@@ -25,6 +25,8 @@ class EmbeddingCache:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else None
         self.values: dict[str, list[float]] = {}
+        self.hits = 0
+        self.misses = 0
         if self.path and self.path.exists():
             try:
                 import json
@@ -33,7 +35,12 @@ class EmbeddingCache:
                 self.values = {}
 
     def get(self, text: str) -> list[float] | None:
-        return self.values.get(hashlib.sha256(text.encode("utf-8")).hexdigest())
+        value = self.values.get(hashlib.sha256(text.encode("utf-8")).hexdigest())
+        if value is None:
+            self.misses += 1
+        else:
+            self.hits += 1
+        return value
 
     def put(self, text: str, vector: list[float]) -> None:
         self.values[hashlib.sha256(text.encode("utf-8")).hexdigest()] = vector
@@ -42,7 +49,12 @@ class EmbeddingCache:
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             import json
-            self.path.write_text(json.dumps(self.values), encoding="utf-8")
+            temporary = self.path.with_suffix(self.path.suffix + ".part")
+            temporary.write_text(json.dumps(self.values), encoding="utf-8")
+            temporary.replace(self.path)
+
+    def snapshot(self) -> tuple[int, int]:
+        return self.hits, self.misses
 
 
 class HybridRetriever:

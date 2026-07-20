@@ -262,71 +262,6 @@ def download_musique_from_alternative(musique_dir: Path) -> None:
             print(f"  Failed to download {split}: {e}")
 
 
-def download_qobench(output_dir: Path) -> None:
-    """Download QO-Bench dataset.
-
-    QO-Bench is the query operations benchmark from SlotRAG paper.
-    It focuses on join/intersection operations in multi-hop QA.
-    """
-    print("Downloading QO-Bench...")
-
-    # Create subdirectory
-    qobench_dir = output_dir / "qobench"
-    qobench_dir.mkdir(parents=True, exist_ok=True)
-
-    # QO-Bench is typically provided as a JSON file
-    # Try to download from the SlotRAG repository or known sources
-    qobench_url = os.environ.get("SLOTRAG_QOBENCH_URL", "")
-
-    if qobench_url:
-        import httpx
-        output_path = qobench_dir / "qobench.json"
-        print(f"  Fetching from {qobench_url}...")
-        with httpx.stream("GET", qobench_url, timeout=300.0, follow_redirects=True) as response:
-            response.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in response.iter_bytes():
-                    f.write(chunk)
-        print(f"  Saved QO-Bench to {output_path}")
-    else:
-        # Create a placeholder with instructions
-        readme_path = qobench_dir / "README.md"
-        with open(readme_path, "w") as f:
-            f.write("""# QO-Bench Dataset
-
-QO-Bench (Query Operations Benchmark) is a benchmark for evaluating multi-hop QA
-systems on query operations like join and intersection.
-
-## How to Get the Dataset
-
-1. Download from the official source (if available)
-2. Or generate using the SlotRAG data generation pipeline
-
-## Expected Format
-
-```json
-{
-  "id": "qobench-001",
-  "question": "...",
-  "answers": ["..."],
-  "passages": [...],
-  "type": "join|intersection",
-  "operation": "..."
-}
-```
-
-## Usage with SlotRAG
-
-```bash
-# From project root
-slotrag data normalize benchmark/qobench/qobench.json --output data/processed/qobench.jsonl
-slotrag run --dataset data/processed/qobench.jsonl --output-dir runs/qobench
-```
-""")
-        print(f"  Created {readme_path} with instructions")
-        print("  Note: QO-Bench URL not set. Set SLOTRAG_QOBENCH_URL env var to download automatically.")
-
-
 def download_strategyqa(output_dir: Path) -> None:
     """Download StrategyQA dataset from HuggingFace.
 
@@ -390,7 +325,7 @@ def download_drop(output_dir: Path) -> None:
     - Sorting
     - Listing
     - Numerical comparison
-    - These operations map to QO-Bench's join/intersection/filter/count.
+    - Filtering and counting
     """
     print("Downloading DROP...")
     import datasets
@@ -489,7 +424,6 @@ def main():
     download_musique(benchmark_dir)
     download_strategyqa(benchmark_dir)
     download_drop(benchmark_dir)
-    download_qobench(benchmark_dir)
 
     print("=" * 60)
     print("All downloads complete!")

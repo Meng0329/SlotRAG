@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import httpx
@@ -21,6 +21,18 @@ class Usage:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+
+@dataclass
+class ProviderStats:
+    attempts: int = 0
+    successes: int = 0
+    retries: int = 0
+    latency_ms: float = 0.0
+    request_ids: list[str] = field(default_factory=list)
+
+    def snapshot(self) -> tuple[int, int, int, float, tuple[str, ...]]:
+        return self.attempts, self.successes, self.retries, self.latency_ms, tuple(self.request_ids)
 
 
 class ToolCall(BaseModel):
@@ -48,25 +60,54 @@ class RerankResult(BaseModel):
 class _HTTPProvider:
     def __init__(self, client: httpx.Client | None = None) -> None:
         self._client = client
+        self.stats = ProviderStats()
 
-    def _post(self, url: str, key: str, payload: dict[str, Any], timeout: float) -> Any:
+    def _post(
+        self,
+        url: str,
+        key: str,
+        payload: dict[str, Any],
+        timeout: float,
+        *,
+        max_retries: int = 0,
+        retry_backoff_seconds: float = 0.0,
+    ) -> Any:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        started = time.perf_counter()
-        try:
-            if self._client is None:
-                response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-            else:
-                response = self._client.post(url, headers=headers, json=payload, timeout=timeout)
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"request failed for {url}: {exc.__class__.__name__}") from exc
-        elapsed = (time.perf_counter() - started) * 1000
-        if response.status_code >= 400:
-            body = response.text[:300].replace("\n", " ")
-            raise ProviderError(f"provider returned HTTP {response.status_code}: {body}")
-        try:
-            return response.json(), elapsed
-        except ValueError as exc:
-            raise SchemaError(f"provider returned non-JSON response from {url}") from exc
+        for retry_index in range(max_retries + 1):
+            started = time.perf_counter()
+            self.stats.attempts += 1
+            try:
+                if self._client is None:
+                    response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+                else:
+                    response = self._client.post(url, headers=headers, json=payload, timeout=timeout)
+            except httpx.HTTPError as exc:
+                elapsed = (time.perf_counter() - started) * 1000
+                self.stats.latency_ms += elapsed
+                if retry_index < max_retries:
+                    self.stats.retries += 1
+                    time.sleep(retry_backoff_seconds * (2 ** retry_index))
+                    continue
+                raise ProviderError(f"request failed for {url}: {exc.__class__.__name__}") from exc
+            elapsed = (time.perf_counter() - started) * 1000
+            self.stats.latency_ms += elapsed
+            transient = response.status_code == 429 or response.status_code >= 500
+            if transient and retry_index < max_retries:
+                self.stats.retries += 1
+                time.sleep(retry_backoff_seconds * (2 ** retry_index))
+                continue
+            if response.status_code >= 400:
+                body = response.text[:300].replace("\n", " ")
+                raise ProviderError(f"provider returned HTTP {response.status_code}: {body}")
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise SchemaError(f"provider returned non-JSON response from {url}") from exc
+            self.stats.successes += 1
+            if isinstance(body, dict) and body.get("id"):
+                self.stats.request_ids.append(str(body["id"]))
+            return body, elapsed
+        raise AssertionError("unreachable provider retry state")
 
 
 class AgnesClient(_HTTPProvider):
@@ -94,7 +135,14 @@ class AgnesClient(_HTTPProvider):
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        body, elapsed = self._post(self.config.url("chat/completions"), self.config.api_key, payload, self.config.timeout_seconds)
+        body, elapsed = self._post(
+            self.config.url("chat/completions"),
+            self.config.api_key,
+            payload,
+            self.config.timeout_seconds,
+            max_retries=self.config.max_retries,
+            retry_backoff_seconds=self.config.retry_backoff_seconds,
+        )
         if not isinstance(body, dict):
             raise SchemaError("Agnes response must be an object")
         choices = body.get("choices")
@@ -158,6 +206,8 @@ class EmbeddingClient(_HTTPProvider):
             self.config.api_key,
             {"model": self.config.model, "input": inputs if len(inputs) > 1 else inputs[0], "encoding_format": "float"},
             self.config.timeout_seconds,
+            max_retries=self.config.max_retries,
+            retry_backoff_seconds=self.config.retry_backoff_seconds,
         )
         if not isinstance(body, dict) or not isinstance(body.get("data"), list):
             raise SchemaError("embedding response must contain a data list")
@@ -193,6 +243,8 @@ class RerankerClient(_HTTPProvider):
             self.config.api_key,
             {"model": self.config.model, "query": query, "documents": documents, "top_n": top_n or self.config.top_n},
             self.config.timeout_seconds,
+            max_retries=self.config.max_retries,
+            retry_backoff_seconds=self.config.retry_backoff_seconds,
         )
         rows = body.get("results") if isinstance(body, dict) else body
         if not isinstance(rows, list):

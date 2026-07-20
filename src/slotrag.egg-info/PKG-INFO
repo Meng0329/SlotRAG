@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: slotrag
+Version: 0.1.0
+Summary: Cost-aware query-specific evidence materialization for multi-hop RAG
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: pydantic<3,>=2.7
+Requires-Dist: PyYAML<7,>=6
+Requires-Dist: rank-bm25<1,>=0.2
+Requires-Dist: typer<1,>=0.12
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+Requires-Dist: pytest-httpx<1,>=0.30; extra == "dev"
+
 # SlotRAG
 
 SlotRAG is a research prototype for cost-aware, query-specific evidence

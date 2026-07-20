@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from ..errors import ConfigurationError
+from .datasets import DATASETS
+from .methods import METHODS
+
+
+class StageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    split: Literal["train", "evaluation"]
+    sample_size: int = Field(gt=0)
+    methods: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_methods(self) -> "StageConfig":
+        unknown = sorted(set(self.methods) - set(METHODS))
+        if unknown:
+            raise ValueError(f"unknown methods: {', '.join(unknown)}")
+        return self
+
+
+class BenchmarkBudget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_steps: int = Field(default=4, gt=0)
+    max_llm_calls: int = Field(default=64, gt=0)
+    max_retrieval_calls: int = Field(default=4, gt=0)
+    question_timeout_seconds: float = Field(default=300.0, gt=0)
+
+
+class BenchmarkSuite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    benchmark_root: Path = Path("benchmark")
+    output_root: Path = Path("runs")
+    datasets: list[str] = Field(default_factory=lambda: list(DATASETS), min_length=1)
+    seed: int = 2027
+    random_seeds: list[int] = Field(default_factory=lambda: [2027, 2028, 2029, 2030, 2031], min_length=1)
+    budget: BenchmarkBudget = Field(default_factory=BenchmarkBudget)
+    stages: dict[str, StageConfig]
+
+    @model_validator(mode="after")
+    def validate_datasets(self) -> "BenchmarkSuite":
+        unknown = sorted(set(self.datasets) - set(DATASETS))
+        if unknown:
+            raise ValueError(f"unknown datasets: {', '.join(unknown)}")
+        return self
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "BenchmarkSuite":
+        source = Path(path)
+        try:
+            raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+            return cls.model_validate(raw)
+        except OSError as exc:
+            raise ConfigurationError(f"cannot read benchmark config {source}: {exc}") from exc
+        except (yaml.YAMLError, ValueError) as exc:
+            raise ConfigurationError(f"invalid benchmark config {source}: {exc}") from exc
+
+    def stage(self, name: str) -> StageConfig:
+        try:
+            return self.stages[name]
+        except KeyError as exc:
+            raise ConfigurationError(f"unknown benchmark stage: {name}") from exc
