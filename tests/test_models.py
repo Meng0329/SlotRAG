@@ -23,6 +23,31 @@ def test_slot_plan_rejects_unknown_join_slot():
         })
 
 
+def test_slot_plan_rejects_disconnected_join_graph():
+    with pytest.raises(ValueError, match="connected"):
+        SlotPlan.model_validate({
+            "slots": [
+                {"id": "S1", "predicate": "P", "arguments": ["?x"]},
+                {"id": "S2", "predicate": "Q", "arguments": ["?x"]},
+                {"id": "S3", "predicate": "R", "arguments": ["?z"]},
+            ],
+            "joins": [["S1.x", "S2.x"]],
+            "outputs": ["?x"],
+        })
+
+
+def test_slot_plan_rejects_join_field_not_declared_as_variable():
+    with pytest.raises(ValueError, match="field"):
+        SlotPlan.model_validate({
+            "slots": [
+                {"id": "S1", "predicate": "P", "arguments": ["?x", "constant"]},
+                {"id": "S2", "predicate": "Q", "arguments": ["?y"]},
+            ],
+            "joins": [["S1.constant", "S2.y"]],
+            "outputs": ["?x"],
+        })
+
+
 def test_binding_row_requires_source_span():
     with pytest.raises(ValueError):
         BindingRow.model_validate({"slot_id": "S1", "bindings": {"x": "y"}, "source_id": "doc"})

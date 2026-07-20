@@ -69,6 +69,10 @@ def run(
     limit: Optional[int] = typer.Option(None, min=1),
 ) -> None:
     """Run SlotRAG over normalized question records."""
+    if strategy not in {"adaptive", "question", "fixed", "random", "oracle"}:
+        raise typer.BadParameter("strategy must be adaptive, question, fixed, random, or oracle")
+    if mode not in {"slotrag", "baseline"}:
+        raise typer.BadParameter("mode must be slotrag or baseline")
     cfg = load_config(config)
     questions = load_questions(dataset)[:limit]
     agnes, embedding, reranker = provider_clients(cfg)
@@ -93,12 +97,10 @@ def run(
                 result = run_whole_question_baseline(question, retriever, agnes)
                 rows.append(result_row(question, result))
                 continue
-            if mode != "slotrag":
-                raise ValueError("mode must be slotrag or baseline")
             plan, compiler_result = SlotCompiler(agnes).compile(question.question)
             materializer = SlotMaterializer(agnes, retriever)
             result = AdaptiveExecutor(materializer, default_slot_cost=cfg.execution.default_slot_cost, unbound_argument_cost=cfg.execution.unbound_argument_cost, max_replans=cfg.execution.max_replans, random_seed=cfg.execution.random_seed).execute(plan, strategy=strategy)
-            result = result.model_copy(update={"metrics": result.metrics.model_copy(update={"llm_calls": result.metrics.llm_calls + 1, "prompt_tokens": result.metrics.prompt_tokens + compiler_result.usage.prompt_tokens, "completion_tokens": result.metrics.completion_tokens + compiler_result.usage.completion_tokens, "latency_ms": result.metrics.latency_ms + compiler_result.latency_ms})})
+            result = result.model_copy(update={"plan": plan, "metrics": result.metrics.model_copy(update={"llm_calls": result.metrics.llm_calls + 1, "prompt_tokens": result.metrics.prompt_tokens + compiler_result.usage.prompt_tokens, "completion_tokens": result.metrics.completion_tokens + compiler_result.usage.completion_tokens, "latency_ms": result.metrics.latency_ms + compiler_result.latency_ms, "provider_request_ids": result.metrics.provider_request_ids + ([compiler_result.request_id] if compiler_result.request_id else [])})})
             if result.rows:
                 answer, prompt, completion, latency = generate_answer(agnes, question.question, result)
                 result = result.model_copy(update={"answer": answer, "metrics": result.metrics.model_copy(update={"llm_calls": result.metrics.llm_calls + 1, "prompt_tokens": result.metrics.prompt_tokens + prompt, "completion_tokens": result.metrics.completion_tokens + completion, "latency_ms": result.metrics.latency_ms + latency})})

@@ -80,9 +80,28 @@ class SlotPlan(StrictModel):
         slot_ids = {slot.id for slot in self.slots}
         if len(slot_ids) != len(self.slots):
             raise ValueError("slot ids must be unique")
+        slot_fields = {slot.id: slot.variables for slot in self.slots}
+        adjacency = {slot_id: set() for slot_id in slot_ids}
         for join in self.joins:
             if join.left_slot not in slot_ids or join.right_slot not in slot_ids:
                 raise ValueError("join references an unknown slot")
+            if join.left_field not in slot_fields[join.left_slot] or join.right_field not in slot_fields[join.right_slot]:
+                raise ValueError("join references a field that is not a slot variable")
+            if join.left_slot == join.right_slot:
+                raise ValueError("a slot cannot join with itself")
+            adjacency[join.left_slot].add(join.right_slot)
+            adjacency[join.right_slot].add(join.left_slot)
+        if len(slot_ids) > 1:
+            visited = set()
+            frontier = [self.slots[0].id]
+            while frontier:
+                slot_id = frontier.pop()
+                if slot_id in visited:
+                    continue
+                visited.add(slot_id)
+                frontier.extend(adjacency[slot_id] - visited)
+            if visited != slot_ids:
+                raise ValueError("slot join graph must be connected")
         available = set().union(*(slot.variables for slot in self.slots))
         if any(output.startswith("?") and output[1:] not in available for output in self.outputs):
             raise ValueError("output references an unknown variable")
@@ -141,6 +160,7 @@ class RunMetrics(StrictModel):
     reoptimizations: int = 0
     slot_selectivity_errors: list[float] = Field(default_factory=list)
     planner_regret: float | None = None
+    provider_request_ids: list[str] = Field(default_factory=list)
 
 
 class ExecutionResult(StrictModel):
@@ -151,3 +171,4 @@ class ExecutionResult(StrictModel):
     metrics: RunMetrics = Field(default_factory=RunMetrics)
     status: Literal["ok", "empty", "failed"] = "ok"
     error: str | None = None
+    plan: SlotPlan | None = None

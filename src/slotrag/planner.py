@@ -108,6 +108,7 @@ class SlotMaterializer:
                 "prompt_tokens": metrics.prompt_tokens + response.usage.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + response.usage.completion_tokens,
                 "latency_ms": metrics.latency_ms + response.latency_ms,
+                "provider_request_ids": metrics.provider_request_ids + ([response.request_id] if response.request_id else []),
             })
             args = self.client.require_tool(response, "emit_evidence_rows")
             try:
@@ -137,6 +138,7 @@ class SlotMaterializer:
                 "prompt_tokens": metrics.prompt_tokens + current_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + current_metrics.completion_tokens,
                 "latency_ms": metrics.latency_ms + current_metrics.latency_ms,
+                "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
             })
             for row in rows:
                 key = (row.source_id, tuple(sorted(row.bindings.items())))
@@ -252,7 +254,10 @@ class AdaptiveExecutor:
                 else:
                     current = _join_rows(rows, current, join.left_field, join.right_field)
             if current:
-                all_bindings = dict(current[0].bindings)
+                # The planner only needs the set of currently bound fields for
+                # choosing a connected next slot. Actual values are propagated
+                # through binding_contexts above.
+                all_bindings = {key: "<bound>" for row in current for key in row.bindings}
             else:
                 return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="empty")
         if remaining:

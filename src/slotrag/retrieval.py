@@ -100,21 +100,27 @@ class HybridRetriever:
             return []
         top_k = top_k or self.final_k
         candidate_scores: dict[int, dict[str, float]] = defaultdict(dict)
+        bm25_ranks: dict[int, int] = {}
+        dense_ranks: dict[int, int] = {}
         if self._bm25:
             bm25_scores = self._bm25.get_scores(tokenize(query))
-            for index in np.argsort(bm25_scores)[::-1][:self.bm25_k]:
+            bm25_order = [int(index) for index in np.argsort(-bm25_scores, kind="stable")[:self.bm25_k]]
+            bm25_ranks = {index: rank for rank, index in enumerate(bm25_order)}
+            for index in bm25_order:
                 candidate_scores[int(index)]["bm25"] = float(bm25_scores[index])
         query_vector = self.embedding_client.embed(query)[0]
         dense_scores = self._cosine(query_vector, self._ensure_vectors())
-        for index in np.argsort(dense_scores)[::-1][:self.dense_k]:
+        dense_order = [int(index) for index in np.argsort(-dense_scores, kind="stable")[:self.dense_k]]
+        dense_ranks = {index: rank for rank, index in enumerate(dense_order)}
+        for index in dense_order:
             candidate_scores[int(index)]["dense"] = float(dense_scores[index])
         ranked = []
         for index, scores in candidate_scores.items():
             score = 0.0
             if "bm25" in scores:
-                score += self.bm25_weight / (self.rrf_k + 1 + list(np.argsort(bm25_scores)[::-1]).index(index))
+                score += self.bm25_weight / (self.rrf_k + 1 + bm25_ranks[index])
             if "dense" in scores:
-                score += self.dense_weight / (self.rrf_k + 1 + list(np.argsort(dense_scores)[::-1]).index(index))
+                score += self.dense_weight / (self.rrf_k + 1 + dense_ranks[index])
             ranked.append(RetrievalResult(passage=self.passages[index], score=score, bm25_score=scores.get("bm25"), dense_score=scores.get("dense")))
         ranked.sort(key=lambda result: result.score, reverse=True)
         ranked = ranked[:max(top_k, self.reranker_client.config.top_n if self.rerank_enabled and self.reranker_client else top_k)]

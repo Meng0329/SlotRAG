@@ -66,6 +66,8 @@ def result_row(question: QuestionRecord, result: ExecutionResult) -> dict[str, o
         "completion_tokens": result.metrics.completion_tokens,
         "latency_ms": result.metrics.latency_ms,
         "reoptimizations": result.metrics.reoptimizations,
+        "provider_request_ids": "|".join(result.metrics.provider_request_ids),
+        "plan": result.plan.model_dump_json() if result.plan else "",
         "error": result.error or "",
     }
 
