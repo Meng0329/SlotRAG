@@ -74,7 +74,7 @@ def test_runner_persists_atomic_items_and_resumes(tmp_path, monkeypatch):
         stages={"test": StageConfig(split="train", sample_size=1, methods=["graphrag"])},
     )
     runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
-    assert runner.run("test") == {"completed": 1, "skipped": 0, "failed": 0, "empty": 0}
-    assert runner.run("test") == {"completed": 0, "skipped": 1, "failed": 0, "empty": 0}
+    assert runner.run("test") == {"completed": 1, "skipped": 0, "retried": 0, "failed": 0, "empty": 0}
+    assert runner.run("test") == {"completed": 0, "skipped": 1, "retried": 0, "failed": 0, "empty": 0}
     assert len(list((tmp_path / "run" / "items" / "test").rglob("*.json"))) == 1
     assert not list((tmp_path / "run").rglob("*.part"))

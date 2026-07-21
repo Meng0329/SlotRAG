@@ -36,12 +36,14 @@ METRICS = [
     "materialization_requests",
     "materialization_cache_hits",
     "binding_contexts_pruned",
+    "evidence_only_fallbacks",
     "join_input_rows",
     "join_output_rows",
     "early_stops",
     "structured_output_failures",
     "structured_output_repairs",
     "plan_fallbacks",
+    "heuristic_plans",
     "operators_executed",
     "peak_rss_mb",
     "max_intermediate_binding_size",
@@ -206,8 +208,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         path.write_text("\n", encoding="utf-8")
         return
+    fieldnames = list(dict.fromkeys(key for row in rows for key in row))
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 

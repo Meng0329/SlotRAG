@@ -130,6 +130,16 @@ def test_slot_compiler_repairs_invalid_plan_once():
     assert metrics.plan_fallbacks == 0
 
 
+def test_slot_compiler_uses_heuristic_plan_for_boolean_question():
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(
+        "Would Hannah Nixon be proud of Richard Nixon?", answer_kind="boolean"
+    )
+    assert plan.slots[0].predicate == "EvidenceAnsweringQuestion"
+    assert plan.outputs == ["?answer"]
+    assert metrics.heuristic_plans == 1
+    assert metrics.llm_calls == 0
+
+
 def test_slot_compiler_falls_back_after_three_invalid_plans():
     invalid = {"slots": [], "joins": [], "outputs": []}
     plan, metrics = SlotCompiler(FakeStructuredClient([invalid, invalid, invalid])).compile("What?")
@@ -146,8 +156,31 @@ def test_slot_compiler_repairs_ungrounded_parametric_constant():
     assert metrics.structured_output_failures == 1
 
 
+def test_slot_compiler_eliminates_redundant_grounded_anchor_slot():
+    plan_payload = {
+        "slots": [
+            {"id": "S0", "predicate": "Person", "arguments": ["Michael Jordan", "?player"]},
+            {"id": "S1", "predicate": "Rebounds", "arguments": ["?player", "?rebounds"]},
+            {"id": "S2", "predicate": "Assists", "arguments": ["?player", "?assists"]},
+        ],
+        "joins": [
+            ["S0.player", "S1.player"],
+            ["S0.player", "S2.player"],
+        ],
+        "operators": [{"id": "O1", "kind": "arithmetic", "fields": ["rebounds", "assists"], "operation": "subtract", "output": "difference"}],
+        "outputs": ["?difference"],
+    }
+    plan, _ = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
+        "How many more rebounds than assists did Michael Jordan average per game?"
+    )
+    assert [slot.id for slot in plan.slots] == ["S1", "S2"]
+    assert all(slot.constraints["player"] == "Michael Jordan" for slot in plan.slots)
+    assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S2")]
+
+
 def test_materializer_counts_and_skips_repeated_invalid_extractions():
-    rows, metrics = SlotMaterializer(FakeExtractionClient(), FakeRetriever()).materialize(
+    materializer = SlotMaterializer(FakeExtractionClient(), FakeRetriever())
+    rows, metrics = materializer.materialize(
         Slot(id="S1", predicate="Fact", arguments=["?answer"]),
         {},
     )
@@ -155,3 +188,4 @@ def test_materializer_counts_and_skips_repeated_invalid_extractions():
     assert metrics.llm_calls == 2
     assert metrics.structured_output_failures == 2
     assert metrics.structured_output_repairs == 1
+    assert [item.source_id for item in materializer.last_evidence] == ["p"]

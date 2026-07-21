@@ -8,6 +8,11 @@ def test_slot_query_substitutes_bound_variables():
     assert slot.query_text({"person": "Ada Lovelace"}) == "Founded Ada Lovelace ?company"
 
 
+def test_slot_normalizes_constraint_variable_keys():
+    slot = Slot(id="S1", predicate="P", arguments=["?person", "?answer"], constraints={"?person": "Ada"})
+    assert slot.constraints == {"person": "Ada"}
+
+
 def test_join_spec_accepts_document_pair_form():
     join = JoinSpec.model_validate(["S1.person", "S2.person"])
     assert join.left_slot == "S1"

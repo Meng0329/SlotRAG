@@ -202,6 +202,7 @@ def run(
                 "structured_output_failures": result.metrics.structured_output_failures + compiler_metrics.structured_output_failures,
                 "structured_output_repairs": result.metrics.structured_output_repairs + compiler_metrics.structured_output_repairs,
                 "plan_fallbacks": result.metrics.plan_fallbacks + compiler_metrics.plan_fallbacks,
+                "heuristic_plans": result.metrics.heuristic_plans + compiler_metrics.heuristic_plans,
                 "plan_validation_errors": result.metrics.plan_validation_errors + compiler_metrics.plan_validation_errors,
                 "provider_request_ids": result.metrics.provider_request_ids + compiler_metrics.provider_request_ids,
             })})

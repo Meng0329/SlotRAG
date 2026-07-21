@@ -271,7 +271,7 @@ class BenchmarkRunner:
             raise ValueError(f"datasets are not configured for this suite: {', '.join(unknown_datasets)}")
         if unknown_methods:
             raise ValueError(f"methods are not configured for stage {stage_name}: {', '.join(unknown_methods)}")
-        counts = {"completed": 0, "skipped": 0, "failed": 0, "empty": 0}
+        counts = {"completed": 0, "skipped": 0, "retried": 0, "failed": 0, "empty": 0}
         self._write_manifest(stage_name, selected_datasets, selected_methods)
         for dataset in selected_datasets:
             questions = self._load_or_create_sample(stage_name, dataset)
@@ -281,8 +281,15 @@ class BenchmarkRunner:
                     for question in questions:
                         item_path = self.output_dir / "items" / stage_name / dataset / method_label / f"{_safe_id(question.id)}.json"
                         if item_path.exists():
-                            counts["skipped"] += 1
-                            continue
+                            try:
+                                previous = json.loads(item_path.read_text(encoding="utf-8"))
+                                previous_status = previous.get("result", {}).get("status")
+                            except (OSError, json.JSONDecodeError):
+                                previous_status = None
+                            if previous_status == "ok":
+                                counts["skipped"] += 1
+                                continue
+                            counts["retried"] += 1
                         before = self._provider_snapshot()
                         cache_before = self.embedding_cache.snapshot()
                         started = time.perf_counter()

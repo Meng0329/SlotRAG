@@ -18,6 +18,24 @@ stages:
     split: train
     sample_size: 1
     methods: [slotrag, hybrid]
+  main_gate:
+    split: train
+    sample_size: 1
+    methods: [slotrag, hybrid, ircot, react, planrag, srag, graphrag]
+  ablation_gate:
+    split: train
+    sample_size: 1
+    methods:
+      - slotrag
+      - slotrag-question
+      - slotrag-fixed
+      - slotrag-random
+      - slotrag-oracle
+      - slotrag-no-replan
+      - slotrag-late-join
+      - slotrag-eager
+      - slotrag-no-bindings
+      - slotrag-no-operators
   smoke:
     split: train
     sample_size: 2

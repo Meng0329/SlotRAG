@@ -194,10 +194,13 @@ def _answer_kind(dataset: str) -> str:
 
 
 def _finalize(client: AgnesClient, dataset: str, question: QuestionRecord, result: ExecutionResult) -> ExecutionResult:
-    if result.status != "ok" or not result.evidence:
+    if result.status not in {"ok", "empty"} or not result.evidence:
         return result
     answer, response = generate_answer_response(client, question.question, result, answer_kind=_answer_kind(dataset))
-    return result.model_copy(update={"answer": answer, "metrics": merge_metrics(result.metrics, _chat_metrics(response))})
+    metrics = merge_metrics(result.metrics, _chat_metrics(response))
+    if result.status == "empty":
+        metrics = metrics.model_copy(update={"evidence_only_fallbacks": metrics.evidence_only_fallbacks + 1})
+    return result.model_copy(update={"answer": answer, "status": "ok", "metrics": metrics})
 
 
 def _evidence_digest(items: list[RetrievalResult]) -> str:
@@ -359,7 +362,7 @@ def _run_slotrag(
     max_steps: int,
     max_retrieval_calls: int,
 ) -> ExecutionResult:
-    plan, compiler_metrics = SlotCompiler(client).compile(question.question)
+    plan, compiler_metrics = SlotCompiler(client).compile(question.question, answer_kind=_answer_kind(dataset))
     if len(plan.slots) > max_steps:
         return ExecutionResult(
             status="budget_exceeded",

@@ -27,6 +27,7 @@ class Slot(StrictModel):
 
     @model_validator(mode="after")
     def requires_variable(self) -> "Slot":
+        self.constraints = {key.lstrip("?"): value for key, value in self.constraints.items()}
         if not self.variables:
             raise ValueError("a slot must expose at least one ?variable")
         return self
@@ -230,12 +231,14 @@ class RunMetrics(StrictModel):
     materialization_requests: int = 0
     materialization_cache_hits: int = 0
     binding_contexts_pruned: int = 0
+    evidence_only_fallbacks: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
     early_stops: int = 0
     structured_output_failures: int = 0
     structured_output_repairs: int = 0
     plan_fallbacks: int = 0
+    heuristic_plans: int = 0
     operators_executed: int = 0
     peak_rss_mb: float = 0.0
     index_bytes: int = 0

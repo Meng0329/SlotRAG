@@ -1,5 +1,6 @@
 from slotrag.benchmarking import methods
-from slotrag.models import Passage, QuestionRecord, RelationalOperator, SlotPlan
+from slotrag.models import EvidenceRecord, ExecutionResult, Passage, QuestionRecord, RelationalOperator, SlotPlan
+from slotrag.providers import ChatResult
 from slotrag.planner import apply_operators
 
 
@@ -40,3 +41,19 @@ def test_graphrag_counts_full_corpus_once(monkeypatch):
     assert result.metrics.documents_accessed == 2
     assert result.metrics.passages_processed == 2
     assert result.metrics.retrieval_calls == 1
+
+
+def test_evidence_only_fallback_promotes_empty_result_to_answer():
+    class Client:
+        def complete(self, *_args, **_kwargs):
+            return ChatResult(content="False")
+
+    question = QuestionRecord(id="q", question="True?", answers=["False"])
+    empty = ExecutionResult(
+        status="empty",
+        evidence=[EvidenceRecord(source_id="p", source_span="Evidence", slot_id="S1", bindings={})],
+    )
+    result = methods._finalize(Client(), "strategyqa", question, empty)
+    assert result.status == "ok"
+    assert result.answer == "False"
+    assert result.metrics.evidence_only_fallbacks == 1

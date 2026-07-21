@@ -184,9 +184,71 @@ class SlotCompiler:
         for operator in plan.operators:
             require_grounded(operator.value)
 
-    def compile(self, question: str) -> tuple[SlotPlan, RunMetrics]:
+    @staticmethod
+    def _eliminate_anchor_slots(plan: SlotPlan) -> SlotPlan:
+        payload = plan.model_dump(mode="python")
+        anchor_predicates = {"person", "entity", "item", "place"}
+        for anchor in list(payload["slots"]):
+            arguments = anchor["arguments"]
+            variables = [argument[1:] for argument in arguments if argument.startswith("?")]
+            constants = [argument for argument in arguments if not argument.startswith("?")]
+            if anchor["predicate"].casefold() not in anchor_predicates or len(variables) != 1 or len(constants) != 1:
+                continue
+            variable = variables[0]
+            consumers = [
+                slot for slot in payload["slots"]
+                if slot["id"] != anchor["id"] and f"?{variable}" in slot["arguments"]
+            ]
+            if len(consumers) < 2 or f"?{variable}" in payload["outputs"]:
+                continue
+            payload["slots"] = [slot for slot in payload["slots"] if slot["id"] != anchor["id"]]
+            for consumer in consumers:
+                consumer["constraints"] = {**consumer.get("constraints", {}), variable: constants[0]}
+            payload["joins"] = [
+                join for join in payload["joins"]
+                if join["left_slot"] != anchor["id"] and join["right_slot"] != anchor["id"]
+            ]
+            existing = {
+                (join["left_slot"], join["right_slot"], join["left_field"])
+                for join in payload["joins"]
+            }
+            for left, right in zip(consumers, consumers[1:]):
+                key = (left["id"], right["id"], variable)
+                reverse = (right["id"], left["id"], variable)
+                if key not in existing and reverse not in existing:
+                    payload["joins"].append({
+                        "left_slot": left["id"],
+                        "left_field": variable,
+                        "right_slot": right["id"],
+                        "right_field": variable,
+                    })
+            return SlotPlan.model_validate(payload)
+        return plan
+
+    def compile(self, question: str, *, answer_kind: str = "short") -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
+        if answer_kind == "boolean":
+            return SlotPlan(
+                slots=[Slot(
+                    id="S1",
+                    predicate="EvidenceAnsweringQuestion",
+                    arguments=["?answer"],
+                    constraints={"question": question},
+                    estimated_cardinality=2,
+                )],
+                outputs=["?answer"],
+            ), RunMetrics(heuristic_plans=1)
+        type_guidance = ""
+        if answer_kind == "boolean":
+            type_guidance = (
+                " This is a yes/no question: use exactly one EvidenceAnsweringQuestion slot with argument ?answer, "
+                "no joins, and no invented relation predicates; let the evidence answerer combine the supplied facts."
+            )
+        elif answer_kind == "number":
+            type_guidance = (
+                " This is a numeric question: use explicit numeric fields and an arithmetic operator when the question asks for a difference, sum, product, or quotient."
+            )
         messages = [
             {
                 "role": "system",
@@ -204,6 +266,7 @@ class SlotCompiler:
                     "S1 PartnerOf(PersonX, ?partner), S2 BornIn(?partner, ?place), join S1.partner to S2.partner, output ?place. "
                     "Use typed operators for explicit filter, count, sort, extremum, comparison, boolean, or arithmetic operations. "
                     "For 'how many more X than Y', extract ?x and ?y in a slot, then use arithmetic operation subtract with fields [x,y], output difference, and plan output ?difference."
+                    + type_guidance
                 ),
             },
             {"role": "user", "content": question},
@@ -224,7 +287,7 @@ class SlotCompiler:
                 invalid_args = self.client.require_tool(result, "emit_slot_plan")
                 plan = SlotPlan.model_validate(invalid_args)
                 self._validate_grounding(plan, question)
-                return plan, metrics
+                return self._eliminate_anchor_slots(plan), metrics
             except (SchemaError, ValidationError, ValueError) as exc:
                 last_error = str(exc)
                 metrics = metrics.model_copy(update={
@@ -260,10 +323,21 @@ class SlotMaterializer:
         self.client = client
         self.retriever = retriever
         self.max_passages = max_passages
+        self.last_evidence: list[EvidenceRecord] = []
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
         passages = self.retriever.search(query)[:self.max_passages]
+        self.last_evidence = [
+            EvidenceRecord(source_id=result.passage.id, source_span=result.passage.text, slot_id=slot.id, bindings={})
+            for result in passages
+        ]
+        constraint_bindings = {
+            key.lstrip("?"): str(value)
+            for key, value in slot.constraints.items()
+            if key.lstrip("?") in slot.variables
+        }
+        effective_bindings = {**constraint_bindings, **bindings}
         metrics = RunMetrics(
             retrieval_calls=1,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
@@ -289,7 +363,7 @@ class SlotMaterializer:
             {
                 "role": "user",
                 "content": (
-                    f"Relation: {slot.predicate}\nKnown bindings: {json.dumps(bindings, ensure_ascii=False)}\n"
+                    f"Relation: {slot.predicate}\nSlot query: {query}\nKnown bindings: {json.dumps(effective_bindings, ensure_ascii=False)}\n"
                     f"Passages: {json.dumps(passage_payload, ensure_ascii=False)}"
                 ),
             },
@@ -316,7 +390,7 @@ class SlotMaterializer:
                         for key, value in row.items()
                         if key.lstrip("?") in expected
                     }
-                    normalized.update({key: value for key, value in bindings.items() if key in expected})
+                    normalized.update({key: value for key, value in effective_bindings.items() if key in expected})
                     if source_id in by_source and set(normalized) == expected and all(normalized.values()):
                         extracted_rows.append((normalized, source_id))
                 if extracted.rows and not extracted_rows:
@@ -348,9 +422,11 @@ class SlotMaterializer:
         """Materialize once per distinct binding context and merge the rows."""
         merged: list[BindingRow] = []
         metrics = RunMetrics()
+        all_evidence: list[EvidenceRecord] = []
         seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
         for bindings in contexts or [{}]:
             rows, current_metrics = self.materialize(slot, bindings)
+            all_evidence.extend(self.last_evidence)
             metrics = metrics.model_copy(update={
                 "documents_accessed": metrics.documents_accessed + current_metrics.documents_accessed,
                 "passages_processed": metrics.passages_processed + current_metrics.passages_processed,
@@ -368,6 +444,7 @@ class SlotMaterializer:
                 if key not in seen:
                     seen.add(key)
                     merged.append(row)
+        self.last_evidence = all_evidence
         return merged, metrics
 
 
@@ -542,6 +619,7 @@ class AdaptiveExecutor:
         cardinalities: dict[str, int] = {}
         all_bindings: dict[str, str] = {}
         evidence: list[EvidenceRecord] = []
+        retrieved_evidence: list[EvidenceRecord] = []
         metrics = RunMetrics()
         order: list[str] = []
         current: list[BindingRow] | None = None
@@ -595,6 +673,7 @@ class AdaptiveExecutor:
                 rows, slot_metrics = materialize_many(slot, binding_contexts)
             else:
                 rows, slot_metrics = self.materializer.materialize(slot, binding_contexts[0])
+            retrieved_evidence.extend(getattr(self.materializer, "last_evidence", []))
             materialized[slot.id] = rows
             cardinalities[slot.id] = len(rows)
             selectivity_error = abs(math.log1p(len(rows)) - math.log1p(slot.estimated_cardinality))
@@ -615,13 +694,13 @@ class AdaptiveExecutor:
                 "slot_selectivity_errors": metrics.slot_selectivity_errors + [selectivity_error],
             })
             if not rows:
-                return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="empty")
+                return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")
             if current is None:
                 current = rows
             elif self.options.incremental_join:
                 join = next((j for j in plan.joins if (j.left_slot in materialized and j.right_slot == slot.id) or (j.right_slot in materialized and j.left_slot == slot.id)), None)
                 if join is None:
-                    return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="failed", error=f"slot {slot.id} has no join path")
+                    return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot.id} has no join path")
                 elif join.right_slot == slot.id:
                     join_input = len(current) + len(rows)
                     current = _join_rows(current, rows, join.left_field, join.right_field)
@@ -640,16 +719,16 @@ class AdaptiveExecutor:
                 # through binding_contexts above.
                 all_bindings = {key: "<bound>" for row in current for key in row.bindings}
             else:
-                return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="empty")
+                return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")
         if remaining:
-            return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="failed", error="maximum replans exceeded")
+            return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error="maximum replans exceeded")
         if not self.options.incremental_join and len(order) > 1:
             joined = materialized[order[0]]
             joined_slots = {order[0]}
             for slot_id in order[1:]:
                 join = next((item for item in plan.joins if (item.left_slot in joined_slots and item.right_slot == slot_id) or (item.right_slot in joined_slots and item.left_slot == slot_id)), None)
                 if join is None:
-                    return ExecutionResult(rows=[], evidence=[], order=order, metrics=metrics, status="failed", error=f"slot {slot_id} has no late join path")
+                    return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot_id} has no late join path")
                 incoming = materialized[slot_id]
                 join_input = len(joined) + len(incoming)
                 joined = _join_rows(joined, incoming, join.left_field, join.right_field) if join.right_slot == slot_id else _join_rows(incoming, joined, join.left_field, join.right_field)
@@ -672,6 +751,8 @@ class AdaptiveExecutor:
                     continue
                 seen_evidence.add(evidence_key)
                 evidence.append(EvidenceRecord(source_id=row.source_id, source_span=row.source_span, slot_id=slot_id, bindings=row.bindings))
+        if not evidence:
+            evidence = retrieved_evidence
         if order and len(order) <= 8:
             valid_orders = list(itertools.permutations(order))
             oracle_cost = min(_order_cost(list(candidate), cardinalities) for candidate in valid_orders)
