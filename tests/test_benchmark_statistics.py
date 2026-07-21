@@ -133,6 +133,40 @@ def test_schema6_reports_typed_plan_templates_without_backfilling_schema5():
     assert legacy_summary["typed_plan_templates"] is None
 
 
+def test_schema7_reports_direct_plan_templates_without_backfilling_schema6():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 7
+    current["result"]["metrics"] = RunMetrics(
+        direct_plan_templates=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 6
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["direct_plan_templates"] == 1
+    assert legacy_summary["direct_plan_templates"] is None
+
+
+def test_schema8_reports_answer_span_normalizations_without_backfilling_schema7():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 8
+    current["result"]["metrics"] = RunMetrics(
+        answer_span_normalizations=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 7
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["answer_span_normalizations"] == 1
+    assert legacy_summary["answer_span_normalizations"] is None
+
+
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
     record = _record("slotrag", "q1", 1.0)
     record["scores"]["evidence_recall"] = 1.0

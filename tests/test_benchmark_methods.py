@@ -190,6 +190,104 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
     assert result.metrics.deterministic_answers == 1
 
 
+def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    observed_document_counts = []
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, *, answer_kind, document_count=None):
+            observed_document_counts.append(document_count)
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"answer": "Anthony Gonzalez"}],
+                evidence=[EvidenceRecord(
+                    source_id="p1",
+                    source_span="Anthony Gonzalez caught the pass.",
+                    slot_id="S1",
+                    bindings={"answer": "Anthony Gonzalez"},
+                )],
+                order=["S1"],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    question = QuestionRecord(
+        id="q",
+        question="Who caught the pass?",
+        passages=[
+            Passage(id="p1", doc_id="game", text="First chunk."),
+            Passage(id="p2", doc_id="game", text="Second chunk."),
+        ],
+    )
+
+    for method in ("slotrag", "slotrag-no-direct"):
+        result = methods._run_slotrag(
+            methods.METHODS[method],
+            "drop",
+            question,
+            object(),
+            object(),
+            config,
+            seed=2027,
+            max_steps=4,
+            max_retrieval_calls=4,
+        )
+        assert result.answer == "Anthony Gonzalez"
+
+    assert observed_document_counts == [1, None]
+
+
+def test_direct_answer_projection_strips_only_redundant_numeric_explanation():
+    verbose = "families (20,154 families compared to 74,563 people)"
+    result = ExecutionResult(
+        rows=[
+            {"answer": verbose},
+            {"answer": "Mercury (planet)"},
+            {"answer": "Washington (Washington state)"},
+        ],
+        evidence=[EvidenceRecord(
+            source_id="p1",
+            source_span="20,154 families compared to 74,563 people.",
+            slot_id="S1",
+            bindings={"answer": verbose},
+        )],
+        metrics=RunMetrics(direct_plan_templates=1),
+    )
+
+    normalized = methods._normalize_direct_answer_rows(result)
+
+    assert normalized.rows == [
+        {"answer": "families"},
+        {"answer": "Mercury (planet)"},
+        {"answer": "Washington (Washington state)"},
+    ]
+    assert normalized.evidence[0].bindings["answer"] == verbose
+    assert normalized.metrics.answer_span_normalizations == 1
+
+    non_direct = result.model_copy(update={"metrics": RunMetrics()})
+    assert methods._normalize_direct_answer_rows(non_direct).rows[0]["answer"] == verbose
+
+
 def test_deterministic_output_rejects_serialized_structures():
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

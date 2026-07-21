@@ -272,7 +272,11 @@ def test_date_difference_operator_uses_calendar_month_boundaries():
 
 def test_typed_month_difference_template_skips_llm_compilation_and_executes():
     question = "How many months after he began his term did Zaimis swear allegiance to the new constitution?"
-    plan, compiler_metrics = SlotCompiler(FakeStructuredClient([])).compile(question, answer_kind="number")
+    plan, compiler_metrics = SlotCompiler(FakeStructuredClient([])).compile(
+        question,
+        answer_kind="number",
+        document_count=1,
+    )
 
     assert compiler_metrics.llm_calls == 0
     assert compiler_metrics.heuristic_plans == 1
@@ -329,6 +333,48 @@ def test_typed_month_difference_template_does_not_match_other_numeric_relations(
 
         assert metrics.llm_calls == 1
         assert metrics.typed_plan_templates == 0
+
+
+def test_single_document_compilation_uses_direct_evidence_plan():
+    question = "Which player caught the first touchdown pass?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(
+        question,
+        answer_kind="number",
+        document_count=1,
+    )
+
+    assert metrics.llm_calls == 0
+    assert metrics.heuristic_plans == 1
+    assert metrics.direct_plan_templates == 1
+    assert plan.slots[0].predicate == "EvidenceAnsweringQuestion"
+    assert plan.slots[0].arguments == ["?answer"]
+    assert plan.slots[0].constraints == {"question": question}
+    assert plan.outputs == ["?answer"]
+    assert plan.operators == []
+
+
+def test_multi_document_compilation_does_not_use_direct_evidence_plan():
+    question = "Which player caught the first touchdown pass?"
+    payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([payload])).compile(
+        question,
+        answer_kind="number",
+        document_count=2,
+    )
+
+    assert metrics.llm_calls == 1
+    assert metrics.direct_plan_templates == 0
 
 
 def test_materializer_rejects_propagated_binding_not_grounded_in_source():

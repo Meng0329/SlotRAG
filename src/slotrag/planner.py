@@ -372,7 +372,13 @@ class SlotCompiler:
             rewritten += 1
         return SlotPlan.model_validate(payload), rewritten
 
-    def compile(self, question: str, *, answer_kind: str = "short") -> tuple[SlotPlan, RunMetrics]:
+    def compile(
+        self,
+        question: str,
+        *,
+        answer_kind: str = "short",
+        document_count: int | None = None,
+    ) -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
         if (
@@ -407,6 +413,17 @@ class SlotCompiler:
                 )],
                 outputs=["?answer"],
             ), RunMetrics(heuristic_plans=1)
+        if document_count == 1:
+            return SlotPlan(
+                slots=[Slot(
+                    id="S1",
+                    predicate="EvidenceAnsweringQuestion",
+                    arguments=["?answer"],
+                    constraints={"question": question},
+                    estimated_cardinality=1,
+                )],
+                outputs=["?answer"],
+            ), RunMetrics(heuristic_plans=1, direct_plan_templates=1)
         type_guidance = ""
         if answer_kind == "boolean":
             type_guidance = (

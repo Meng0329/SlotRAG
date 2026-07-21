@@ -411,7 +411,7 @@ class BenchmarkRunner:
                         if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
                             result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
                         record = {
-                            "schema_version": 6,
+                            "schema_version": 8,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,

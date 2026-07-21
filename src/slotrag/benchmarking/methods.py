@@ -25,6 +25,7 @@ class MethodSpec:
     family: str
     strategy: str = "adaptive"
     options: ExecutionOptions = field(default_factory=ExecutionOptions)
+    direct_single_document: bool = True
     description: str = ""
 
 
@@ -39,6 +40,7 @@ ABLATION_METHODS = [
     "slotrag-eager",
     "slotrag-no-bindings",
     "slotrag-no-operators",
+    "slotrag-no-direct",
 ]
 
 
@@ -53,6 +55,7 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag",
         strategy="question",
         options=ExecutionOptions(runtime_replan=False, incremental_join=False, binding_propagation=False),
+        direct_single_document=False,
         description="structured late-join retrieval, adapted",
     ),
     "graphrag": MethodSpec("graphrag", "graphrag", description="per-question lexical entity graph, adapted"),
@@ -65,6 +68,7 @@ METHODS: dict[str, MethodSpec] = {
     "slotrag-eager": MethodSpec("slotrag-eager", "slotrag", options=ExecutionOptions(eager_materialization=True)),
     "slotrag-no-bindings": MethodSpec("slotrag-no-bindings", "slotrag", options=ExecutionOptions(binding_propagation=False)),
     "slotrag-no-operators": MethodSpec("slotrag-no-operators", "slotrag", options=ExecutionOptions(typed_operators=False)),
+    "slotrag-no-direct": MethodSpec("slotrag-no-direct", "slotrag", direct_single_document=False),
 }
 
 
@@ -225,6 +229,38 @@ def _evidence_boolean(result: ExecutionResult) -> str | None:
             token = match.group(1).casefold()
             return "True" if token in {"yes", "true"} else "False"
     return None
+
+
+def _normalize_direct_answer_rows(result: ExecutionResult) -> ExecutionResult:
+    if result.metrics.direct_plan_templates <= 0:
+        return result
+    normalized_rows: list[dict[str, str]] = []
+    normalization_count = 0
+    for row in result.rows:
+        normalized_row = dict(row)
+        answer = row.get("answer", "").strip()
+        match = re.fullmatch(r"(?P<head>[^()\n]+?)\s+\((?P<body>[^()\n]+)\)\s*", answer)
+        if match:
+            head = match.group("head").strip()
+            body = match.group("body").strip()
+            normalized_head = " ".join(re.findall(r"\w+", head.casefold()))
+            normalized_body = " ".join(re.findall(r"\w+", body.casefold()))
+            if (
+                normalized_head
+                and re.match(r"^[+-]?(?:\d|\.\d)", body)
+                and normalized_head in normalized_body
+            ):
+                normalized_row["answer"] = head
+                normalization_count += 1
+        normalized_rows.append(normalized_row)
+    if not normalization_count:
+        return result
+    metrics = result.metrics.model_copy(update={
+        "answer_span_normalizations": (
+            result.metrics.answer_span_normalizations + normalization_count
+        ),
+    })
+    return result.model_copy(update={"rows": normalized_rows, "metrics": metrics})
 
 
 def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> str | None:
@@ -432,7 +468,17 @@ def _run_slotrag(
     max_retrieval_calls: int,
 ) -> ExecutionResult:
     compile_started = time.perf_counter()
-    plan, compiler_metrics = SlotCompiler(client).compile(question.question, answer_kind=_answer_kind(dataset))
+    compile_kwargs: dict[str, Any] = {}
+    if spec.direct_single_document and question.passages:
+        compile_kwargs["document_count"] = len({
+            passage.doc_id or passage.id
+            for passage in question.passages
+        })
+    plan, compiler_metrics = SlotCompiler(client).compile(
+        question.question,
+        answer_kind=_answer_kind(dataset),
+        **compile_kwargs,
+    )
     plan_variables = set().union(*(slot.variables for slot in plan.slots))
     plan_metrics = RunMetrics(
         compilation_latency_ms=(time.perf_counter() - compile_started) * 1000,
@@ -471,6 +517,7 @@ def _run_slotrag(
         unique_passages_accessed=len(materializer.accessed_passage_ids),
     )
     result = result.model_copy(update={"plan": plan, "metrics": merge_metrics(result.metrics, compiler_metrics, execution_metrics)})
+    result = _normalize_direct_answer_rows(result)
     if not spec.options.typed_operators and plan.operators and result.status in {"ok", "empty"}:
         return result.model_copy(update={
             "answer": None,

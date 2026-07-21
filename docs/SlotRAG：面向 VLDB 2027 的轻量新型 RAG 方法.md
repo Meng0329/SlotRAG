@@ -619,7 +619,9 @@ HotpotQA 两次相同样本运行间，SlotRAG F1 从 0.714 变为 0.450，Hybri
 | 编号 | 证据 | 归因 | 拟议修改 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | F1 | HotpotQA `5a7b9b8a554299294a54aa1c`：金答案 `Holy Avenger`，Evidence Recall@5=1.0，但执行顺序为 `S2 -> S1`，最终确定性输出 `Senninha`。`S1` 的来源段落是 Erica Awano，抽取绑定却是段落中不存在的 `Rogério Martins`/`Ridaut Dias Jr.`。 | 绑定传播将上游候选注入抽取上下文后，LLM 回显了绑定而非从证据抽取；错误 join 再被确定性返回放大。这是抽取/连接正确性故障，不是检索未命中。 | 已增加 provenance-grounded binding validator：传播值必须与抽取行一致，且规范化形式必须出现在 `source_span` 或文档标题；否则拒绝该行并记录 `grounding_rejections`。合法的文档标题锚定可通过校验。 | v3 故障题走了不同的编译/检索轨迹，`grounding_rejections=0`、R@5=0、F1=0，因此未隔离验证该修改。DROP 另一题触发 2 次拒绝后转证据生成并答对，但显示它可能增加空行和调用。需要冻结计划重放才能评估因果。 | 已实现，在线因果未建立 |
-| F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | v3 的事后安全改写依赖 LLM 先产生有效计划，在线三次编译失败后无法触发。schema v6 已对严格匹配的“How many months after ...”问题直接生成 `MonthDifferenceDates(?startDate, ?endDate)` 与 `date_diff_months` 算子，跳过 LLM 计划结构生成；其他月份、天数、年份和 `before` 问法仍走原编译路径。 | 离线测试确认编译 LLM 调用为 0、`typed_plan_templates=1`、实际执行 1 个算子并输出 3；仍需 v4 同批在线样本验证抽取、总体质量和成本。 | schema v6 已实现，在线验证中 |
+| F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | v3 的事后安全改写依赖 LLM 先产生有效计划，在线三次编译失败后无法触发。schema v6 已对严格匹配的“How many months after ...”问题直接生成 `MonthDifferenceDates(?startDate, ?endDate)` 与 `date_diff_months` 算子，跳过 LLM 计划结构生成；其他月份、天数、年份和 `before` 问法仍走原编译路径。 | v4 目标题输出 3，`typed_plan_templates=1`、`compilation_llm_calls=0`、`operators_executed=1`、`plan_fallbacks=0`，DROP EM/F1=1.0；同批只有该题触发模板。 | schema v6 在线通过 |
+| F3 | DROP v4 虽升至 F1 0.834，但平均仍需 3.5 LLM calls、7,078 tokens 和 74.76 s；仅编译就占 1.9 calls、4,747 tokens 和 42.29 s，10 题中 4 题三次编译失败后退化为单槽证据回答。 | DROP 每题只有一个唯一文档，不存在跨文档连接顺序或绑定传播收益；仍调用结构 Slot Compiler 是与数据拓扑不匹配的固定成本。 | 在类型算子模板之后增加退化单文档计划：当可见语料拓扑只有一个唯一文档时，直接物化 `EvidenceAnsweringQuestion(?answer)`，跳过结构编译；多文档问题保持原路径。新增 `direct_plan_templates`，并加入禁用该路由的消融。 | v5 精确产生 1 个 typed + 9 个 direct 计划，编译调用和 fallback 均为 0；calls/tokens/延迟为 1.1/1,417/15.26 s，但 F1 0.796，较 v4 低 0.038。 | H7/H9 通过，H8 失败 |
+| F4 | v5 `drop_train_41439` 的直接槽位抽取为 `families (20,154 families compared to 74,563 people)`；它是唯一非空字符串，因而被确定性输出，DROP F1 从 1.0 降到 0.29。 | 直接计划把“答案 + 括号内证据说明”当作合法标量；结构类型正确，但答案投影不满足最短答案跨度契约。 | 只对 direct plan 的答案行做可审计规范化：若结尾括号体以数值开头且再次原样包含括号外答案，则去掉括号说明；`Mercury (planet)`、`Washington (Washington state)` 等消歧括号保持不变，EvidenceRecord 保留原始绑定。新增 `answer_span_normalizations`。 | v6 在线抽取自行返回 `families`，因此规范化计数为 0；冻结重放 v5 原始结果后输出 `families`、计数 1，且原始 EvidenceRecord 不变。总体 F1 0.867。 | 冻结重放通过，在线触发未观察 |
 
 ### schema v5 候选架构与预注册复验（2026-07-21）
 
@@ -658,7 +660,7 @@ v3 说明“生成计划后再修复”的入口仍受上游结构化编译失�
 3. 新增 `typed_plan_templates`；schema v5 及以前严格报告 N/A，不回填 0。逐题记录升级为 schema v6。
 4. 离线覆盖包括目标题端到端执行、日期格式解析、模板范围负例、schema 兼容和 benchmark runner，共 `60 passed, 1 skipped`；Python 编译检查通过。
 
-在线复验固定使用与 v2/v3 完全相同的 DROP diagnostic 10 题和两种方法，运行目录为 `runs/vldb2027-diagnostic-v4`。先生成数据审计，再创建 manifest；源码指纹、完整性和结果将在运行后原位补记。预注册判定如下：
+在线复验固定使用与 v2/v3 完全相同的 DROP diagnostic 10 题和两种方法，运行目录为 `runs/vldb2027-diagnostic-v4`。先生成数据审计，再创建 manifest；源码指纹为 `4eb4b1f067537651f3ca323e84a5242cd11774837f3676a3695cb8ff7987d7d5`。预注册判定如下：
 
 ```text
 H4（目标正确性）：drop_train_11251 输出 3，typed_plan_templates=1、compilation_llm_calls=0、operators_executed=1、plan_fallbacks=0。
@@ -666,9 +668,72 @@ H5（范围约束）：同批其余题 typed_plan_templates=0，不因模板出�
 H6（总体无回退）：DROP 总体 EM/F1 不低于 v3；调用、token 和延迟按完整同批结果报告，不以单题成功替代总体判断。
 ```
 
-该修改只处理已定位的 F2 结构故障。即使 H4-H6 全部通过，也只能进入下一轮算子覆盖与稳定性诊断，不能据此进入 Tune50 或形成 VLDB 级效果声明。
+v4 最终完整性：20/20 个最终记录、20 个不可变 attempts、0 benchmark 重试、0 failed/empty/unsupported，全部为 schema v6；提供方内部重试平均为 SlotRAG 0.1、Hybrid 0.2。manifest 正确内嵌 378,888 条、0 invalid 的数据审计及 SHA-256 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`；DROP 样本文件与 v3 SHA-256 均为 `cc937926ba09a0e6b4dabca8897236100c56a82691b3dd2e4230366e8096f9c4`。
 
-v4 在线中间检查点（非最终汇总）：manifest 已固化源码指纹 `4eb4b1f067537651f3ca323e84a5242cd11774837f3676a3695cb8ff7987d7d5`，并正确内嵌 378,888 条、0 invalid 的数据审计及 SHA-256 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`；DROP 样本文件与 v3 SHA-256 均为 `cc937926ba09a0e6b4dabca8897236100c56a82691b3dd2e4230366e8096f9c4`。目标题 `drop_train_11251` 已输出 3，DROP EM/F1=1.0，`typed_plan_templates=1`、`compilation_llm_calls=0`、`operators_executed=1`、`plan_fallbacks=0`，共 1 次 LLM 调用、1,290 tokens、19.43 s。H4 已通过逐题检查；H5/H6 必须等待全批运行和汇总后判定。
+| v4 DROP diagnostic | SlotRAG | Hybrid | 判定 |
+| --- | ---: | ---: | --- |
+| EM / F1 | 0.700 / 0.834 | 0.700 / 0.767 | 配对 F1 差 +0.067，95% CI [-0.099, 0.300]，`p=p_holm=0.7108`；1 胜/8 平/1 负，不能声称显著优势。 |
+| 累计/唯一文档访问 | 1.2 / 1.0 | 1.0 / 1.0 | 唯一访问无优势，累计访问高 20%。 |
+| LLM calls | 3.5 | 1.2 | SlotRAG 为 2.9 倍；编译/抽取/生成为 1.9/1.3/0.2。 |
+| Prompt / completion / total tokens | 4,708 / 2,369 / 7,078 | 762 / 422 / 1,185 | SlotRAG 总 token 为 6.0 倍。 |
+| 在线延迟 mean / P50 / P95 / P99 | 74.76 / 71.41 / 127.45 / 139.56 s | 18.62 / 18.52 / 25.49 / 26.27 s | SlotRAG 平均延迟为 4.0 倍；编译/执行/生成为 42.29/26.28/6.20 s。 |
+| 模板/算子/回退 | 0.1 / 0.2 / 0.4 | 0 / 0 / 0 | 10 题中 1 题走新模板、2 题执行算子、4 题发生 plan fallback。 |
+
+H4、H5、H6 均通过：目标题输出 3，只用 1 次调用、1,290 tokens、19.43 s；同批其余 9 题的 `typed_plan_templates=0`，且没有新增异常状态。v3→v4 的 SlotRAG 为 2 胜/8 平/0 负、平均 F1 +0.200，其中目标题的 +1.0 有明确架构触发证据；`drop_train_26165` 的另一个 +1.0 没有触发新模板，保守归为提供方波动。总体 calls/tokens/延迟相对 v3 分别下降 18.6%/16.6%/15.6%，但与 Hybrid 的成本差距仍远超内部门槛。因此不进入 Tune50，转入预注册的 F3 单文档退化计划验证。
+
+### schema v7 单文档退化计划预注册（2026-07-21）
+
+该路由只读取运行时已经可见的语料拓扑，不使用金答案、金证据或题型标签。编译优先级固定为“已验证类型模板 → 单文档退化计划 → 原 Slot Compiler”，因此 v4 的月份差修复不会被直接回答路径覆盖，多文档数据集的连接式执行也不变。v5 继续使用同一 DROP 样本，并预注册：
+
+离线实现已完成：`direct_plan_templates` 只在 schema v7 有定义，schema v6 及以前报告 N/A；同一 `doc_id` 的多个 chunk 计为一个文档；新增 `slotrag-no-direct`，并纳入 ablation gate、smoke 和正式 ablations。测试覆盖路由、类型模板优先级、多文档隔离、消融开关、schema 兼容和 runner 版本，共 `64 passed, 1 skipped`；Python 编译和实验 YAML 校验通过。
+
+```text
+H7（路由可审计）：1 题 typed_plan_templates=1，其余 9 题 direct_plan_templates=1；全部 compilation_llm_calls=0、plan_fallbacks=0。
+H8（质量非劣）：DROP F1 相对 v4 下降不超过 0.01，目标题继续输出 3；失败、空结果和 unsupported 均为 0。
+H9（成本门槛）：平均 LLM calls ≤1.5、total tokens ≤2,500、在线延迟 ≤40 s，并完整报告相对 Hybrid 的差异。
+```
+
+v5 使用运行目录 `runs/vldb2027-diagnostic-v5`，源码指纹为 `82f49bf3da06f8897cc16186c83370a27f6d10dfe8c47a5ccd13092fae91724d`。数据审计和 DROP 样本 SHA 分别与 v4 相同。20/20 个最终记录、20 attempts、0 benchmark 重试、0 failed/empty/unsupported，全部为 schema v7。
+
+| v5 DROP diagnostic | SlotRAG | Hybrid | 判定 |
+| --- | ---: | ---: | --- |
+| EM / F1 | 0.700 / 0.796 | 0.700 / 0.714 | 配对差 +0.082，95% CI [-0.160, 0.353]，`p=p_holm=0.5728`；2 胜/7 平/1 负，仍不显著。Hybrid 自身相对 v4 有波动，跨运行只作诊断。 |
+| 累计/唯一文档访问 | 1.0 / 1.0 | 1.0 / 1.0 | 访问量持平；SlotRAG 累计访问相对 v4 从 1.2 降到 1.0。 |
+| LLM calls | 1.1 | 1.0 | SlotRAG 相对 v4 下降 68.6%，仅高于本轮 Hybrid 0.1；编译/抽取/生成为 0/1.0/0。 |
+| Prompt / completion / total tokens | 1,093 / 325 / 1,417 | 762 / 339 / 1,101 | SlotRAG 相对 v4 总 token 下降 80.0%，仍比本轮 Hybrid 高 28.7%。 |
+| 在线延迟 mean / P50 / P95 / P99 | 15.26 / 12.57 / 26.46 / 27.49 s | 17.17 / 16.42 / 27.57 / 31.23 s | SlotRAG 相对 v4 平均延迟下降 79.6%，且本轮比 Hybrid 低 11.1%。 |
+| typed / direct / fallback | 0.1 / 0.9 / 0 | 0 / 0 / 0 | H7 精确通过；10 题均无编译调用，只有目标题执行类型算子。 |
+
+H7、H9 通过，H8 失败。v4→v5 为 1 胜/8 平/1 负：`drop_train_24769` 从 0.67 升至 1.0，但 `drop_train_41439` 从 1.0 降至 0.29，净变化 -0.038。后者输出带括号解释，是唯一有明确、局部且可测的路由质量回退。F3 的成本目标已经建立，因此保留单文档路由，不进入 Tune50，先验证 F4 答案跨度规范化。
+
+### schema v8 直接答案跨度规范化预注册（2026-07-21）
+
+规范化只作用于 `direct_plan_templates=1` 的投影行，不修改检索、抽取、原始 EvidenceRecord 或类型算子结果。规则要求完整字符串形如 `head (body)`、`body` 以数值开头，且规范化后的非空 `head` 在 `body` 中原样出现；否则不变。新增 `answer_span_normalizations`，schema v7 及以前报告 N/A。预注册：
+
+离线实现已完成：规范化只修改最终投影行，保留原始 EvidenceRecord；测试覆盖目标题、非重复消歧、重复但非数值消歧、非 direct 隔离、schema 兼容和 runner 版本，共 `66 passed, 1 skipped`。Python 编译和实验 YAML 校验通过。
+
+```text
+H10（局部修复）：drop_train_41439 输出 families、answer_span_normalizations=1、F1=1；其余 9 题该指标为 0。
+H11（质量恢复）：DROP F1 ≥0.824，目标题继续输出 3，且无 failed/empty/unsupported。
+H12（成本保持）：平均 LLM calls ≤1.5、total tokens ≤2,500、在线延迟 ≤40 s。
+```
+
+即使 schema v8 在 DROP 通过，也必须在多文档数据上验证路由不改变原执行路径，并通过 `slotrag-no-direct` 消融证明收益来自拓扑感知退化，而不是隐式更换基线。
+
+v6 DROP 使用运行目录 `runs/vldb2027-diagnostic-v6`，源码指纹为 `7fef6c1d36fdec3273b55e7202c3faf818da3ac757ca886119db4736be0bb8aa`，审计和样本 SHA 与 v5 相同。20/20 个最终记录、20 attempts、0 benchmark 重试、0 failed/empty/unsupported，全部为 schema v8。
+
+| v6 DROP diagnostic | SlotRAG | Hybrid | 判定 |
+| --- | ---: | ---: | --- |
+| EM / F1 | 0.800 / 0.867 | 0.700 / 0.722 | 配对差 +0.145，95% CI [0, 0.345]，`p=p_holm=0.2182`；2 胜/8 平/0 负，n=10 仍不能声称显著优势。 |
+| 累计/唯一文档访问 | 1.0 / 1.0 | 1.0 / 1.0 | 访问量持平，证据指标因 DROP 无金标而为 N/A。 |
+| LLM calls | 1.0 | 1.0 | 完全持平；SlotRAG 为 1.0 次抽取，Hybrid 为 1.0 次生成。 |
+| Prompt / completion / total tokens | 1,093 / 281 / 1,373 | 762 / 342 / 1,104 | SlotRAG 高 24.4%，但远低于 v4。 |
+| 在线延迟 mean / P50 / P95 / P99 | 11.52 / 10.65 / 16.84 / 19.18 s | 12.37 / 12.60 / 16.02 / 16.68 s | SlotRAG 平均低 6.9%，P95/P99 略高。 |
+| typed / direct / normalization / fallback | 0.1 / 0.9 / 0 / 0 | 0 / 0 / 0 / 0 | 路由保持稳定；本轮提供方直接给出简洁答案，未触发新规则。 |
+
+H11、H12 通过。H10 的在线输出目标通过，但触发计数目标未通过，不能把 v5→v6 的唯一 F1 变化（`drop_train_41439` +0.71）直接归因于 schema v8。对 v5 不可变结果执行冻结重放后，答案从 `families (20,154 families compared to 74,563 people)` 变为 `families`，`answer_span_normalizations=1`，原始 EvidenceRecord 绑定不变；因此功能因果在冻结输入上成立，在线频率仍未知。
+
+在不改源码、配置或测试的前提下，v6 下一步扩展同一 diagnostic 的 HotpotQA 与 2WikiMultiHopQA。预注册目标是：所有多文档 SlotRAG 记录 `direct_plan_templates=0`、`answer_span_normalizations=0`，0 个异常状态；完整报告 F1、Evidence Recall/Precision/Hit@1/5/10、MRR、NDCG@10、访问量、调用、token、阶段和 P50/P95/P99 延迟。该扩展用于验证路由隔离和稳定性，不把跨运行提供方波动解释为架构收益。
 
 ---
 
@@ -700,6 +765,9 @@ vs. 无绑定的独立子查询
 
 类型化算子
 vs. 禁用类型化算子（依赖算子的计划显式记为 unsupported，不允许最终 LLM 代算）
+
+单文档退化计划
+vs. 禁用拓扑感知退化并强制结构编译
 ```
 
 ---
