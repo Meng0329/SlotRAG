@@ -618,8 +618,8 @@ HotpotQA 两次相同样本运行间，SlotRAG F1 从 0.714 变为 0.450，Hybri
 
 | 编号 | 证据 | 归因 | 拟议修改 | 验收方式 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| F1 | HotpotQA `5a7b9b8a554299294a54aa1c`：金答案 `Holy Avenger`，Evidence Recall@5=1.0，但执行顺序为 `S2 -> S1`，最终确定性输出 `Senninha`。`S1` 的来源段落是 Erica Awano，抽取绑定却是段落中不存在的 `Rogério Martins`/`Ridaut Dias Jr.`。 | 绑定传播将上游候选注入抽取上下文后，LLM 回显了绑定而非从证据抽取；错误 join 再被确定性返回放大。这是抽取/连接正确性故障，不是检索未命中。 | 已增加 provenance-grounded binding validator：传播值必须与抽取行一致，且规范化形式必须出现在 `source_span` 或文档标题；否则拒绝该行并记录 `grounding_rejections`。合法的文档标题锚定可通过校验。 | 单元测试已覆盖“回显绑定但来源无该实体”和“文档标题合法锚定”。待在同一 10 题 HotpotQA 样本上对 v2/v3 配对重跑；要求该题不再产生错误 join，且总体 F1/失败率不回退。 | 已实现，待在线复验 |
-| F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | 已建立安全的功能谓词规范化入口：当 `DateDiffInMonths` 的两个输入已由其他 slots 生产且输出未被其他 slot 消费时，删除伪 slot 并改写为 `date_diff_months` 类型化算子；不满足安全条件时不改写。 | 单元测试已验证伪 slot 被删除、`operator_rewrites=1`、月份差输出 3。待在 DROP Diagnostic 原样本上配对重跑，并确认 `slotrag-no-operators` 对该类计划返回 `unsupported_operation`。 | 已实现，待在线复验 |
+| F1 | HotpotQA `5a7b9b8a554299294a54aa1c`：金答案 `Holy Avenger`，Evidence Recall@5=1.0，但执行顺序为 `S2 -> S1`，最终确定性输出 `Senninha`。`S1` 的来源段落是 Erica Awano，抽取绑定却是段落中不存在的 `Rogério Martins`/`Ridaut Dias Jr.`。 | 绑定传播将上游候选注入抽取上下文后，LLM 回显了绑定而非从证据抽取；错误 join 再被确定性返回放大。这是抽取/连接正确性故障，不是检索未命中。 | 已增加 provenance-grounded binding validator：传播值必须与抽取行一致，且规范化形式必须出现在 `source_span` 或文档标题；否则拒绝该行并记录 `grounding_rejections`。合法的文档标题锚定可通过校验。 | v3 故障题走了不同的编译/检索轨迹，`grounding_rejections=0`、R@5=0、F1=0，因此未隔离验证该修改。DROP 另一题触发 2 次拒绝后转证据生成并答对，但显示它可能增加空行和调用。需要冻结计划重放才能评估因果。 | 已实现，在线因果未建立 |
+| F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | v3 的事后安全改写依赖 LLM 先产生有效计划，在线三次编译失败后无法触发。schema v6 已对严格匹配的“How many months after ...”问题直接生成 `MonthDifferenceDates(?startDate, ?endDate)` 与 `date_diff_months` 算子，跳过 LLM 计划结构生成；其他月份、天数、年份和 `before` 问法仍走原编译路径。 | 离线测试确认编译 LLM 调用为 0、`typed_plan_templates=1`、实际执行 1 个算子并输出 3；仍需 v4 同批在线样本验证抽取、总体质量和成本。 | schema v6 已实现，在线验证中 |
 
 ### schema v5 候选架构与预注册复验（2026-07-21）
 
@@ -643,7 +643,32 @@ H3（无隐性回退）：HotpotQA 的 Evidence Recall@5/NDCG@10 和 DROP 的总
 | v3 复验 | 状态 | SlotRAG | Hybrid | 判定 |
 | --- | --- | --- | --- | --- |
 | HotpotQA train，10 题/方法 | 20/20 完成，0 失败 | F1 0.700，R@5 0.750，NDCG@10 0.775，9.2 累计/5.9 唯一文档，5.1 calls，9,981 tokens，101.93 s，P95 190.84 s | F1 0.594，R@5 0.900，NDCG@10 0.905，9.2 文档，1.1 calls，2,356 tokens，17.04 s，P95 25.46 s | SlotRAG 对 Hybrid 的配对差为 +0.106，95% CI [-0.317, 0.505]，`p=0.6162`。v2→v3 为 3 胜/7 平/0 负，但 `grounding_rejections=0`，改善不能归因于 F1 修改；故障题仍为 0 分且本轮未召回金证据。H1 未建立，R@5/NDCG 回退使 H3 不通过。 |
-| DROP train，10 题/方法 | 运行中 | 待汇总 | 待汇总 | 待按 H2/H3 判定。 |
+| DROP train，10 题/方法 | 20/20 完成，0 失败 | EM 0.500，F1 0.634，1.2 累计/1.0 唯一文档，4.3 calls，8,486 tokens，88.55 s，P95 138.26 s；平均 0.4 plan fallbacks | EM 0.700，F1 0.767，1.0 文档，1.1 calls，1,059 tokens，14.34 s，P95 25.25 s | SlotRAG 对 Hybrid 配对差 -0.133，95% CI [-0.333, 0]，`p=0.2154`。v2→v3 为 0 胜/9 平/1 负，F1 从 0.734 降至 0.634；`operator_rewrites=0`，目标题仍为 0 分。H2/H3 均不通过。 |
+
+v3 只完成预注册的 HotpotQA/DROP 配对复验，共 40/40 个最终记录、0 失败、0 重试，全部为 schema v5。由于 H1 无法隔离建立且 H2/H3 失败，不扩展到其余三个数据集，不进入 Tune50。
+
+### schema v6 确定性月份差计划与 v4 预注册（2026-07-21）
+
+v3 说明“生成计划后再修复”的入口仍受上游结构化编译失败支配。schema v6 因此增加一个刻意收窄的类型计划模板：仅当答案类型为数值且问题严格匹配 `How many month(s) after` 时，编译器直接生成一个日期抽取槽位和一个 `date_diff_months` 算子。模板不覆盖 `before`、天数、年份、一般时长或非数值问题，避免把未经验证的规则扩展成新的启发式系统。
+
+实现与测量变更：
+
+1. 生成 `MonthDifferenceDates(?startDate, ?endDate)`，保留完整问题作为检索约束，输出 `?months`。
+2. 省略结构计划 LLM 调用；证据日期仍由原有检索与带来源结构抽取获得，随后按日历月份边界确定性计算。
+3. 新增 `typed_plan_templates`；schema v5 及以前严格报告 N/A，不回填 0。逐题记录升级为 schema v6。
+4. 离线覆盖包括目标题端到端执行、日期格式解析、模板范围负例、schema 兼容和 benchmark runner，共 `60 passed, 1 skipped`；Python 编译检查通过。
+
+在线复验固定使用与 v2/v3 完全相同的 DROP diagnostic 10 题和两种方法，运行目录为 `runs/vldb2027-diagnostic-v4`。先生成数据审计，再创建 manifest；源码指纹、完整性和结果将在运行后原位补记。预注册判定如下：
+
+```text
+H4（目标正确性）：drop_train_11251 输出 3，typed_plan_templates=1、compilation_llm_calls=0、operators_executed=1、plan_fallbacks=0。
+H5（范围约束）：同批其余题 typed_plan_templates=0，不因模板出现新增 failed/empty/unsupported。
+H6（总体无回退）：DROP 总体 EM/F1 不低于 v3；调用、token 和延迟按完整同批结果报告，不以单题成功替代总体判断。
+```
+
+该修改只处理已定位的 F2 结构故障。即使 H4-H6 全部通过，也只能进入下一轮算子覆盖与稳定性诊断，不能据此进入 Tune50 或形成 VLDB 级效果声明。
+
+v4 在线中间检查点（非最终汇总）：manifest 已固化源码指纹 `4eb4b1f067537651f3ca323e84a5242cd11774837f3676a3695cb8ff7987d7d5`，并正确内嵌 378,888 条、0 invalid 的数据审计及 SHA-256 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`；DROP 样本文件与 v3 SHA-256 均为 `cc937926ba09a0e6b4dabca8897236100c56a82691b3dd2e4230366e8096f9c4`。目标题 `drop_train_11251` 已输出 3，DROP EM/F1=1.0，`typed_plan_templates=1`、`compilation_llm_calls=0`、`operators_executed=1`、`plan_fallbacks=0`，共 1 次 LLM 调用、1,290 tokens、19.43 s。H4 已通过逐题检查；H5/H6 必须等待全批运行和汇总后判定。
 
 ---
 

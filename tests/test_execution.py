@@ -240,7 +240,7 @@ def test_slot_compiler_rewrites_date_difference_predicate_to_typed_operator():
         "operators": [],
     }
     plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
-        "How many months after he began his term did Zaimis swear allegiance?",
+        "What is the difference in months between when he began his term and when Zaimis swore allegiance?",
         answer_kind="number",
     )
 
@@ -268,6 +268,67 @@ def test_date_difference_operator_uses_calendar_month_boundaries():
     )
 
     assert rows == [{"months": "3"}]
+
+
+def test_typed_month_difference_template_skips_llm_compilation_and_executes():
+    question = "How many months after he began his term did Zaimis swear allegiance to the new constitution?"
+    plan, compiler_metrics = SlotCompiler(FakeStructuredClient([])).compile(question, answer_kind="number")
+
+    assert compiler_metrics.llm_calls == 0
+    assert compiler_metrics.heuristic_plans == 1
+    assert compiler_metrics.typed_plan_templates == 1
+    assert len(plan.slots) == 1
+    assert plan.slots[0].predicate == "MonthDifferenceDates"
+    assert plan.slots[0].arguments == ["?startDate", "?endDate"]
+    assert plan.operators[0].operation == "date_diff_months"
+
+    materializer = SlotMaterializer(
+        SequenceExtractionClient(
+            [[{
+                "startDate": "18 September 1906",
+                "endDate": "2 December 1906",
+                "source_id": "drop_11251#0",
+            }]]
+        ),
+        StaticRetriever(
+            Passage(
+                id="drop_11251#0",
+                doc_id="drop_11251",
+                text="Zaimis began his term on 18 September 1906 and swore allegiance on 2 December 1906.",
+            )
+        ),
+    )
+    result = AdaptiveExecutor(materializer).execute(plan)
+
+    assert result.status == "ok"
+    assert result.rows == [{"months": "3"}]
+    assert result.metrics.extraction_llm_calls == 1
+    assert result.metrics.operators_executed == 1
+
+
+def test_typed_month_difference_template_does_not_match_other_numeric_relations():
+    questions = [
+        "How many months before the oath did the term begin?",
+        "How many days after the term began was the oath sworn?",
+        "How many years after the term began was the oath sworn?",
+        "After the election, how many months did the term last?",
+    ]
+    for question in questions:
+        payload = {
+            "slots": [{
+                "id": "S1",
+                "predicate": "EvidenceAnsweringQuestion",
+                "arguments": ["?answer"],
+                "constraints": {"question": question},
+            }],
+            "joins": [],
+            "outputs": ["?answer"],
+        }
+
+        _, metrics = SlotCompiler(FakeStructuredClient([payload])).compile(question, answer_kind="number")
+
+        assert metrics.llm_calls == 1
+        assert metrics.typed_plan_templates == 0
 
 
 def test_materializer_rejects_propagated_binding_not_grounded_in_source():

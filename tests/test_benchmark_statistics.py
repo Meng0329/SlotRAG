@@ -116,6 +116,23 @@ def test_schema5_reports_grounding_and_operator_rewrite_metrics_without_backfill
     assert legacy_summary["operator_rewrites"] is None
 
 
+def test_schema6_reports_typed_plan_templates_without_backfilling_schema5():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 6
+    current["result"]["metrics"] = RunMetrics(
+        typed_plan_templates=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 5
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["typed_plan_templates"] == 1
+    assert legacy_summary["typed_plan_templates"] is None
+
+
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
     record = _record("slotrag", "q1", 1.0)
     record["scores"]["evidence_recall"] = 1.0

@@ -269,6 +269,7 @@ class RunMetrics(StrictModel):
     operator_rewrites: int = 0
     plan_fallbacks: int = 0
     heuristic_plans: int = 0
+    typed_plan_templates: int = 0
     operators_executed: int = 0
     plan_slot_count: int = 0
     plan_join_count: int = 0

@@ -375,6 +375,27 @@ class SlotCompiler:
     def compile(self, question: str, *, answer_kind: str = "short") -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
+        if (
+            answer_kind == "number"
+            and re.search(r"\bhow\s+many\s+months?\s+after\b", question, flags=re.IGNORECASE)
+        ):
+            return SlotPlan(
+                slots=[Slot(
+                    id="S1",
+                    predicate="MonthDifferenceDates",
+                    arguments=["?startDate", "?endDate"],
+                    constraints={"question": question},
+                    estimated_cardinality=1,
+                )],
+                operators=[RelationalOperator(
+                    id="O1",
+                    kind="arithmetic",
+                    fields=["startDate", "endDate"],
+                    operation="date_diff_months",
+                    output="months",
+                )],
+                outputs=["?months"],
+            ), RunMetrics(heuristic_plans=1, typed_plan_templates=1)
         if answer_kind == "boolean":
             return SlotPlan(
                 slots=[Slot(
