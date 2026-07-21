@@ -1,4 +1,14 @@
-from slotrag.benchmarking.statistics import aggregate, macro_average, paired_bootstrap, seed_variance
+import json
+
+from slotrag.benchmarking.statistics import (
+    aggregate,
+    failure_report,
+    macro_average,
+    paired_bootstrap,
+    seed_variance,
+    stratified_aggregate,
+    summarize_run,
+)
 from slotrag.models import RunMetrics
 
 
@@ -8,6 +18,7 @@ def _record(method, question_id, score, seed=2027, label=None):
         "method": method,
         "method_label": label or method,
         "question_id": question_id,
+        "stratum": "bridge" if question_id == "q1" else "comparison",
         "seed": seed,
         "scores": {
             "primary_score": score,
@@ -41,4 +52,76 @@ def test_statistics_include_macro_seed_variance_and_paired_comparisons():
     assert variance[0]["seed_count"] == 2
     comparisons = paired_bootstrap(records, iterations=100, seed=7)
     assert {row["comparison"] for row in comparisons} == {"hybrid", "slotrag-random"}
+    hybrid = next(row for row in comparisons if row["comparison"] == "hybrid")
+    assert hybrid["wins"] == 2
+    assert hybrid["win_rate"] == 1.0
+    assert hybrid["cliffs_delta"] == 1.0
 
+
+def test_paired_bootstrap_marks_single_pair_as_insufficient():
+    comparisons = paired_bootstrap(
+        [_record("slotrag", "q1", 1.0), _record("hybrid", "q1", 0.0)],
+        iterations=100,
+        seed=7,
+    )
+    assert comparisons == [{
+        "dataset": "hotpotqa",
+        "reference": "slotrag",
+        "comparison": "hybrid",
+        "count": 1,
+        "mean_difference": 1.0,
+        "median_difference": 1.0,
+        "wins": 1,
+        "ties": 0,
+        "losses": 0,
+        "win_rate": 1.0,
+        "cliffs_delta": 1.0,
+        "ci_low": None,
+        "ci_high": None,
+        "p_value": None,
+        "p_holm": None,
+    }]
+
+
+def test_stratified_and_attempt_failure_reports_do_not_hide_retries():
+    records = [_record("slotrag", "q1", 1.0), _record("slotrag", "q2", 0.0)]
+    strata = stratified_aggregate(records)
+    assert {(row["stratum"], row["count"]) for row in strata} == {("bridge", 1), ("comparison", 1)}
+
+    failed_attempt = _record("slotrag", "q1", 0.0)
+    failed_attempt["result"]["status"] = "failed"
+    failed_attempt["failure_category"] = "provider_http_5xx"
+    rows = failure_report([failed_attempt, records[0]])
+    assert any(row["failure_category"] == "provider_http_5xx" and row["count"] == 1 for row in rows)
+    assert any(row["failure_category"] == "ok" and row["count"] == 1 for row in rows)
+
+
+def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
+    record = _record("slotrag", "q1", 1.0)
+    record["scores"]["evidence_recall"] = 1.0
+    item_path = tmp_path / "items" / "test" / "hotpotqa" / "slotrag" / "q1.json"
+    item_path.parent.mkdir(parents=True)
+    item_path.write_text(json.dumps(record), encoding="utf-8")
+    attempt_path = tmp_path / "attempts" / "test" / "hotpotqa" / "slotrag" / "q1" / "attempt-0001.json"
+    attempt_path.parent.mkdir(parents=True)
+    attempt_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report = summarize_run(tmp_path, "test")
+
+    assert report["record_count"] == 1
+    assert report["attempt_count"] == 1
+    assert report["validity"]["evidence_labeled_record_count"] == 1
+    summary_dir = tmp_path / "summaries" / "test"
+    for filename in (
+        "per_question.csv",
+        "metrics.csv",
+        "stratified_metrics.csv",
+        "macro_metrics.csv",
+        "retrieval_metrics.csv",
+        "failure_report.csv",
+        "seed_variance.csv",
+        "paired_bootstrap.csv",
+        "summary.json",
+        "REPORT.md",
+    ):
+        assert (summary_dir / filename).exists()

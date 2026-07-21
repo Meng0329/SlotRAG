@@ -37,6 +37,27 @@ def _safe_id(value: str) -> str:
     return f"{prefix}-{digest}"
 
 
+def _failure_category(status: str, error: str | None, answer: str | None) -> str:
+    if status == "ok":
+        return "ok" if answer and answer.strip() else "empty_answer"
+    if status == "empty":
+        return "empty"
+    if status == "unsupported_operation":
+        return "unsupported_operation"
+    if status == "budget_exceeded":
+        return "budget_exceeded"
+    message = (error or "").casefold()
+    if "429" in message or "rate limit" in message:
+        return "provider_http_429"
+    if any(token in message for token in ("500", "502", "503", "504", "server error")):
+        return "provider_http_5xx"
+    if any(token in message for token in ("connecterror", "connection", "dns", "timed out", "timeout")):
+        return "provider_connect"
+    if any(token in message for token in ("configuration", "validationerror", "schemaerror", "missing environment")):
+        return "configuration"
+    return "other"
+
+
 def _git_revision(path: Path) -> str:
     try:
         return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
@@ -227,6 +248,8 @@ class BenchmarkRunner:
         peak_rss_mb: float,
         index_build_ms: float,
         index_bytes: int,
+        index_delta: dict[str, Any],
+        index_cache_delta: tuple[int, int],
     ) -> tuple[ExecutionResult, dict[str, Any]]:
         after = self._provider_snapshot()
         cache_after = self.embedding_cache.snapshot()
@@ -247,6 +270,10 @@ class BenchmarkRunner:
             "cache_hits": cache_after[0] - cache_before[0],
             "cache_misses": cache_after[1] - cache_before[1],
             "index_build_latency_ms": result.metrics.index_build_latency_ms + index_build_ms,
+            "index_provider_latency_ms": sum(value["latency_ms"] for value in index_delta.values()),
+            "index_embedding_calls": index_delta["embedding"]["attempts"],
+            "index_cache_hits": index_cache_delta[0],
+            "index_cache_misses": index_cache_delta[1],
             "index_bytes": max(result.metrics.index_bytes, index_bytes),
             "provider_request_ids": list(dict.fromkeys(result.metrics.provider_request_ids + request_ids)),
         })
@@ -271,7 +298,7 @@ class BenchmarkRunner:
             raise ValueError(f"datasets are not configured for this suite: {', '.join(unknown_datasets)}")
         if unknown_methods:
             raise ValueError(f"methods are not configured for stage {stage_name}: {', '.join(unknown_methods)}")
-        counts = {"completed": 0, "skipped": 0, "retried": 0, "failed": 0, "empty": 0}
+        counts = {"completed": 0, "skipped": 0, "retried": 0, "failed": 0, "empty": 0, "unsupported": 0}
         self._write_manifest(stage_name, selected_datasets, selected_methods)
         for dataset in selected_datasets:
             questions = self._load_or_create_sample(stage_name, dataset)
@@ -280,46 +307,89 @@ class BenchmarkRunner:
                     method_label = method if len(self._method_seeds(method)) == 1 else f"{method}@{seed}"
                     for question in questions:
                         item_path = self.output_dir / "items" / stage_name / dataset / method_label / f"{_safe_id(question.id)}.json"
+                        attempt_dir = self.output_dir / "attempts" / stage_name / dataset / method_label / _safe_id(question.id)
+                        attempt_paths = sorted(attempt_dir.glob("attempt-*.json")) if attempt_dir.exists() else []
+                        previous: dict[str, Any] | None = None
                         if item_path.exists():
                             try:
                                 previous = json.loads(item_path.read_text(encoding="utf-8"))
                                 previous_status = previous.get("result", {}).get("status")
                             except (OSError, json.JSONDecodeError):
                                 previous_status = None
+                            if previous is not None and not attempt_paths:
+                                legacy = dict(previous)
+                                legacy_result = legacy.get("result", {})
+                                legacy["schema_version"] = 2
+                                legacy["attempt_index"] = 1
+                                legacy.setdefault("failure_category", _failure_category(
+                                    str(legacy_result.get("status", "failed")),
+                                    legacy_result.get("error"),
+                                    legacy_result.get("answer"),
+                                ))
+                                legacy.setdefault("budget", self.suite.budget.model_dump(mode="json"))
+                                _atomic_json(attempt_dir / "attempt-0001.json", legacy)
+                                attempt_paths = [attempt_dir / "attempt-0001.json"]
                             if previous_status == "ok":
                                 counts["skipped"] += 1
                                 continue
                             counts["retried"] += 1
-                        before = self._provider_snapshot()
-                        cache_before = self.embedding_cache.snapshot()
-                        started = time.perf_counter()
-                        rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                        attempt_indices = [
+                            int(path.stem.rsplit("-", 1)[-1])
+                            for path in attempt_paths
+                            if path.stem.rsplit("-", 1)[-1].isdigit()
+                        ]
+                        attempt_index = max(attempt_indices, default=0) + 1
+                        index_provider_before = self._provider_snapshot()
+                        index_cache_before = self.embedding_cache.snapshot()
                         retriever: HybridRetriever | None = None
                         index_build_ms = 0.0
                         index_bytes = 0
+                        index_error: Exception | None = None
                         if METHODS[method].family != "graphrag":
                             index_started = time.perf_counter()
-                            retriever = self._retriever(question)
+                            try:
+                                retriever = self._retriever(question)
+                                retriever.build_index()
+                            except Exception as exc:
+                                index_error = exc
                             index_build_ms = (time.perf_counter() - index_started) * 1000
-                            index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
-                            index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
-                        try:
-                            with _question_deadline(self.suite.budget.question_timeout_seconds):
-                                result = run_method(
-                                    method,
-                                    dataset=dataset,
-                                    question=question,
-                                    retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
-                                    client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
-                                    config=self.app_config,
-                                    seed=seed,
-                                    max_steps=self.suite.budget.max_steps,
-                                    max_retrieval_calls=self.suite.budget.max_retrieval_calls,
-                                )
-                        except BenchmarkBudgetExceeded as exc:
-                            result = ExecutionResult(status="budget_exceeded", error=str(exc))
-                        except Exception as exc:
-                            result = ExecutionResult(status="failed", error=f"{exc.__class__.__name__}: {exc}")
+                            if retriever is not None:
+                                index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
+                                index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
+                        index_provider_after = self._provider_snapshot()
+                        index_cache_after = self.embedding_cache.snapshot()
+                        index_delta = {
+                            name: _stats_delta(index_provider_before[name], index_provider_after[name])
+                            for name in index_provider_before
+                        }
+                        index_cache_delta = (
+                            index_cache_after[0] - index_cache_before[0],
+                            index_cache_after[1] - index_cache_before[1],
+                        )
+                        before = index_provider_after
+                        cache_before = index_cache_after
+                        started = time.perf_counter()
+                        rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                        if index_error is not None:
+                            result = ExecutionResult(status="failed", error=f"{index_error.__class__.__name__}: {index_error}")
+                        else:
+                            try:
+                                with _question_deadline(self.suite.budget.question_timeout_seconds):
+                                    result = run_method(
+                                        method,
+                                        dataset=dataset,
+                                        question=question,
+                                        retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
+                                        client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
+                                        config=self.app_config,
+                                        seed=seed,
+                                        max_steps=self.suite.budget.max_steps,
+                                        max_retrieval_calls=self.suite.budget.max_retrieval_calls,
+                                    )
+                            except BenchmarkBudgetExceeded as exc:
+                                result = ExecutionResult(status="budget_exceeded", error=str(exc))
+                            except Exception as exc:
+                                result = ExecutionResult(status="failed", error=f"{exc.__class__.__name__}: {exc}")
                         wall_ms = (time.perf_counter() - started) * 1000
                         rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                         result, provider_delta = self._instrument(
@@ -330,11 +400,18 @@ class BenchmarkRunner:
                             max(rss_after - rss_before, 0.0),
                             index_build_ms,
                             index_bytes,
+                            index_delta,
+                            index_cache_delta,
                         )
+                        result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
+                            "llm_budget_utilization": result.metrics.llm_calls / self.suite.budget.max_llm_calls,
+                            "retrieval_budget_utilization": result.metrics.retrieval_calls / self.suite.budget.max_retrieval_calls,
+                            "step_budget_utilization": result.metrics.steps_executed / self.suite.budget.max_steps,
+                        })})
                         if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
                             result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
                         record = {
-                            "schema_version": 1,
+                            "schema_version": 4,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
@@ -342,17 +419,25 @@ class BenchmarkRunner:
                             "seed": seed,
                             "question_id": question.id,
                             "stratum": question.metadata.get("stratum"),
+                            "attempt_index": attempt_index,
+                            "recorded_at": datetime.now(timezone.utc).isoformat(),
+                            "budget": self.suite.budget.model_dump(mode="json"),
                             "answers": question.answers,
                             "result": result.model_dump(mode="json"),
                             "scores": score_record(dataset, question, result),
                             "provider_delta": provider_delta,
+                            "index_provider_delta": index_delta,
+                            "failure_category": _failure_category(result.status, result.error, result.answer),
                         }
+                        _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record)
                         _atomic_json(item_path, record)
                         counts["completed"] += 1
                         if result.status in {"failed", "budget_exceeded"}:
                             counts["failed"] += 1
                         elif result.status == "empty":
                             counts["empty"] += 1
+                        elif result.status == "unsupported_operation":
+                            counts["unsupported"] += 1
         self.embedding_cache.flush()
         _atomic_json(self.output_dir / "progress.json", {"stage": stage_name, **counts})
         return counts

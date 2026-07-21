@@ -13,7 +13,7 @@ class FakeMaterializer:
             "S1": [BindingRow(slot_id="S1", bindings={"person": "Ada"}, source_id="p1", source_span="Ada founded X", confidence=1)],
             "S2": [BindingRow(slot_id="S2", bindings={"person": "Ada", "company": "X"}, source_id="p2", source_span="Ada founded X", confidence=1)],
         }[slot.id]
-        return rows, RunMetrics(documents_accessed=1, passages_processed=1)
+        return rows, RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
 
 
 class MultiBindingMaterializer(FakeMaterializer):
@@ -87,6 +87,7 @@ def test_adaptive_executor_joins_and_propagates_bindings():
     assert result.rows == [{"person": "Ada", "company": "X"}]
     assert result.order == ["S1", "S2"]
     assert materializer.calls[1][1] == {"person": "Ada"}
+    assert result.metrics.extraction_llm_calls == 2
 
 
 def test_executor_materializes_each_distinct_binding_context():
@@ -125,9 +126,29 @@ def test_slot_compiler_repairs_invalid_plan_once():
     plan, metrics = SlotCompiler(FakeStructuredClient([invalid, valid])).compile("What?")
     assert plan.outputs == ["?answer"]
     assert metrics.llm_calls == 2
+    assert metrics.compilation_llm_calls == 2
     assert metrics.structured_output_failures == 1
     assert metrics.structured_output_repairs == 1
     assert metrics.plan_fallbacks == 0
+
+
+def test_slot_compiler_repairs_unambiguous_join_key_locally():
+    invalid_join = {
+        "slots": [
+            {"id": "S1", "predicate": "DirectedBy", "arguments": ["Film", "?director"]},
+            {"id": "S2", "predicate": "BornIn", "arguments": ["?director", "?place"]},
+        ],
+        "joins": [{"left_slot": "S1", "left_field": "person", "right_slot": "S2", "right_field": "person"}],
+        "outputs": ["?place"],
+    }
+    plan, metrics = SlotCompiler(FakeStructuredClient([invalid_join])).compile("Where was the director of Film born?")
+    assert plan.joins[0].left_field == "director"
+    assert plan.joins[0].right_field == "director"
+    assert metrics.llm_calls == 1
+    assert metrics.compilation_llm_calls == 1
+    assert metrics.structured_output_failures == 1
+    assert metrics.structured_output_repairs == 1
+    assert metrics.local_plan_repairs == 1
 
 
 def test_slot_compiler_uses_heuristic_plan_for_boolean_question():
@@ -186,6 +207,8 @@ def test_materializer_counts_and_skips_repeated_invalid_extractions():
     )
     assert rows == []
     assert metrics.llm_calls == 2
+    assert metrics.extraction_llm_calls == 2
     assert metrics.structured_output_failures == 2
     assert metrics.structured_output_repairs == 1
+    assert materializer.accessed_passage_ids == {"p"}
     assert [item.source_id for item in materializer.last_evidence] == ["p"]

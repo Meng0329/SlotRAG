@@ -97,6 +97,10 @@ class HybridRetriever:
             self._passage_vectors = [vector for vector in vectors if vector is not None]
         return self._passage_vectors
 
+    def build_index(self) -> None:
+        """Materialize the shared passage index before online query timing starts."""
+        self._ensure_vectors()
+
     @staticmethod
     def _cosine(query: list[float], values: list[list[float]]) -> np.ndarray:
         q = np.asarray(query, dtype=float)

@@ -48,6 +48,7 @@ class ChatResult(BaseModel):
     finish_reason: str | None = None
     usage: Usage = Field(default_factory=Usage)
     latency_ms: float = 0.0
+    logical_calls: int = 1
 
 
 class RerankResult(BaseModel):

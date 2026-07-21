@@ -214,17 +214,42 @@ class RetrievalResult(StrictModel):
 
 class RunMetrics(StrictModel):
     documents_accessed: int = 0
+    unique_documents_accessed: int = 0
     passages_processed: int = 0
+    unique_passages_accessed: int = 0
     llm_calls: int = 0
     retrieval_calls: int = 0
     embedding_calls: int = 0
     reranker_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    compilation_llm_calls: int = 0
+    compilation_prompt_tokens: int = 0
+    compilation_completion_tokens: int = 0
+    extraction_llm_calls: int = 0
+    extraction_prompt_tokens: int = 0
+    extraction_completion_tokens: int = 0
+    planning_llm_calls: int = 0
+    planning_prompt_tokens: int = 0
+    planning_completion_tokens: int = 0
+    reasoning_llm_calls: int = 0
+    reasoning_prompt_tokens: int = 0
+    reasoning_completion_tokens: int = 0
+    generation_llm_calls: int = 0
+    generation_prompt_tokens: int = 0
+    generation_completion_tokens: int = 0
     latency_ms: float = 0.0
     provider_latency_ms: float = 0.0
     wall_latency_ms: float = 0.0
     index_build_latency_ms: float = 0.0
+    index_provider_latency_ms: float = 0.0
+    index_embedding_calls: int = 0
+    index_cache_hits: int = 0
+    index_cache_misses: int = 0
+    compilation_latency_ms: float = 0.0
+    execution_latency_ms: float = 0.0
+    materialization_latency_ms: float = 0.0
+    generation_latency_ms: float = 0.0
     retry_count: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -232,14 +257,27 @@ class RunMetrics(StrictModel):
     materialization_cache_hits: int = 0
     binding_contexts_pruned: int = 0
     evidence_only_fallbacks: int = 0
+    answer_reconciliations: int = 0
+    deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
     early_stops: int = 0
     structured_output_failures: int = 0
     structured_output_repairs: int = 0
+    local_plan_repairs: int = 0
     plan_fallbacks: int = 0
     heuristic_plans: int = 0
     operators_executed: int = 0
+    plan_slot_count: int = 0
+    plan_join_count: int = 0
+    plan_variable_count: int = 0
+    plan_output_count: int = 0
+    plan_operator_count: int = 0
+    plan_complexity: int = 0
+    steps_executed: int = 0
+    llm_budget_utilization: float = 0.0
+    retrieval_budget_utilization: float = 0.0
+    step_budget_utilization: float = 0.0
     peak_rss_mb: float = 0.0
     index_bytes: int = 0
     intermediate_binding_sizes: list[int] = Field(default_factory=list)
@@ -256,6 +294,6 @@ class ExecutionResult(StrictModel):
     answer: str | None = None
     order: list[str] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
-    status: Literal["ok", "empty", "failed", "budget_exceeded"] = "ok"
+    status: Literal["ok", "empty", "failed", "budget_exceeded", "unsupported_operation"] = "ok"
     error: str | None = None
     plan: SlotPlan | None = None

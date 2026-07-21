@@ -56,6 +56,10 @@ stages:
       - slotrag-eager
       - slotrag-no-bindings
       - slotrag-no-operators
+  diagnostic:
+    split: train
+    sample_size: 10
+    methods: [slotrag, hybrid]
   tune:
     split: train
     sample_size: 50

@@ -37,9 +37,11 @@ slotrag benchmark summarize preflight --output-dir runs/pilot-v1
 ```
 
 Stages are declared in `configs/experiments/pilot.yaml`: `preflight`, `smoke`,
-`tune`, `ablations`, `validation`, and `final`. Samples are deterministic and
-stratified. Results are persisted atomically per question, so rerunning the
-same command resumes unfinished work. The summary includes answer quality,
-evidence metrics where labels are available, resource/cost measurements,
-planner diagnostics, paired bootstrap confidence intervals, and Holm-adjusted
-tests.
+`diagnostic`, `tune`, `ablations`, `validation`, and `final`. Samples are deterministic and
+stratified. Every execution is persisted as an immutable attempt plus an atomic
+latest-result snapshot, so rerunning the same command resumes unfinished work
+without erasing failed attempts. Summaries include per-question, method,
+stratum, and cross-dataset macro views; answer and evidence quality; planning,
+execution, resource, and token/call cost proxies; failure categories; paired
+bootstrap confidence intervals, effect sizes, and Holm-adjusted tests. Evidence
+quality is reported as `N/A` for datasets without gold evidence labels.

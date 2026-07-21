@@ -1,5 +1,7 @@
+from types import SimpleNamespace
+
 from slotrag.benchmarking import methods
-from slotrag.models import EvidenceRecord, ExecutionResult, Passage, QuestionRecord, RelationalOperator, SlotPlan
+from slotrag.models import EvidenceRecord, ExecutionResult, Passage, QuestionRecord, RelationalOperator, RunMetrics, SlotPlan
 from slotrag.providers import ChatResult
 from slotrag.planner import apply_operators
 
@@ -39,6 +41,7 @@ def test_graphrag_counts_full_corpus_once(monkeypatch):
     monkeypatch.setattr(methods, "_finalize", lambda _client, _dataset, _question, result: result)
     result = methods._run_graphrag("hotpotqa", question, object())
     assert result.metrics.documents_accessed == 2
+    assert result.metrics.unique_documents_accessed == 2
     assert result.metrics.passages_processed == 2
     assert result.metrics.retrieval_calls == 1
 
@@ -57,3 +60,131 @@ def test_evidence_only_fallback_promotes_empty_result_to_answer():
     assert result.status == "ok"
     assert result.answer == "False"
     assert result.metrics.evidence_only_fallbacks == 1
+    assert result.metrics.generation_llm_calls == 1
+
+
+def test_boolean_answer_prefers_explicit_extracted_binding():
+    class Client:
+        def complete(self, *_args, **_kwargs):
+            return ChatResult(content="True")
+
+    question = QuestionRecord(id="q", question="True?", answers=["False"])
+    result = ExecutionResult(
+        status="ok",
+        rows=[{"answer": "No, the evidence contradicts the proposition."}],
+        evidence=[EvidenceRecord(source_id="p", source_span="Evidence", slot_id="S1", bindings={})],
+    )
+    finalized = methods._finalize(Client(), "strategyqa", question, result)
+    assert finalized.answer == "False"
+    assert finalized.metrics.answer_reconciliations == 1
+
+
+def test_no_operators_reports_unsupported_without_llm_calculation(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Value", "arguments": ["?x"]}],
+        "joins": [],
+        "operators": [{"id": "count", "kind": "count", "output": "n"}],
+        "outputs": ["?n"],
+    })
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, *, answer_kind):
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"x": "one"}],
+                evidence=[EvidenceRecord(source_id="p1", source_span="one", slot_id="S1", bindings={"x": "one"})],
+                order=["S1"],
+            )
+
+    class Client:
+        def complete(self, *_args, **_kwargs):
+            raise AssertionError("no-operators must not delegate the disabled operation to the LLM")
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-no-operators"],
+        "drop",
+        QuestionRecord(id="q", question="How many values?"),
+        object(),
+        Client(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+    )
+    assert result.status == "unsupported_operation"
+    assert result.answer is None
+    assert result.metrics.plan_slot_count == 1
+    assert result.metrics.plan_operator_count == 1
+    assert result.metrics.plan_complexity == 4
+    assert result.metrics.steps_executed == 1
+
+
+def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Partner", "arguments": ["Person", "?partner"]}],
+        "joins": [],
+        "outputs": ["?partner"],
+    })
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, *, answer_kind):
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"partner": "Ernie Wise"}, {"partner": "Ernie Wise"}],
+                evidence=[EvidenceRecord(source_id="p1", source_span="fact", slot_id="S1", bindings={"partner": "Ernie Wise"})],
+                order=["S1"],
+            )
+
+    class Client:
+        def complete(self, *_args, **_kwargs):
+            raise AssertionError("a unique relational output must not be verbalized by another LLM call")
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag"],
+        "hotpotqa",
+        QuestionRecord(id="q", question="Who was the partner?"),
+        object(),
+        Client(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+    )
+    assert result.answer == "Ernie Wise"
+    assert result.metrics.deterministic_answers == 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import string
 from collections import Counter
@@ -101,15 +102,40 @@ def boolean_accuracy(prediction: str, answers: list[str]) -> float:
     return float(predicted is not None and predicted in gold)
 
 
-def evidence_scores(result: ExecutionResult, question: QuestionRecord) -> tuple[float | None, float | None]:
-    if not question.metadata.get("evidence_available") or not question.gold_evidence:
-        return None, None
-    gold = set(question.gold_evidence)
+def _canonical_source_id(source_id: str) -> str:
+    return source_id.split("#chunk-", 1)[0]
+
+
+def evidence_scores(result: ExecutionResult, question: QuestionRecord) -> dict[str, Any]:
     ranked: list[str] = []
     for item in result.evidence:
-        canonical = item.source_id.split("#chunk-", 1)[0]
+        canonical = _canonical_source_id(item.source_id)
         if canonical not in ranked:
             ranked.append(canonical)
+
+    descriptive: dict[str, Any] = {
+        "retrieved_evidence_count": len(result.evidence),
+        "retrieved_document_count": len(ranked),
+        "evidence_text_chars": sum(len(item.source_span) for item in result.evidence),
+    }
+    quality_keys = [
+        "evidence_recall",
+        "evidence_mrr",
+        "evidence_recall_at_1",
+        "evidence_recall_at_5",
+        "evidence_recall_at_10",
+        "evidence_precision_at_1",
+        "evidence_precision_at_5",
+        "evidence_precision_at_10",
+        "evidence_hit_at_1",
+        "evidence_hit_at_5",
+        "evidence_hit_at_10",
+        "evidence_ndcg_at_10",
+    ]
+    if not question.metadata.get("evidence_available") or not question.gold_evidence:
+        return {"evidence_metric_status": "N/A", **descriptive, **dict.fromkeys(quality_keys)}
+
+    gold = {_canonical_source_id(source_id) for source_id in question.gold_evidence}
     found = set(ranked)
     recall = len(found & gold) / len(gold)
     reciprocal_rank = 0.0
@@ -117,7 +143,29 @@ def evidence_scores(result: ExecutionResult, question: QuestionRecord) -> tuple[
         if source_id in gold:
             reciprocal_rank = 1.0 / rank
             break
-    return recall, reciprocal_rank
+
+    cutoffs: dict[str, float] = {}
+    for cutoff in (1, 5, 10):
+        relevant = len(set(ranked[:cutoff]) & gold)
+        cutoffs[f"evidence_recall_at_{cutoff}"] = relevant / len(gold)
+        cutoffs[f"evidence_precision_at_{cutoff}"] = relevant / cutoff
+        cutoffs[f"evidence_hit_at_{cutoff}"] = float(relevant > 0)
+
+    dcg = sum(
+        1.0 / math.log2(rank + 1)
+        for rank, source_id in enumerate(ranked[:10], start=1)
+        if source_id in gold
+    )
+    ideal_hits = min(len(gold), 10)
+    ideal_dcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
+    return {
+        "evidence_metric_status": "computed",
+        **descriptive,
+        "evidence_recall": recall,
+        "evidence_mrr": reciprocal_rank,
+        **cutoffs,
+        "evidence_ndcg_at_10": dcg / ideal_dcg if ideal_dcg else 0.0,
+    }
 
 
 def score_record(dataset: str, question: QuestionRecord, result: ExecutionResult) -> dict[str, Any]:
@@ -131,7 +179,6 @@ def score_record(dataset: str, question: QuestionRecord, result: ExecutionResult
         accuracy = boolean_accuracy(prediction, question.answers)
     if dataset == "drop":
         drop_em, drop_f1 = drop_scores(prediction, question.answers)
-    evidence_recall, evidence_mrr = evidence_scores(result, question)
     primary = accuracy if dataset == "strategyqa" else drop_f1 if dataset == "drop" else f1
     return {
         "em": em,
@@ -140,6 +187,5 @@ def score_record(dataset: str, question: QuestionRecord, result: ExecutionResult
         "drop_em": drop_em,
         "drop_f1": drop_f1,
         "primary_score": float(primary or 0.0),
-        "evidence_recall": evidence_recall,
-        "evidence_mrr": evidence_mrr,
+        **evidence_scores(result, question),
     }

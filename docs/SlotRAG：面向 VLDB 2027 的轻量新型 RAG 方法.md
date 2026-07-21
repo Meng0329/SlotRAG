@@ -476,10 +476,22 @@ SlotRAG 的数据库核心应明确落在：
 HotpotQA
 2WikiMultiHopQA
 MuSiQue
-QO-Bench
+StrategyQA
+DROP
 ```
 
-前三个测试多跳证据连接；QO-Bench 测试连接、交集、过滤、计数等查询操作。QO-Bench 包含 22,984 篇新闻、614 个企业事件和 785 个问题，并为操作级评估提供确定性的类型化事件元组。
+前三个数据集测试多跳证据连接；StrategyQA 测试需要组合事实的布尔判断，DROP 测试数值抽取、计数、比较和算术操作。实验不再使用 QO-Bench。HotpotQA 与 2WikiMultiHopQA 提供可用于证据质量评估的金标；其余数据集没有同等粒度金标时，证据质量指标严格报告为 `N/A`，不以零值代替。
+
+数据划分与调优协议：
+
+```text
+Diagnostic:训练集分层抽样 10 题，仅用于系统与成本诊断，不作显著性结论
+Tune:      训练集分层抽样 50 题，仅用于逐步调参
+Validation:训练集独立分层抽样 200 题，用于冻结配置前验证
+Final:     官方评估划分分层抽样 500 题，只在配置冻结后运行
+```
+
+主方法在每个阶段使用固定种子运行一次；随机顺序消融使用 5 个预注册种子，并同时报告均值、标准差、最小值和最大值。每次执行保存不可变 attempt 记录，失败重试不会覆盖历史。
 
 ## Baseline
 
@@ -502,17 +514,27 @@ SRAG
 EM
 F1
 Accuracy
+DROP EM / DROP F1
 ```
 
 检索和执行：
 
 ```text
-Evidence Recall
+Evidence Recall@1/5/10
+Evidence Precision@1/5/10
+Evidence Hit@1/5/10
+Evidence MRR
+Evidence NDCG@10
 Documents Accessed
 Passages Processed
+Retrieved Documents / Evidence Count
 LLM Calls
-Token Cost
+Embedding / Reranker / Retrieval Calls
+Prompt / Completion / Total Tokens（成本代理，不换算货币）
 End-to-End Latency
+Provider / Compilation / Execution / Materialization / Generation Latency
+P50 / P95 / P99 Latency
+Peak RSS / Index Bytes / Index Build Latency
 ```
 
 数据库指标：
@@ -523,7 +545,13 @@ Slot Selectivity Estimation Error
 Number of Re-optimizations
 Planner Regret against Oracle Order
 Materialization Reuse Rate
+Cache Hit Rate
+Plan Slots / Joins / Variables / Outputs / Operators / Complexity
+Steps Executed
+LLM / Retrieval / Step Budget Utilization
 ```
+
+所有结果同时输出逐题、数据集×方法、题型分层和跨数据集宏平均视图。显著性分析采用逐题配对 bootstrap 95% 置信区间、双侧检验、Holm 多重比较校正，并报告中位差、胜/平/负、胜率和 Cliff's delta。失败报告基于全部 attempts，而不是只看最终成功快照。
 
 ---
 
@@ -552,6 +580,9 @@ vs. 急切结构化抽取
 
 绑定传播
 vs. 无绑定的独立子查询
+
+类型化算子
+vs. 禁用类型化算子（依赖算子的计划显式记为 unsupported，不允许最终 LLM 代算）
 ```
 
 ---
@@ -572,7 +603,7 @@ vs. 无绑定的独立子查询
 
 运行时重新规划在数据分布变化下仍然有效；
 
-在 QO-Bench 的 join / intersection 类问题上取得明确优势；
+在 DROP 的数值操作题与多跳数据集的连接型问题上取得明确优势；
 
 能够清楚证明性能来自连接式执行，
 而不是更强 Prompt 或更强基础模型。

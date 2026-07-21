@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -128,7 +129,22 @@ def _react_tool() -> dict[str, Any]:
 def merge_metrics(*values: RunMetrics) -> RunMetrics:
     result = RunMetrics()
     additive_lists = {"intermediate_binding_sizes", "slot_selectivity_errors", "provider_request_ids", "plan_validation_errors"}
-    max_fields = {"peak_rss_mb", "index_bytes"}
+    max_fields = {
+        "peak_rss_mb",
+        "index_bytes",
+        "unique_documents_accessed",
+        "unique_passages_accessed",
+        "plan_slot_count",
+        "plan_join_count",
+        "plan_variable_count",
+        "plan_output_count",
+        "plan_operator_count",
+        "plan_complexity",
+        "steps_executed",
+        "llm_budget_utilization",
+        "retrieval_budget_utilization",
+        "step_budget_utilization",
+    }
     nullable = {"planner_regret"}
     data = result.model_dump()
     for value in values:
@@ -146,15 +162,19 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
     return RunMetrics.model_validate(data)
 
 
-def _chat_metrics(response: ChatResult) -> RunMetrics:
-    return RunMetrics(
-        llm_calls=1,
-        prompt_tokens=response.usage.prompt_tokens,
-        completion_tokens=response.usage.completion_tokens,
-        provider_latency_ms=response.latency_ms,
-        latency_ms=response.latency_ms,
-        provider_request_ids=[response.request_id] if response.request_id else [],
-    )
+def _chat_metrics(response: ChatResult, *, phase: str) -> RunMetrics:
+    payload = {
+        "llm_calls": response.logical_calls,
+        "prompt_tokens": response.usage.prompt_tokens,
+        "completion_tokens": response.usage.completion_tokens,
+        "provider_latency_ms": response.latency_ms,
+        "latency_ms": response.latency_ms,
+        "provider_request_ids": [response.request_id] if response.request_id else [],
+        f"{phase}_llm_calls": response.logical_calls,
+        f"{phase}_prompt_tokens": response.usage.prompt_tokens,
+        f"{phase}_completion_tokens": response.usage.completion_tokens,
+    }
+    return RunMetrics.model_validate(payload)
 
 
 def _dedupe(items: list[RetrievalResult]) -> list[RetrievalResult]:
@@ -178,7 +198,9 @@ def _retrieval_result(items: list[RetrievalResult], *, slot_id: str, metrics: Ru
             metrics or RunMetrics(),
             RunMetrics(
                 documents_accessed=len({item.passage.doc_id or item.passage.id for item in ranked}),
+                unique_documents_accessed=len({item.passage.doc_id or item.passage.id for item in ranked}),
                 passages_processed=len(ranked),
+                unique_passages_accessed=len(ranked),
             ),
         ),
         status="ok" if ranked else "empty",
@@ -193,11 +215,48 @@ def _answer_kind(dataset: str) -> str:
     return "short"
 
 
+def _evidence_boolean(result: ExecutionResult) -> str | None:
+    """Prefer an explicitly extracted boolean binding over a conflicting verbalizer."""
+    for row in result.rows:
+        value = row.get("answer", "")
+        match = re.match(r"^\s*(yes|no|true|false)\b", value, flags=re.IGNORECASE)
+        if match:
+            token = match.group(1).casefold()
+            return "True" if token in {"yes", "true"} else "False"
+    return None
+
+
+def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> str | None:
+    if result.status != "ok" or len(plan.outputs) != 1:
+        return None
+    output = plan.outputs[0].lstrip("?")
+    values = {row.get(output, "").strip() for row in result.rows if row.get(output, "").strip()}
+    if len(values) != 1:
+        return None
+    value = next(iter(values))
+    if dataset == "strategyqa":
+        match = re.match(r"^\s*(yes|no|true|false)\b", value, flags=re.IGNORECASE)
+        if not match:
+            return None
+        return "True" if match.group(1).casefold() in {"yes", "true"} else "False"
+    return value
+
+
 def _finalize(client: AgnesClient, dataset: str, question: QuestionRecord, result: ExecutionResult) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
+    started = time.perf_counter()
     answer, response = generate_answer_response(client, question.question, result, answer_kind=_answer_kind(dataset))
-    metrics = merge_metrics(result.metrics, _chat_metrics(response))
+    metrics = merge_metrics(
+        result.metrics,
+        _chat_metrics(response, phase="generation"),
+        RunMetrics(generation_latency_ms=(time.perf_counter() - started) * 1000),
+    )
+    if dataset == "strategyqa":
+        evidence_answer = _evidence_boolean(result)
+        if evidence_answer is not None and evidence_answer != answer:
+            answer = evidence_answer
+            metrics = metrics.model_copy(update={"answer_reconciliations": metrics.answer_reconciliations + 1})
     if result.status == "empty":
         metrics = metrics.model_copy(update={"evidence_only_fallbacks": metrics.evidence_only_fallbacks + 1})
     return result.model_copy(update={"answer": answer, "status": "ok", "metrics": metrics})
@@ -231,7 +290,7 @@ def _run_planrag(dataset: str, question: QuestionRecord, retriever: HybridRetrie
     for query in plan.queries:
         if query.strip():
             items.extend(retriever.search(query))
-    metrics = merge_metrics(_chat_metrics(response), RunMetrics(retrieval_calls=len(plan.queries)))
+    metrics = merge_metrics(_chat_metrics(response, phase="planning"), RunMetrics(retrieval_calls=len(plan.queries)))
     return _finalize(client, dataset, question, _retrieval_result(items, slot_id="planrag", metrics=metrics))
 
 
@@ -248,7 +307,7 @@ def _run_ircot(dataset: str, question: QuestionRecord, retriever: HybridRetrieve
             tool_choice={"type": "function", "function": {"name": "emit_search_step"}},
             temperature=0.0,
         )
-        metrics = merge_metrics(metrics, _chat_metrics(response))
+        metrics = merge_metrics(metrics, _chat_metrics(response, phase="reasoning"))
         decision = SearchStep.model_validate(client.require_tool(response, "emit_search_step"))
         if decision.stop and items:
             metrics = merge_metrics(metrics, RunMetrics(early_stops=1))
@@ -274,7 +333,7 @@ def _run_react(dataset: str, question: QuestionRecord, retriever: HybridRetrieve
             tool_choice={"type": "function", "function": {"name": "emit_action"}},
             temperature=0.0,
         )
-        metrics = merge_metrics(metrics, _chat_metrics(response))
+        metrics = merge_metrics(metrics, _chat_metrics(response, phase="reasoning"))
         decision = ReactStep.model_validate(client.require_tool(response, "emit_action"))
         if decision.action == "finish" and items:
             metrics = merge_metrics(metrics, RunMetrics(early_stops=1))
@@ -345,7 +404,9 @@ def _run_graphrag(dataset: str, question: QuestionRecord, client: AgnesClient) -
     result = result.model_copy(update={
         "metrics": result.metrics.model_copy(update={
             "documents_accessed": len({passage.doc_id or passage.id for passage in question.passages}),
+            "unique_documents_accessed": len({passage.doc_id or passage.id for passage in question.passages}),
             "passages_processed": len(question.passages),
+            "unique_passages_accessed": len(question.passages),
         })
     })
     return _finalize(client, dataset, question, result)
@@ -362,7 +423,19 @@ def _run_slotrag(
     max_steps: int,
     max_retrieval_calls: int,
 ) -> ExecutionResult:
+    compile_started = time.perf_counter()
     plan, compiler_metrics = SlotCompiler(client).compile(question.question, answer_kind=_answer_kind(dataset))
+    plan_variables = set().union(*(slot.variables for slot in plan.slots))
+    plan_metrics = RunMetrics(
+        compilation_latency_ms=(time.perf_counter() - compile_started) * 1000,
+        plan_slot_count=len(plan.slots),
+        plan_join_count=len(plan.joins),
+        plan_variable_count=len(plan_variables),
+        plan_output_count=len(plan.outputs),
+        plan_operator_count=len(plan.operators),
+        plan_complexity=len(plan.slots) + len(plan.joins) + len(plan_variables) + len(plan.outputs) + len(plan.operators),
+    )
+    compiler_metrics = merge_metrics(compiler_metrics, plan_metrics)
     if len(plan.slots) > max_steps:
         return ExecutionResult(
             status="budget_exceeded",
@@ -370,8 +443,9 @@ def _run_slotrag(
             plan=plan,
             metrics=compiler_metrics,
         )
+    materializer = SlotMaterializer(client, retriever, max_passages=config.execution.materialization_top_k)
     executor = AdaptiveExecutor(
-        SlotMaterializer(client, retriever, max_passages=config.execution.materialization_top_k),
+        materializer,
         default_slot_cost=config.execution.default_slot_cost,
         unbound_argument_cost=config.execution.unbound_argument_cost,
         max_replans=min(config.execution.max_replans, max_steps),
@@ -380,13 +454,27 @@ def _run_slotrag(
         random_seed=seed,
         options=spec.options,
     )
+    execution_started = time.perf_counter()
     result = executor.execute(plan, strategy=spec.strategy)
-    result = result.model_copy(update={"plan": plan, "metrics": merge_metrics(result.metrics, compiler_metrics)})
-    if spec.options.typed_operators and plan.operators and result.status == "ok" and len(result.rows) == 1 and len(plan.outputs) == 1:
-        output = plan.outputs[0].lstrip("?")
-        value = result.rows[0].get(output, "").strip()
-        if value:
-            return result.model_copy(update={"answer": value})
+    execution_metrics = RunMetrics(
+        execution_latency_ms=(time.perf_counter() - execution_started) * 1000,
+        steps_executed=len(result.order),
+        unique_documents_accessed=len(materializer.accessed_document_ids),
+        unique_passages_accessed=len(materializer.accessed_passage_ids),
+    )
+    result = result.model_copy(update={"plan": plan, "metrics": merge_metrics(result.metrics, compiler_metrics, execution_metrics)})
+    if not spec.options.typed_operators and plan.operators and result.status in {"ok", "empty"}:
+        return result.model_copy(update={
+            "answer": None,
+            "status": "unsupported_operation",
+            "error": "typed operators disabled for an operator-dependent plan",
+        })
+    deterministic_answer = _deterministic_output(dataset, plan, result)
+    if deterministic_answer is not None:
+        metrics = result.metrics.model_copy(update={
+            "deterministic_answers": result.metrics.deterministic_answers + 1,
+        })
+        return result.model_copy(update={"answer": deterministic_answer, "metrics": metrics})
     return _finalize(client, dataset, question, result)
 
 

@@ -46,6 +46,7 @@ def generate_answer_response(
         responses.append(response)
         if response.content and response.content.strip():
             combined = response.model_copy(update={
+                "logical_calls": len(responses),
                 "usage": Usage(
                     prompt_tokens=sum(item.usage.prompt_tokens for item in responses),
                     completion_tokens=sum(item.usage.completion_tokens for item in responses),

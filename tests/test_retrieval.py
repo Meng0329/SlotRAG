@@ -9,8 +9,12 @@ class FakeEmbeddingConfig:
 class FakeEmbedding:
     config = FakeEmbeddingConfig()
 
+    def __init__(self):
+        self.calls = []
+
     def embed(self, texts):
         values = [texts] if isinstance(texts, str) else texts
+        self.calls.append(list(values))
         return [[1.0, 0.0] if "alpha" in value else [0.0, 1.0] for value in values]
 
 
@@ -20,3 +24,15 @@ def test_hybrid_retrieval_is_deterministic_without_reranker():
     first = [item.passage.id for item in retriever.search("alpha")]
     second = [item.passage.id for item in retriever.search("alpha")]
     assert first == second == ["p1", "p2"]
+
+
+def test_hybrid_retriever_builds_passage_index_before_query():
+    embedding = FakeEmbedding()
+    passages = [Passage(id="p1", text="alpha fact"), Passage(id="p2", text="beta fact")]
+    retriever = HybridRetriever(passages, embedding, reranker_client=None, rerank_enabled=False)
+
+    retriever.build_index()
+    assert embedding.calls == [["alpha fact", "beta fact"]]
+
+    retriever.search("alpha")
+    assert embedding.calls == [["alpha fact", "beta fact"], ["alpha"]]

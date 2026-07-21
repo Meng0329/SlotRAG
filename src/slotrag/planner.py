@@ -5,7 +5,9 @@ import itertools
 import math
 import random
 import re
+import time
 from collections import defaultdict
+from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -151,14 +153,18 @@ class SlotCompiler:
         self.client = client
 
     @staticmethod
-    def _record_response(metrics: RunMetrics, response: ChatResult) -> RunMetrics:
-        return metrics.model_copy(update={
-            "llm_calls": metrics.llm_calls + 1,
+    def _record_response(metrics: RunMetrics, response: ChatResult, *, phase: str) -> RunMetrics:
+        update = {
+            "llm_calls": metrics.llm_calls + response.logical_calls,
             "prompt_tokens": metrics.prompt_tokens + response.usage.prompt_tokens,
             "completion_tokens": metrics.completion_tokens + response.usage.completion_tokens,
             "latency_ms": metrics.latency_ms + response.latency_ms,
             "provider_request_ids": metrics.provider_request_ids + ([response.request_id] if response.request_id else []),
-        })
+            f"{phase}_llm_calls": getattr(metrics, f"{phase}_llm_calls") + response.logical_calls,
+            f"{phase}_prompt_tokens": getattr(metrics, f"{phase}_prompt_tokens") + response.usage.prompt_tokens,
+            f"{phase}_completion_tokens": getattr(metrics, f"{phase}_completion_tokens") + response.usage.completion_tokens,
+        }
+        return metrics.model_copy(update=update)
 
     @staticmethod
     def _validate_grounding(plan: SlotPlan, question: str) -> None:
@@ -225,6 +231,81 @@ class SlotCompiler:
             return SlotPlan.model_validate(payload)
         return plan
 
+    @staticmethod
+    def _repair_join_keys(payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Repair only joins whose shared variable is unambiguous from slot arguments."""
+        slots = payload.get("slots")
+        joins = payload.get("joins")
+        if not isinstance(slots, list) or not isinstance(joins, list):
+            return None
+        variables: dict[str, set[str]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict) or not isinstance(slot.get("id"), str) or not isinstance(slot.get("arguments"), list):
+                return None
+            variables[slot["id"]] = {
+                argument[1:]
+                for argument in slot["arguments"]
+                if isinstance(argument, str) and argument.startswith("?")
+            }
+
+        candidate = deepcopy(payload)
+        repaired_joins: list[dict[str, str]] = []
+        changed = False
+        for raw_join in joins:
+            try:
+                if isinstance(raw_join, (list, tuple)) and len(raw_join) == 2:
+                    left_slot, left_field = str(raw_join[0]).split(".", 1)
+                    right_slot, right_field = str(raw_join[1]).split(".", 1)
+                elif isinstance(raw_join, dict) and "left" in raw_join and "right" in raw_join:
+                    left_slot, left_field = str(raw_join["left"]).split(".", 1)
+                    right_slot, right_field = str(raw_join["right"]).split(".", 1)
+                elif isinstance(raw_join, dict):
+                    left_slot = str(raw_join.get("left_slot", ""))
+                    right_slot = str(raw_join.get("right_slot", ""))
+                    left_field = str(raw_join.get("left_field", "")).lstrip("?")
+                    right_field = str(raw_join.get("right_field", "")).lstrip("?")
+                else:
+                    return None
+            except ValueError:
+                return None
+            if left_slot not in variables or right_slot not in variables or left_slot == right_slot:
+                return None
+            common = variables[left_slot] & variables[right_slot]
+            if left_field == right_field and left_field in common:
+                field = left_field
+            elif len(common) == 1:
+                field = next(iter(common))
+                changed = True
+            else:
+                return None
+            repaired_joins.append({
+                "left_slot": left_slot,
+                "left_field": field,
+                "right_slot": right_slot,
+                "right_field": field,
+            })
+
+        joined_pairs = {frozenset((join["left_slot"], join["right_slot"])) for join in repaired_joins}
+        slot_ids = list(variables)
+        for left_index, left_slot in enumerate(slot_ids):
+            for right_slot in slot_ids[left_index + 1:]:
+                pair = frozenset((left_slot, right_slot))
+                common = variables[left_slot] & variables[right_slot]
+                if pair not in joined_pairs and len(common) == 1:
+                    field = next(iter(common))
+                    repaired_joins.append({
+                        "left_slot": left_slot,
+                        "left_field": field,
+                        "right_slot": right_slot,
+                        "right_field": field,
+                    })
+                    joined_pairs.add(pair)
+                    changed = True
+        if not changed:
+            return None
+        candidate["joins"] = repaired_joins
+        return candidate
+
     def compile(self, question: str, *, answer_kind: str = "short") -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
@@ -282,7 +363,7 @@ class SlotCompiler:
                 tool_choice={"type": "function", "function": {"name": "emit_slot_plan"}},
                 temperature=0.0,
             )
-            metrics = self._record_response(metrics, result)
+            metrics = self._record_response(metrics, result, phase="compilation")
             try:
                 invalid_args = self.client.require_tool(result, "emit_slot_plan")
                 plan = SlotPlan.model_validate(invalid_args)
@@ -292,10 +373,25 @@ class SlotCompiler:
                 last_error = str(exc)
                 metrics = metrics.model_copy(update={
                     "structured_output_failures": metrics.structured_output_failures + 1,
-                    "structured_output_repairs": metrics.structured_output_repairs + (1 if attempt < max_attempts - 1 else 0),
                     "plan_validation_errors": metrics.plan_validation_errors + [last_error[:2000]],
                 })
                 if attempt < max_attempts - 1:
+                    repaired_payload = self._repair_join_keys(invalid_args)
+                    if repaired_payload is not None:
+                        try:
+                            repaired_plan = SlotPlan.model_validate(repaired_payload)
+                            self._validate_grounding(repaired_plan, question)
+                        except (ValidationError, ValueError):
+                            pass
+                        else:
+                            metrics = metrics.model_copy(update={
+                                "structured_output_repairs": metrics.structured_output_repairs + 1,
+                                "local_plan_repairs": metrics.local_plan_repairs + 1,
+                            })
+                            return self._eliminate_anchor_slots(repaired_plan), metrics
+                    metrics = metrics.model_copy(update={
+                        "structured_output_repairs": metrics.structured_output_repairs + 1,
+                    })
                     messages.append({
                         "role": "user",
                         "content": (
@@ -324,10 +420,14 @@ class SlotMaterializer:
         self.retriever = retriever
         self.max_passages = max_passages
         self.last_evidence: list[EvidenceRecord] = []
+        self.accessed_passage_ids: set[str] = set()
+        self.accessed_document_ids: set[str] = set()
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
         passages = self.retriever.search(query)[:self.max_passages]
+        self.accessed_passage_ids.update(result.passage.id for result in passages)
+        self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in passages)
         self.last_evidence = [
             EvidenceRecord(source_id=result.passage.id, source_span=result.passage.text, slot_id=slot.id, bindings={})
             for result in passages
@@ -377,7 +477,7 @@ class SlotMaterializer:
                     tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
                     temperature=0.0,
                 )
-                metrics = SlotCompiler._record_response(metrics, response)
+                metrics = SlotCompiler._record_response(metrics, response, phase="extraction")
                 args = self.client.require_tool(response, "emit_evidence_rows")
                 extracted = ExtractionRow.model_validate(args)
                 expected = slot.variables
@@ -434,6 +534,9 @@ class SlotMaterializer:
                 "llm_calls": metrics.llm_calls + current_metrics.llm_calls,
                 "prompt_tokens": metrics.prompt_tokens + current_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + current_metrics.completion_tokens,
+                "extraction_llm_calls": metrics.extraction_llm_calls + current_metrics.extraction_llm_calls,
+                "extraction_prompt_tokens": metrics.extraction_prompt_tokens + current_metrics.extraction_prompt_tokens,
+                "extraction_completion_tokens": metrics.extraction_completion_tokens + current_metrics.extraction_completion_tokens,
                 "latency_ms": metrics.latency_ms + current_metrics.latency_ms,
                 "structured_output_failures": metrics.structured_output_failures + current_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + current_metrics.structured_output_repairs,
@@ -669,10 +772,12 @@ class AdaptiveExecutor:
                 })
                 binding_contexts = binding_contexts[:context_limit]
             materialize_many = getattr(self.materializer, "materialize_many", None)
+            materialization_started = time.perf_counter()
             if materialize_many is not None:
                 rows, slot_metrics = materialize_many(slot, binding_contexts)
             else:
                 rows, slot_metrics = self.materializer.materialize(slot, binding_contexts[0])
+            materialization_ms = (time.perf_counter() - materialization_started) * 1000
             retrieved_evidence.extend(getattr(self.materializer, "last_evidence", []))
             materialized[slot.id] = rows
             cardinalities[slot.id] = len(rows)
@@ -684,7 +789,23 @@ class AdaptiveExecutor:
                 "retrieval_calls": metrics.retrieval_calls + slot_metrics.retrieval_calls,
                 "prompt_tokens": metrics.prompt_tokens + slot_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + slot_metrics.completion_tokens,
+                "compilation_llm_calls": metrics.compilation_llm_calls + slot_metrics.compilation_llm_calls,
+                "compilation_prompt_tokens": metrics.compilation_prompt_tokens + slot_metrics.compilation_prompt_tokens,
+                "compilation_completion_tokens": metrics.compilation_completion_tokens + slot_metrics.compilation_completion_tokens,
+                "extraction_llm_calls": metrics.extraction_llm_calls + slot_metrics.extraction_llm_calls,
+                "extraction_prompt_tokens": metrics.extraction_prompt_tokens + slot_metrics.extraction_prompt_tokens,
+                "extraction_completion_tokens": metrics.extraction_completion_tokens + slot_metrics.extraction_completion_tokens,
+                "planning_llm_calls": metrics.planning_llm_calls + slot_metrics.planning_llm_calls,
+                "planning_prompt_tokens": metrics.planning_prompt_tokens + slot_metrics.planning_prompt_tokens,
+                "planning_completion_tokens": metrics.planning_completion_tokens + slot_metrics.planning_completion_tokens,
+                "reasoning_llm_calls": metrics.reasoning_llm_calls + slot_metrics.reasoning_llm_calls,
+                "reasoning_prompt_tokens": metrics.reasoning_prompt_tokens + slot_metrics.reasoning_prompt_tokens,
+                "reasoning_completion_tokens": metrics.reasoning_completion_tokens + slot_metrics.reasoning_completion_tokens,
+                "generation_llm_calls": metrics.generation_llm_calls + slot_metrics.generation_llm_calls,
+                "generation_prompt_tokens": metrics.generation_prompt_tokens + slot_metrics.generation_prompt_tokens,
+                "generation_completion_tokens": metrics.generation_completion_tokens + slot_metrics.generation_completion_tokens,
                 "latency_ms": metrics.latency_ms + slot_metrics.latency_ms,
+                "materialization_latency_ms": metrics.materialization_latency_ms + materialization_ms,
                 "structured_output_failures": metrics.structured_output_failures + slot_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + slot_metrics.structured_output_repairs,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
