@@ -8,7 +8,9 @@ import re
 import time
 from collections import defaultdict
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
+import unicodedata
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -83,7 +85,10 @@ def slot_plan_tool() -> dict[str, Any]:
                                 "field": {"type": ["string", "null"]},
                                 "output": {"type": ["string", "null"]},
                                 "comparator": {"type": ["string", "null"]},
-                                "operation": {"type": ["string", "null"], "enum": ["add", "subtract", "multiply", "divide", None]},
+                                "operation": {
+                                    "type": ["string", "null"],
+                                    "enum": ["add", "subtract", "multiply", "divide", "date_diff_months", None],
+                                },
                                 "value": {},
                                 "descending": {"type": "boolean"},
                                 "limit": {"type": ["integer", "null"]},
@@ -306,6 +311,67 @@ class SlotCompiler:
         candidate["joins"] = repaired_joins
         return candidate
 
+    @staticmethod
+    def _rewrite_functional_predicates(plan: SlotPlan) -> tuple[SlotPlan, int]:
+        """Rewrite only functional slots whose inputs already come from other slots."""
+        payload = plan.model_dump(mode="python")
+        rewritten = 0
+        aliases = {
+            "datediffinmonths",
+            "monthdifference",
+            "monthsdifference",
+            "monthsbetween",
+        }
+        for slot in list(payload["slots"]):
+            predicate = re.sub(r"[^a-z0-9]", "", slot["predicate"].casefold())
+            arguments = slot["arguments"]
+            if predicate not in aliases or slot.get("constraints") or len(arguments) != 3:
+                continue
+            if any(not isinstance(argument, str) or not argument.startswith("?") for argument in arguments):
+                continue
+            start_field, end_field, output = (argument[1:] for argument in arguments)
+            other_slots = [item for item in payload["slots"] if item["id"] != slot["id"]]
+            other_variables = {
+                argument[1:]
+                for item in other_slots
+                for argument in item["arguments"]
+                if isinstance(argument, str) and argument.startswith("?")
+            }
+            if not {start_field, end_field}.issubset(other_variables) or output in other_variables:
+                continue
+            operator_ids = {operator["id"] for operator in payload.get("operators", [])}
+            operator_id = f"normalize_{slot['id']}"
+            suffix = 2
+            while operator_id in operator_ids:
+                operator_id = f"normalize_{slot['id']}_{suffix}"
+                suffix += 1
+            candidate = deepcopy(payload)
+            candidate["slots"] = [item for item in candidate["slots"] if item["id"] != slot["id"]]
+            candidate["joins"] = [
+                join
+                for join in candidate["joins"]
+                if join["left_slot"] != slot["id"] and join["right_slot"] != slot["id"]
+            ]
+            candidate.setdefault("operators", []).append({
+                "id": operator_id,
+                "kind": "arithmetic",
+                "fields": [start_field, end_field],
+                "output": output,
+                "operation": "date_diff_months",
+                "field": None,
+                "comparator": None,
+                "value": None,
+                "descending": False,
+                "limit": None,
+            })
+            try:
+                normalized = SlotPlan.model_validate(candidate)
+            except ValidationError:
+                continue
+            payload = normalized.model_dump(mode="python")
+            rewritten += 1
+        return SlotPlan.model_validate(payload), rewritten
+
     def compile(self, question: str, *, answer_kind: str = "short") -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
@@ -368,7 +434,13 @@ class SlotCompiler:
                 invalid_args = self.client.require_tool(result, "emit_slot_plan")
                 plan = SlotPlan.model_validate(invalid_args)
                 self._validate_grounding(plan, question)
-                return self._eliminate_anchor_slots(plan), metrics
+                plan, operator_rewrites = self._rewrite_functional_predicates(plan)
+                plan = self._eliminate_anchor_slots(plan)
+                if operator_rewrites:
+                    metrics = metrics.model_copy(update={
+                        "operator_rewrites": metrics.operator_rewrites + operator_rewrites,
+                    })
+                return plan, metrics
             except (SchemaError, ValidationError, ValueError) as exc:
                 last_error = str(exc)
                 metrics = metrics.model_copy(update={
@@ -381,14 +453,17 @@ class SlotCompiler:
                         try:
                             repaired_plan = SlotPlan.model_validate(repaired_payload)
                             self._validate_grounding(repaired_plan, question)
+                            repaired_plan, operator_rewrites = self._rewrite_functional_predicates(repaired_plan)
+                            repaired_plan = self._eliminate_anchor_slots(repaired_plan)
                         except (ValidationError, ValueError):
                             pass
                         else:
                             metrics = metrics.model_copy(update={
                                 "structured_output_repairs": metrics.structured_output_repairs + 1,
                                 "local_plan_repairs": metrics.local_plan_repairs + 1,
+                                "operator_rewrites": metrics.operator_rewrites + operator_rewrites,
                             })
-                            return self._eliminate_anchor_slots(repaired_plan), metrics
+                            return repaired_plan, metrics
                     metrics = metrics.model_copy(update={
                         "structured_output_repairs": metrics.structured_output_repairs + 1,
                     })
@@ -422,6 +497,17 @@ class SlotMaterializer:
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
+
+    @staticmethod
+    def _normalized_text(value: object) -> str:
+        ascii_value = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode("ascii")
+        return " ".join(re.findall(r"[a-z0-9]+", ascii_value.casefold()))
+
+    @classmethod
+    def _binding_is_grounded(cls, value: str, source_id: str, source_span: str, doc_id: str | None) -> bool:
+        needle = cls._normalized_text(value)
+        haystack = cls._normalized_text(" ".join(part for part in (source_id, doc_id or "", source_span) if part))
+        return bool(needle and f" {needle} " in f" {haystack} ")
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
@@ -483,6 +569,7 @@ class SlotMaterializer:
                 expected = slot.variables
                 if not extracted.rows and attempt == 0:
                     raise SchemaError(f"empty extraction for {slot.id}; review the retrieved passages once")
+                rejection_reasons: list[str] = []
                 for row in extracted.rows:
                     source_id = row.get("source_id", "")
                     normalized = {
@@ -490,11 +577,34 @@ class SlotMaterializer:
                         for key, value in row.items()
                         if key.lstrip("?") in expected
                     }
+                    source = by_source.get(source_id)
+                    propagated = {key: value for key, value in bindings.items() if key in expected}
+                    invalid_bindings = []
+                    for key, value in propagated.items():
+                        extracted_value = normalized.get(key)
+                        if extracted_value is None or self._normalized_text(extracted_value) != self._normalized_text(value):
+                            invalid_bindings.append(f"{key} does not match propagated value")
+                        elif source is None or not self._binding_is_grounded(
+                            value,
+                            source_id,
+                            source.passage.text,
+                            source.passage.doc_id,
+                        ):
+                            invalid_bindings.append(f"{key} is not grounded in source {source_id}")
+                    if invalid_bindings:
+                        rejection_reasons.extend(invalid_bindings)
+                        metrics = metrics.model_copy(update={
+                            "grounding_rejections": metrics.grounding_rejections + 1,
+                        })
+                        continue
                     normalized.update({key: value for key, value in effective_bindings.items() if key in expected})
                     if source_id in by_source and set(normalized) == expected and all(normalized.values()):
                         extracted_rows.append((normalized, source_id))
                 if extracted.rows and not extracted_rows:
-                    raise SchemaError(f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs")
+                    detail = f"; {'; '.join(rejection_reasons)}" if rejection_reasons else ""
+                    raise SchemaError(
+                        f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs{detail}"
+                    )
                 break
             except (SchemaError, ValidationError, ValueError) as exc:
                 metrics = metrics.model_copy(update={
@@ -540,6 +650,7 @@ class SlotMaterializer:
                 "latency_ms": metrics.latency_ms + current_metrics.latency_ms,
                 "structured_output_failures": metrics.structured_output_failures + current_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + current_metrics.structured_output_repairs,
+                "grounding_rejections": metrics.grounding_rejections + current_metrics.grounding_rejections,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
             })
             for row in rows:
@@ -573,6 +684,24 @@ def _as_number(value: object) -> float | None:
         return float(str(value).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def _as_date(value: object) -> datetime | None:
+    text = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", str(value).strip(), flags=re.IGNORECASE)
+    text = text.replace(",", "")
+    for date_format in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d %B %Y",
+        "%d %b %Y",
+        "%B %d %Y",
+        "%b %d %Y",
+    ):
+        try:
+            return datetime.strptime(text, date_format)
+        except ValueError:
+            continue
+    return None
 
 
 def _compare(left: object, right: object, comparator: str) -> bool:
@@ -637,6 +766,15 @@ def apply_operators(rows: list[dict[str, str]], operators: list[RelationalOperat
             result = [{operator.output or "answer": str(bool(result))}]
         elif operator.kind == "arithmetic":
             fields = operator.fields
+            if operator.operation == "date_diff_months":
+                dates = [_as_date(result[0].get(field)) for field in fields] if result else []
+                if len(dates) != 2 or any(value is None for value in dates):
+                    result = []
+                    continue
+                start, end = dates
+                assert start is not None and end is not None
+                result = [{operator.output or "result": str((end.year - start.year) * 12 + end.month - start.month)}]
+                continue
             values = [_as_number(result[0].get(field)) for field in fields] if result else []
             if len(values) < 2 or any(value is None for value in values):
                 result = []
@@ -808,6 +946,7 @@ class AdaptiveExecutor:
                 "materialization_latency_ms": metrics.materialization_latency_ms + materialization_ms,
                 "structured_output_failures": metrics.structured_output_failures + slot_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + slot_metrics.structured_output_repairs,
+                "grounding_rejections": metrics.grounding_rejections + slot_metrics.grounding_rejections,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

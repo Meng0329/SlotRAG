@@ -553,6 +553,98 @@ LLM / Retrieval / Step Budget Utilization
 
 所有结果同时输出逐题、数据集×方法、题型分层和跨数据集宏平均视图。显著性分析采用逐题配对 bootstrap 95% 置信区间、双侧检验、Holm 多重比较校正，并报告中位差、胜/平/负、胜率和 Cliff's delta。失败报告基于全部 attempts，而不是只看最终成功快照。
 
+## 持续实验与架构演进账本
+
+本节是方法、实现和实验的唯一同步账本。后续每次架构或配置变更都必须先写明假设和预期指标，再使用新的源码指纹和运行目录执行；不覆盖旧 attempt，不删除负结果，不在 Validation 或 Final 上调参。详细逐题表、分层表、失败表和 bootstrap 表以对应 `runs/<run-id>/summaries/<stage>/` 为准，本节保留可审计的关键结论和决策。
+
+可比性规则：
+
+```text
+Diagnostic n=10 只用于发现故障、成本瓶颈和候选调优方向，不作显著性或论文主结论。
+schema v4 之前的运行不用于阶段 token、唯一访问量或索引/在线延迟的正式比较。
+单次 temperature=0 运行仍可能存在提供方非确定性；冻结配置前必须补运行间稳定性试验。
+证据无金标时严格记为 N/A，失败、空结果和 unsupported 均进入分母。
+```
+
+### 已完成诊断的架构与测量版本（2026-07-21）
+
+`schema v4` 对应源码指纹 `99469d81eb4984cb113a86b6c0abeef78a5cd084518b9b9eed9fcd9ef6f73308`，当前使用默认 `materialization_top_k=5`。该版本包含以下方法和实验基础设施变更：
+
+1. Slot Compiler 先进行结构化编译；当且仅当共享变量唯一明确时，允许本地修复缺失或错误的 join key，避免可确定修复的额外 LLM 调用。
+2. 自适应执行器记录编译、抽取、规划、推理和生成各阶段调用/token/延迟，并分开“累计候选访问量”与“唯一文档/段落访问量”。
+3. 语料向量构建放到在线问题计时之外，单独报告索引延迟、embedding 调用和缓存命中；查询向量仍计入在线成本。
+4. 单输出列且只有一个非空唯一值时允许确定性返回，以省略生成调用。该优化仍在诊断中：结构化值和错误抽取可能导致直接输出质量下降，冻结前需加入标量类型约束并做配对重复实验。
+5. `slotrag-no-operators` 遇到依赖类型化算子的计划时显式返回 `unsupported_operation`，不允许最终 LLM 代算。
+6. 每次执行写入不可变 attempt，统计同时保留逐题、分层、宏平均、P50/P95/P99、失败分类、种子方差和配对 bootstrap。
+
+### 实验记录
+
+| 运行 | 数据/规模 | 关键设置 | SlotRAG 结果 | 对照结果 | 决策 |
+| --- | --- | --- | --- | --- | --- |
+| `vldb2027-diagnostic-v1` | HotpotQA train，10 题/方法 | schema v3，top-k=5，指纹 `72733e...b9ce` | F1 0.714，R@5 0.900，NDCG@10 0.892，9.2 候选文档，4.5 LLM calls，8,886 tokens，72.81 s | Hybrid F1 0.642，R@5 0.900，NDCG@10 0.905，9.2 文档，1.1 calls，2,276 tokens，15.11 s | 仅作历史诊断；schema v3 缺少可信的阶段和唯一访问指标。 |
+| `vldb2027-tune-topk3-v1` | HotpotQA train，10 题 | schema v4 过渡版，top-k=3，指纹 `4541f8...cce3` | F1 0.542，R@5 0.800，NDCG@10 0.823，4.7 候选/3.6 唯一文档，3.8 calls，7,419 tokens，65.23 s | 未同轮重跑 Hybrid | 暂不采用 top-k=3；虽降低成本，但单次运行显示证据覆盖下降。该轮抽取阶段埋点有缺陷，不用于阶段指标比较。 |
+| `vldb2027-diagnostic-v2` | HotpotQA train，10 题/方法 | schema v4，top-k=5，指纹 `99469d...3088` | F1 0.450，R@5 0.850，NDCG@10 0.823，9.2 候选/6.3 唯一文档，4.8 calls，9,226 tokens，100.29 s，P95 144.60 s | Hybrid F1 0.592，R@5 0.900，NDCG@10 0.905，9.2 文档，1.1 calls，2,372 tokens，22.90 s，P95 37.79 s | 20/20 成功，阶段 token 覆盖 100%。当前质量、调用和延迟均未达门槛，不形成正面结论。 |
+| `vldb2027-diagnostic-v2` | 2WikiMultiHopQA train，10 题/方法 | 与上行完全相同 | F1 0.644，R@5 0.850，NDCG@10 0.893，7.7 候选/5.8 唯一文档，5.1 calls，10,474 tokens，101.79 s，P95 153.93 s | Hybrid F1 0.652，R@5 0.925，NDCG@10 0.938，9.8 文档，1.1 calls，1,866 tokens，15.74 s，P95 21.30 s | 最终 20/20 成功；共 21 attempts，1 次 `provider_connect` 失败后重试恢复。文档访问降低 40.8%，但质量略低且语义调用和延迟显著更高。 |
+| `vldb2027-diagnostic-v2` | MuSiQue train，10 题/方法 | 与上行完全相同；证据质量 N/A | F1 0.750，12.2 累计候选/8.7 唯一文档，5.6 calls，9,225 tokens，84.79 s，P95 127.15 s | Hybrid F1 0.756，9.8 累计/唯一文档，1.2 calls，3,452 tokens，19.19 s，P95 39.48 s | 20/20 成功。SlotRAG 的 2-hop F1 为 0.917（Hybrid 0.759），3-hop 为 0.333（Hybrid 0.667），4-hop 双方均为 1.000 但仅 1 题。暂无跨跳数可扩展优势，且累计访问和语义成本更高。 |
+| `vldb2027-diagnostic-v2` | StrategyQA train，10 题/方法 | 与上行完全相同；主指标 Accuracy，证据质量 N/A | Accuracy 1.000，2.7 累计/唯一文档，2.1 calls，3,281 tokens，55.09 s，P95 84.70 s | Hybrid Accuracy 1.000，2.7 文档，1.2 calls，1,096 tokens，23.88 s，P95 54.56 s | 最终 20/20 成功；共 21 attempts，1 次 `provider_connect` 失败后重试恢复。true/false 各 5 题，双方均全对；布尔路径可用，但 SlotRAG 无质量或访问量优势，成本更高。 |
+| `vldb2027-diagnostic-v2` | DROP train，10 题/方法 | 与上行完全相同；主指标 DROP EM/F1，证据质量 N/A | EM 0.600，F1 0.734，1.5 累计/1.0 唯一文档，4.1 calls，7,387 tokens，74.23 s，P95 147.87 s | Hybrid EM 0.700，F1 0.767，1.0 文档，1.0 call，1,156 tokens，16.85 s，P95 26.91 s | 20/20 成功。counting 的双方 F1 均为 0.500；SlotRAG 仅 2/4 题实际执行类型化算子，这 2 题均正确，未执行算子的 2 题均错误。算子覆盖是优先故障。 |
+
+`vldb2027-diagnostic-v2` 完整性：5 个数据集、2 个方法、每个数据集 10 题，共 100/100 个最终记录；总计 102 attempts，其中 2 次 Agnes `provider_connect` 失败均在保留原 attempt 后重试成功。全部最终记录为 schema v4，阶段 token 覆盖率 100%；HotpotQA 和 2WikiMultiHopQA 共 40 条记录有证据金标，其余 60 条的证据质量为 N/A。
+
+跨数据集等权宏平均（仅作 Diagnostic 方向判断）：
+
+| 指标 | SlotRAG | Hybrid | 诊断 |
+| --- | ---: | ---: | --- |
+| 数据集主指标宏平均 | 0.716 | 0.753 | SlotRAG 低 3.8 个百分点。 |
+| Evidence Recall@5（仅 2 个有金标数据集） | 0.850 | 0.913 | SlotRAG 证据覆盖较低。 |
+| Evidence NDCG@10（仅 2 个有金标数据集） | 0.858 | 0.922 | SlotRAG 排序质量较低。 |
+| 唯一文档访问数 | 4.90 | 6.50 | SlotRAG 下降 24.6%，但未达 30% 门槛。 |
+| 累计候选文档访问数 | 6.66 | 6.50 | SlotRAG 的重复物化抵消了唯一访问节省。 |
+| LLM calls | 4.34 | 1.12 | SlotRAG 约为 3.9 倍。 |
+| Total tokens | 7,919 | 1,988 | SlotRAG 约为 4.0 倍。 |
+| 在线延迟 | 83.24 s | 19.71 s | SlotRAG 约为 4.2 倍。 |
+
+逐数据集配对 bootstrap 的样本量均仅为 10；所有 95% 置信区间都包含 0，Holm 校正后 `p=1.0`。因此这些数字只能用于诊断，不能支持任何显著优势声明。当前版本同时未达到质量、唯一访问降幅和语义成本门槛；在 F1/F2 修复通过同样本配对验证前，不进入 Tune50。
+
+HotpotQA 两次相同样本运行间，SlotRAG F1 从 0.714 变为 0.450，Hybrid 从 0.642 变为 0.592。该差异不能归因于样本变化，说明在 `temperature=0` 下仍存在运行间波动，而 SlotRAG 的多阶段链路放大了该波动。因此，当前优先级不是继续扩大样本，而是：
+
+1. 完成五数据集 Diagnostic，定位错误是否集中在编译、检索、抽取、连接或答案规范化。
+2. 对确定性返回增加标量类型安全检查，并与强制生成进行配对比较。
+3. 在相同样本上运行多次重复，报告运行间均值、方差和答案一致率；若提供方支持可复现 seed，将 seed 写入 manifest 和逐题记录。
+4. 优先减少编译/抽取调用与结构化修复，再评估自适应 top-k；不使用只降低证据覆盖的成本优化。
+5. 只有在 Tune50 和独立 Validation200 上同时满足质量与成本门槛，才冻结架构并进入 Final500。
+
+### 已定位的架构故障与待验证修改
+
+| 编号 | 证据 | 归因 | 拟议修改 | 验收方式 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| F1 | HotpotQA `5a7b9b8a554299294a54aa1c`：金答案 `Holy Avenger`，Evidence Recall@5=1.0，但执行顺序为 `S2 -> S1`，最终确定性输出 `Senninha`。`S1` 的来源段落是 Erica Awano，抽取绑定却是段落中不存在的 `Rogério Martins`/`Ridaut Dias Jr.`。 | 绑定传播将上游候选注入抽取上下文后，LLM 回显了绑定而非从证据抽取；错误 join 再被确定性返回放大。这是抽取/连接正确性故障，不是检索未命中。 | 已增加 provenance-grounded binding validator：传播值必须与抽取行一致，且规范化形式必须出现在 `source_span` 或文档标题；否则拒绝该行并记录 `grounding_rejections`。合法的文档标题锚定可通过校验。 | 单元测试已覆盖“回显绑定但来源无该实体”和“文档标题合法锚定”。待在同一 10 题 HotpotQA 样本上对 v2/v3 配对重跑；要求该题不再产生错误 join，且总体 F1/失败率不回退。 | 已实现，待在线复验 |
+| F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | 已建立安全的功能谓词规范化入口：当 `DateDiffInMonths` 的两个输入已由其他 slots 生产且输出未被其他 slot 消费时，删除伪 slot 并改写为 `date_diff_months` 类型化算子；不满足安全条件时不改写。 | 单元测试已验证伪 slot 被删除、`operator_rewrites=1`、月份差输出 3。待在 DROP Diagnostic 原样本上配对重跑，并确认 `slotrag-no-operators` 对该类计划返回 `unsupported_operation`。 | 已实现，待在线复验 |
+
+### schema v5 候选架构与预注册复验（2026-07-21）
+
+schema v5 对应源码指纹 `c11171dd1ade4088bf0a030e44a145293cb3f02680b5433b44fe1f744c693fce`，使用与 v2 相同的数据、样本、提供方、预算和 `materialization_top_k=5`，只改变以下方法逻辑：
+
+1. 引入来源感知的传播绑定校验，新增 `grounding_rejections` 指标。
+2. 引入安全的功能谓词规范化入口和 `date_diff_months` 确定性算子，新增 `operator_rewrites` 指标。当前只启用已有失败证据且可安全证明的月份差改写，不在未验证的 `Count`/`ArgMax` 上扩大规则。
+3. 确定性答案路径拒绝序列化对象/数组；普通实体、数值和布尔标量仍可以零生成调用返回。
+4. 记录 schema 升级到 v5；schema v4 及以前的两个新指标报告为 N/A，不回填为 0。
+
+离线验证已通过 `57 passed, 1 skipped`，Python 编译检查通过。在线复验使用新目录 `runs/vldb2027-diagnostic-v3`，先运行 HotpotQA 和 DROP，预注册判定如下：
+
+数据审计在 manifest 首次创建后补生成为 `runs/vldb2027-diagnostic-v3/dataset-audit.json`：10 个数据集划分、共 378,888 条记录、0 invalid，SHA-256 为 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`，与 v2 完全一致。因初始化顺序问题，v3 manifest 内嵌审计字段为空，该限制保留在账本中，不对生成后的 manifest 进行静默改写。
+
+```text
+H1（绑定正确性）：HotpotQA 故障题不再产生无来源绑定；整体 F1 和失败率不低于 v2。
+H2（算子正确性）：DROP 月份差故障题输出 3，计划记录 operator_rewrites=1 且实际执行算子。
+H3（无隐性回退）：HotpotQA 的 Evidence Recall@5/NDCG@10 和 DROP 的总体 F1 不低于 v2；新增拒绝不得导致系统性 empty/budget_exceeded。
+```
+
+| v3 复验 | 状态 | SlotRAG | Hybrid | 判定 |
+| --- | --- | --- | --- | --- |
+| HotpotQA train，10 题/方法 | 20/20 完成，0 失败 | F1 0.700，R@5 0.750，NDCG@10 0.775，9.2 累计/5.9 唯一文档，5.1 calls，9,981 tokens，101.93 s，P95 190.84 s | F1 0.594，R@5 0.900，NDCG@10 0.905，9.2 文档，1.1 calls，2,356 tokens，17.04 s，P95 25.46 s | SlotRAG 对 Hybrid 的配对差为 +0.106，95% CI [-0.317, 0.505]，`p=0.6162`。v2→v3 为 3 胜/7 平/0 负，但 `grounding_rejections=0`，改善不能归因于 F1 修改；故障题仍为 0 分且本轮未召回金证据。H1 未建立，R@5/NDCG 回退使 H3 不通过。 |
+| DROP train，10 题/方法 | 运行中 | 待汇总 | 待汇总 | 待按 H2/H3 判定。 |
+
 ---
 
 # 11. 关键消融

@@ -80,7 +80,9 @@ METRICS = [
     "early_stops",
     "structured_output_failures",
     "structured_output_repairs",
+    "grounding_rejections",
     "local_plan_repairs",
+    "operator_rewrites",
     "plan_fallbacks",
     "heuristic_plans",
     "operators_executed",
@@ -172,6 +174,10 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         for suffix in ("llm_calls", "prompt_tokens", "completion_tokens")
     ]
     phase_metrics = {name: metrics[name] if schema_version >= 4 else None for name in phase_names}
+    schema5_metrics = {
+        name: metrics[name] if schema_version >= 5 else None
+        for name in ("grounding_rejections", "operator_rewrites")
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -196,6 +202,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **scores,
         **metrics,
         **phase_metrics,
+        **schema5_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -456,6 +463,11 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "cache_hit_rate",
         "index_cache_hit_rate",
         "materialization_reuse_rate",
+        "grounding_rejections",
+        "operator_rewrites",
+        "operators_executed",
+        "structured_output_failures",
+        "plan_fallbacks",
         "llm_budget_utilization",
         "retrieval_budget_utilization",
     ]

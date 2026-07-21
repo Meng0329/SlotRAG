@@ -188,3 +188,14 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
     )
     assert result.answer == "Ernie Wise"
     assert result.metrics.deterministic_answers == 1
+
+
+def test_deterministic_output_rejects_serialized_structures():
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    result = ExecutionResult(rows=[{"answer": "{'country': 'Canada', 'period': '1960s-1990s'}"}])
+
+    assert methods._deterministic_output("hotpotqa", plan, result) is None

@@ -99,7 +99,7 @@ class RelationalOperator(StrictModel):
     field: str | None = None
     output: str | None = None
     comparator: Literal["eq", "ne", "lt", "le", "gt", "ge", "contains"] | None = None
-    operation: Literal["add", "subtract", "multiply", "divide"] | None = None
+    operation: Literal["add", "subtract", "multiply", "divide", "date_diff_months"] | None = None
     value: str | float | int | bool | None = None
     descending: bool = False
     limit: int | None = Field(default=None, gt=0)
@@ -264,7 +264,9 @@ class RunMetrics(StrictModel):
     early_stops: int = 0
     structured_output_failures: int = 0
     structured_output_repairs: int = 0
+    grounding_rejections: int = 0
     local_plan_repairs: int = 0
+    operator_rewrites: int = 0
     plan_fallbacks: int = 0
     heuristic_plans: int = 0
     operators_executed: int = 0

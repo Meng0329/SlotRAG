@@ -1,5 +1,5 @@
-from slotrag.models import BindingRow, Passage, RetrievalResult, RunMetrics, Slot, SlotPlan
-from slotrag.planner import AdaptiveExecutor, SlotCompiler, SlotMaterializer
+from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
+from slotrag.planner import AdaptiveExecutor, SlotCompiler, SlotMaterializer, apply_operators
 from slotrag.providers import ChatResult, ToolCall, Usage
 
 
@@ -70,6 +70,27 @@ class FakeExtractionClient:
 class FakeRetriever:
     def search(self, _query):
         return [RetrievalResult(passage=Passage(id="p", text="Fact"), score=1.0)]
+
+
+class SequenceExtractionClient:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def complete(self, *_args, **_kwargs):
+        rows = self.rows.pop(0)
+        return ChatResult(tool_calls=[ToolCall(name="emit_evidence_rows", arguments={"rows": rows})])
+
+    @staticmethod
+    def require_tool(result, name):
+        return next(call.arguments for call in result.tool_calls if call.name == name)
+
+
+class StaticRetriever:
+    def __init__(self, passage):
+        self.passage = passage
+
+    def search(self, _query):
+        return [RetrievalResult(passage=self.passage, score=1.0)]
 
 
 def test_adaptive_executor_joins_and_propagates_bindings():
@@ -197,6 +218,109 @@ def test_slot_compiler_eliminates_redundant_grounded_anchor_slot():
     assert [slot.id for slot in plan.slots] == ["S1", "S2"]
     assert all(slot.constraints["player"] == "Michael Jordan" for slot in plan.slots)
     assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S2")]
+
+
+def test_slot_compiler_rewrites_date_difference_predicate_to_typed_operator():
+    plan_payload = {
+        "slots": [
+            {"id": "S1", "predicate": "BeganTerm", "arguments": ["?person", "?startDate"]},
+            {"id": "S2", "predicate": "SworeAllegiance", "arguments": ["?person", "?endDate"]},
+            {
+                "id": "S3",
+                "predicate": "DateDiffInMonths",
+                "arguments": ["?startDate", "?endDate", "?months"],
+            },
+        ],
+        "joins": [
+            ["S1.person", "S2.person"],
+            ["S1.startDate", "S3.startDate"],
+            ["S2.endDate", "S3.endDate"],
+        ],
+        "outputs": ["?months"],
+        "operators": [],
+    }
+    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
+        "How many months after he began his term did Zaimis swear allegiance?",
+        answer_kind="number",
+    )
+
+    assert [slot.id for slot in plan.slots] == ["S1", "S2"]
+    assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S2")]
+    assert len(plan.operators) == 1
+    assert plan.operators[0].operation == "date_diff_months"
+    assert plan.operators[0].fields == ["startDate", "endDate"]
+    assert plan.operators[0].output == "months"
+    assert metrics.operator_rewrites == 1
+
+
+def test_date_difference_operator_uses_calendar_month_boundaries():
+    rows = apply_operators(
+        [{"startDate": "18 September 1906", "endDate": "1906-12-02"}],
+        [
+            RelationalOperator(
+                id="O1",
+                kind="arithmetic",
+                fields=["startDate", "endDate"],
+                operation="date_diff_months",
+                output="months",
+            )
+        ],
+    )
+
+    assert rows == [{"months": "3"}]
+
+
+def test_materializer_rejects_propagated_binding_not_grounded_in_source():
+    invalid_row = {
+        "person": "Rogério Martins",
+        "series": "Holy Avenger",
+        "source_id": "Erica Awano#0",
+    }
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[invalid_row], [invalid_row]]),
+        StaticRetriever(
+            Passage(
+                id="Erica Awano#0",
+                doc_id="Erica Awano",
+                text="Erica Awano is a comics artist who worked on Holy Avenger.",
+            )
+        ),
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="CreatedComicBookSeries", arguments=["?person", "?series"]),
+        {"person": "Rogério Martins"},
+    )
+
+    assert rows == []
+    assert metrics.grounding_rejections == 2
+    assert metrics.structured_output_failures == 2
+
+
+def test_materializer_accepts_propagated_binding_grounded_by_document_title():
+    row = {
+        "person": "Erica Awano",
+        "series": "Holy Avenger",
+        "source_id": "Erica Awano#0",
+    }
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[row]]),
+        StaticRetriever(
+            Passage(
+                id="Erica Awano#0",
+                doc_id="Erica Awano",
+                text="She is the artist of Holy Avenger.",
+            )
+        ),
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="CreatedComicBookSeries", arguments=["?person", "?series"]),
+        {"person": "Erica Awano"},
+    )
+
+    assert [item.bindings for item in rows] == [{"person": "Erica Awano", "series": "Holy Avenger"}]
+    assert metrics.grounding_rejections == 0
 
 
 def test_materializer_counts_and_skips_repeated_invalid_extractions():

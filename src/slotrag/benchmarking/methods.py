@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -234,6 +235,13 @@ def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> s
     if len(values) != 1:
         return None
     value = next(iter(values))
+    if value[:1] in {"{", "["}:
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            return None
+        if isinstance(parsed, (dict, list, tuple, set)):
+            return None
     if dataset == "strategyqa":
         match = re.match(r"^\s*(yes|no|true|false)\b", value, flags=re.IGNORECASE)
         if not match:

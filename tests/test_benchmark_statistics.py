@@ -96,6 +96,26 @@ def test_stratified_and_attempt_failure_reports_do_not_hide_retries():
     assert any(row["failure_category"] == "ok" and row["count"] == 1 for row in rows)
 
 
+def test_schema5_reports_grounding_and_operator_rewrite_metrics_without_backfilling_legacy():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 5
+    current["result"]["metrics"] = RunMetrics(
+        grounding_rejections=2,
+        operator_rewrites=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 4
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["grounding_rejections"] == 2
+    assert current_summary["operator_rewrites"] == 1
+    assert legacy_summary["grounding_rejections"] is None
+    assert legacy_summary["operator_rewrites"] is None
+
+
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
     record = _record("slotrag", "q1", 1.0)
     record["scores"]["evidence_recall"] = 1.0
