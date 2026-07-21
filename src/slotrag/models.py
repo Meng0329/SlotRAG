@@ -91,11 +91,14 @@ class RelationalOperator(StrictModel):
         "sort",
         "argmin",
         "argmax",
+        "field_argmin",
+        "field_argmax",
         "compare",
         "boolean",
         "arithmetic",
     ]
     fields: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
     field: str | None = None
     output: str | None = None
     comparator: Literal["eq", "ne", "lt", "le", "gt", "ge", "contains"] | None = None
@@ -124,6 +127,13 @@ class RelationalOperator(StrictModel):
             raise ValueError("filter requires comparator and value")
         if self.kind in {"count", "compare", "boolean"} and not self.output:
             raise ValueError(f"{self.kind} requires output")
+        if self.kind in {"field_argmin", "field_argmax"}:
+            if len(self.fields) < 2 or not self.output:
+                raise ValueError(f"{self.kind} requires at least two fields and an output")
+            if len(self.labels) != len(self.fields) or any(not label.strip() for label in self.labels):
+                raise ValueError(f"{self.kind} requires one non-empty label per field")
+        elif self.labels:
+            raise ValueError("labels are only supported by field extrema operators")
         if self.kind == "arithmetic" and (len(self.fields) < 2 or not self.output or not self.operation):
             raise ValueError("arithmetic requires at least two fields, an operation, and an output")
         return self
@@ -153,6 +163,22 @@ class SlotPlan(StrictModel):
                 raise ValueError("joined fields must reuse the same variable name for the same entity")
             adjacency[join.left_slot].add(join.right_slot)
             adjacency[join.right_slot].add(join.left_slot)
+        for operator in self.operators:
+            if operator.kind not in {"field_argmin", "field_argmax"}:
+                continue
+            field_sources: list[set[str]] = []
+            for field in operator.fields:
+                sources = {
+                    slot_id
+                    for slot_id, variables in slot_fields.items()
+                    if field in variables
+                }
+                if not sources:
+                    raise ValueError("field extrema operator references an unknown slot variable")
+                field_sources.append(sources)
+            operator_slots = set().union(*field_sources)
+            for left_slot in operator_slots:
+                adjacency[left_slot].update(operator_slots - {left_slot})
         if len(slot_ids) > 1:
             visited = set()
             frontier = [self.slots[0].id]

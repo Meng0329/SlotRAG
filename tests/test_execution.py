@@ -1,5 +1,8 @@
+import pytest
+from pydantic import ValidationError
+
 from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
-from slotrag.planner import AdaptiveExecutor, SlotCompiler, SlotMaterializer, apply_operators
+from slotrag.planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer, apply_operators
 from slotrag.providers import ChatResult, ToolCall, Usage
 
 
@@ -91,6 +94,65 @@ class StaticRetriever:
 
     def search(self, _query):
         return [RetrievalResult(passage=self.passage, score=1.0)]
+
+
+class ComparisonMaterializer:
+    def __init__(self):
+        self.calls = []
+
+    def materialize(self, slot, bindings):
+        self.calls.append((slot.id, dict(bindings)))
+        rows = {
+            "S1": BindingRow(
+                slot_id="S1",
+                bindings={"d1": "Sidney Lumet"},
+                source_id="Find Me Guilty#0",
+                source_span="Find Me Guilty was directed by Sidney Lumet.",
+                confidence=1,
+            ),
+            "S2": BindingRow(
+                slot_id="S2",
+                bindings={"d2": "Terry O. Morse"},
+                source_id="Tear Gas Squad#0",
+                source_span="Tear Gas Squad was directed by Terry O. Morse.",
+                confidence=1,
+            ),
+            "S3": BindingRow(
+                slot_id="S3",
+                bindings={"d1": "Sidney Lumet", "bd1": "June 25, 1924"},
+                source_id="Sidney Lumet#0",
+                source_span="Sidney Lumet was born on June 25, 1924.",
+                confidence=1,
+            ),
+            "S4": BindingRow(
+                slot_id="S4",
+                bindings={"d2": "Terry O. Morse", "bd2": "January 30, 1906"},
+                source_id="Terry O. Morse#0",
+                source_span="Terry O. Morse was born on January 30, 1906.",
+                confidence=1,
+            ),
+        }
+        return [rows[slot.id]], RunMetrics(documents_accessed=1, passages_processed=1)
+
+
+def comparison_plan():
+    return SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "DirectorOf", "arguments": ["Find Me Guilty", "?d1"]},
+            {"id": "S2", "predicate": "DirectorOf", "arguments": ["Tear Gas Squad", "?d2"]},
+            {"id": "S3", "predicate": "BirthDate", "arguments": ["?d1", "?bd1"]},
+            {"id": "S4", "predicate": "BirthDate", "arguments": ["?d2", "?bd2"]},
+        ],
+        "joins": [["S1.d1", "S3.d1"], ["S2.d2", "S4.d2"]],
+        "operators": [{
+            "id": "O1",
+            "kind": "field_argmin",
+            "fields": ["bd1", "bd2"],
+            "labels": ["Find Me Guilty", "Tear Gas Squad"],
+            "output": "answer",
+        }],
+        "outputs": ["?answer"],
+    })
 
 
 def test_adaptive_executor_joins_and_propagates_bindings():
@@ -251,6 +313,151 @@ def test_slot_compiler_rewrites_date_difference_predicate_to_typed_operator():
     assert plan.operators[0].fields == ["startDate", "endDate"]
     assert plan.operators[0].output == "months"
     assert metrics.operator_rewrites == 1
+
+
+def test_slot_compiler_rewrites_grounded_birthdate_comparison_to_field_extremum():
+    plan_payload = {
+        "slots": [
+            {"id": "S1", "predicate": "DirectorOf", "arguments": ["Find Me Guilty", "?d1"]},
+            {"id": "S2", "predicate": "DirectorOf", "arguments": ["Tear Gas Squad", "?d2"]},
+            {"id": "S3", "predicate": "BirthDate", "arguments": ["?d1", "?bd1"]},
+            {"id": "S4", "predicate": "BirthDate", "arguments": ["?d2", "?bd2"]},
+            {"id": "S5", "predicate": "Compare", "arguments": ["?bd1", "?bd2"]},
+        ],
+        "joins": [
+            ["S1.d1", "S3.d1"],
+            ["S2.d2", "S4.d2"],
+            ["S3.bd1", "S5.bd1"],
+            ["S4.bd2", "S5.bd2"],
+        ],
+        "outputs": ["?bd1", "?bd2"],
+        "operators": [],
+    }
+    question = "Which film has the director who was born first, Find Me Guilty or Tear Gas Squad?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(question)
+
+    assert [slot.id for slot in plan.slots] == ["S1", "S2", "S3", "S4"]
+    assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S3"), ("S2", "S4")]
+    assert plan.outputs == ["?answer"]
+    assert len(plan.operators) == 1
+    assert plan.operators[0].kind == "field_argmin"
+    assert plan.operators[0].fields == ["bd1", "bd2"]
+    assert plan.operators[0].labels == ["Find Me Guilty", "Tear Gas Squad"]
+    assert plan.operators[0].output == "answer"
+    assert metrics.operator_rewrites == 1
+
+
+def test_slot_compiler_does_not_rewrite_ambiguous_field_comparison():
+    plan_payload = {
+        "slots": [
+            {"id": "S1", "predicate": "BirthDate", "arguments": ["Alice", "?bd1"]},
+            {"id": "S2", "predicate": "BirthDate", "arguments": ["Bob", "?bd2"]},
+            {"id": "S3", "predicate": "Compare", "arguments": ["?bd1", "?bd2"]},
+        ],
+        "joins": [["S1.bd1", "S3.bd1"], ["S2.bd2", "S3.bd2"]],
+        "outputs": ["?bd1", "?bd2"],
+    }
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
+        "Compare the birth dates of Alice and Bob."
+    )
+
+    assert [slot.id for slot in plan.slots] == ["S1", "S2", "S3"]
+    assert plan.operators == []
+    assert metrics.operator_rewrites == 0
+
+
+def test_field_extremum_operator_selects_label_for_earliest_date():
+    rows = apply_operators(
+        [{"bd1": "June 25, 1924", "bd2": "January 30, 1906"}],
+        [
+            RelationalOperator(
+                id="O1",
+                kind="field_argmin",
+                fields=["bd1", "bd2"],
+                labels=["Find Me Guilty", "Tear Gas Squad"],
+                output="answer",
+            )
+        ],
+    )
+
+    assert rows == [{"answer": "Tear Gas Squad"}]
+
+
+def test_slot_compiler_rewrites_later_birthdate_comparison_to_field_argmax():
+    plan_payload = {
+        "slots": [
+            {"id": "S1", "predicate": "BirthDate", "arguments": ["Alice", "?bd1"]},
+            {"id": "S2", "predicate": "BirthDate", "arguments": ["Bob", "?bd2"]},
+            {"id": "S3", "predicate": "DateCompare", "arguments": ["?bd1", "?bd2"]},
+        ],
+        "joins": [["S1.bd1", "S3.bd1"], ["S2.bd2", "S3.bd2"]],
+        "outputs": ["?bd1", "?bd2"],
+    }
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
+        "Who was born later, Alice or Bob?"
+    )
+    rows = apply_operators(
+        [{"bd1": "2000-01-01", "bd2": "1990-01-01"}],
+        plan.operators,
+    )
+
+    assert [slot.id for slot in plan.slots] == ["S1", "S2"]
+    assert plan.operators[0].kind == "field_argmax"
+    assert plan.operators[0].labels == ["Alice", "Bob"]
+    assert rows == [{"answer": "Alice"}]
+    assert metrics.operator_rewrites == 1
+
+
+def test_field_extremum_operator_rejects_ties_and_mixed_types():
+    operator = RelationalOperator(
+        id="O1",
+        kind="field_argmin",
+        fields=["left", "right"],
+        labels=["Left", "Right"],
+        output="answer",
+    )
+
+    assert apply_operators([{"left": "1906-01-30", "right": "1906-01-30"}], [operator]) == []
+    assert apply_operators([{"left": "1906-01-30", "right": "unknown"}], [operator]) == []
+
+
+def test_executor_combines_only_branches_connected_by_field_operator():
+    plan = comparison_plan()
+
+    result = AdaptiveExecutor(ComparisonMaterializer(), max_replans=4).execute(plan)
+
+    assert result.status == "ok"
+    assert result.rows == [{"answer": "Tear Gas Squad"}]
+    assert result.order == ["S1", "S3", "S2", "S4"]
+    assert result.metrics.operators_executed == 1
+
+
+def test_late_join_combines_branches_connected_by_field_operator():
+    result = AdaptiveExecutor(
+        ComparisonMaterializer(),
+        max_replans=4,
+        options=ExecutionOptions(incremental_join=False),
+    ).execute(comparison_plan())
+
+    assert result.status == "ok"
+    assert result.rows == [{"answer": "Tear Gas Squad"}]
+    assert result.metrics.operators_executed == 1
+
+
+def test_plan_still_rejects_disconnected_slots_without_a_connecting_operator():
+    with pytest.raises(ValidationError, match="slot join graph must be connected"):
+        SlotPlan.model_validate({
+            "slots": [
+                {"id": "S1", "predicate": "LeftFact", "arguments": ["?left"]},
+                {"id": "S2", "predicate": "RightFact", "arguments": ["?right"]},
+            ],
+            "joins": [],
+            "operators": [],
+            "outputs": ["?left"],
+        })
 
 
 def test_date_difference_operator_uses_calendar_month_boundaries():

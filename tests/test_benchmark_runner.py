@@ -171,6 +171,6 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
     final_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
     record = json.loads(final_path.read_text(encoding="utf-8"))
     metrics = record["result"]["metrics"]
-    assert record["schema_version"] == 8
+    assert record["schema_version"] == 9
     assert metrics["index_build_latency_ms"] >= 20
     assert metrics["wall_latency_ms"] < metrics["index_build_latency_ms"]

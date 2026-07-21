@@ -79,9 +79,10 @@ def slot_plan_tool() -> dict[str, Any]:
                                 "id": {"type": "string"},
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["filter", "project", "intersect", "count", "sort", "argmin", "argmax", "compare", "boolean", "arithmetic"],
+                                    "enum": ["filter", "project", "intersect", "count", "sort", "argmin", "argmax", "field_argmin", "field_argmax", "compare", "boolean", "arithmetic"],
                                 },
                                 "fields": {"type": "array", "items": {"type": "string"}},
+                                "labels": {"type": "array", "items": {"type": "string"}},
                                 "field": {"type": ["string", "null"]},
                                 "output": {"type": ["string", "null"]},
                                 "comparator": {"type": ["string", "null"]},
@@ -194,6 +195,8 @@ class SlotCompiler:
                     require_grounded(value)
         for operator in plan.operators:
             require_grounded(operator.value)
+            for label in operator.labels:
+                require_grounded(label)
 
     @staticmethod
     def _eliminate_anchor_slots(plan: SlotPlan) -> SlotPlan:
@@ -312,11 +315,21 @@ class SlotCompiler:
         return candidate
 
     @staticmethod
-    def _rewrite_functional_predicates(plan: SlotPlan) -> tuple[SlotPlan, int]:
+    def _rewrite_functional_predicates(plan: SlotPlan, question: str = "") -> tuple[SlotPlan, int]:
         """Rewrite only functional slots whose inputs already come from other slots."""
         payload = plan.model_dump(mode="python")
         rewritten = 0
-        aliases = {
+
+        def next_operator_id(slot_id: str) -> str:
+            operator_ids = {operator["id"] for operator in payload.get("operators", [])}
+            operator_id = f"normalize_{slot_id}"
+            suffix = 2
+            while operator_id in operator_ids:
+                operator_id = f"normalize_{slot_id}_{suffix}"
+                suffix += 1
+            return operator_id
+
+        date_difference_aliases = {
             "datediffinmonths",
             "monthdifference",
             "monthsdifference",
@@ -325,7 +338,7 @@ class SlotCompiler:
         for slot in list(payload["slots"]):
             predicate = re.sub(r"[^a-z0-9]", "", slot["predicate"].casefold())
             arguments = slot["arguments"]
-            if predicate not in aliases or slot.get("constraints") or len(arguments) != 3:
+            if predicate not in date_difference_aliases or slot.get("constraints") or len(arguments) != 3:
                 continue
             if any(not isinstance(argument, str) or not argument.startswith("?") for argument in arguments):
                 continue
@@ -339,12 +352,6 @@ class SlotCompiler:
             }
             if not {start_field, end_field}.issubset(other_variables) or output in other_variables:
                 continue
-            operator_ids = {operator["id"] for operator in payload.get("operators", [])}
-            operator_id = f"normalize_{slot['id']}"
-            suffix = 2
-            while operator_id in operator_ids:
-                operator_id = f"normalize_{slot['id']}_{suffix}"
-                suffix += 1
             candidate = deepcopy(payload)
             candidate["slots"] = [item for item in candidate["slots"] if item["id"] != slot["id"]]
             candidate["joins"] = [
@@ -353,7 +360,7 @@ class SlotCompiler:
                 if join["left_slot"] != slot["id"] and join["right_slot"] != slot["id"]
             ]
             candidate.setdefault("operators", []).append({
-                "id": operator_id,
+                "id": next_operator_id(slot["id"]),
                 "kind": "arithmetic",
                 "fields": [start_field, end_field],
                 "output": output,
@@ -370,6 +377,108 @@ class SlotCompiler:
                 continue
             payload = normalized.model_dump(mode="python")
             rewritten += 1
+
+        normalized_question = " ".join(re.findall(r"\w+", question.casefold()))
+        minimum_requested = bool(re.search(
+            r"\bborn\b.{0,80}\b(?:first|earlier|earliest)\b",
+            normalized_question,
+        ))
+        maximum_requested = bool(re.search(
+            r"\bborn\b.{0,80}\b(?:later|latest)\b",
+            normalized_question,
+        ))
+        extremum_kind = None
+        if minimum_requested != maximum_requested:
+            extremum_kind = "field_argmin" if minimum_requested else "field_argmax"
+
+        def grounded_label(field: str, slots: list[dict[str, Any]]) -> str | None:
+            frontier = [field]
+            visited: set[str] = set()
+            while frontier:
+                candidates: list[str] = []
+                next_frontier: list[str] = []
+                for variable in frontier:
+                    if variable in visited:
+                        continue
+                    visited.add(variable)
+                    for item in slots:
+                        arguments = item.get("arguments", [])
+                        if f"?{variable}" not in arguments:
+                            continue
+                        for argument in arguments:
+                            if not isinstance(argument, str):
+                                continue
+                            if argument.startswith("?"):
+                                linked = argument[1:]
+                                if linked not in visited:
+                                    next_frontier.append(linked)
+                            else:
+                                normalized = " ".join(re.findall(r"\w+", argument.casefold()))
+                                if normalized and normalized in normalized_question:
+                                    candidates.append(argument)
+                unique_candidates = list(dict.fromkeys(candidates))
+                if len(unique_candidates) == 1:
+                    return unique_candidates[0]
+                if unique_candidates:
+                    return None
+                frontier = list(dict.fromkeys(next_frontier))
+            return None
+
+        if extremum_kind is not None:
+            comparison_aliases = {"compare", "datecompare"}
+            for slot in list(payload["slots"]):
+                predicate = re.sub(r"[^a-z0-9]", "", slot["predicate"].casefold())
+                arguments = slot["arguments"]
+                if predicate not in comparison_aliases or slot.get("constraints") or len(arguments) != 2:
+                    continue
+                if any(not isinstance(argument, str) or not argument.startswith("?") for argument in arguments):
+                    continue
+                fields = [argument[1:] for argument in arguments]
+                other_slots = [item for item in payload["slots"] if item["id"] != slot["id"]]
+                other_variables = {
+                    argument[1:]
+                    for item in other_slots
+                    for argument in item["arguments"]
+                    if isinstance(argument, str) and argument.startswith("?")
+                }
+                if not set(fields).issubset(other_variables):
+                    continue
+                output_fields = {
+                    output[1:] if output.startswith("?") else output
+                    for output in payload["outputs"]
+                }
+                if output_fields != set(fields):
+                    continue
+                labels = [grounded_label(field, other_slots) for field in fields]
+                if any(label is None for label in labels) or len(set(labels)) != len(labels):
+                    continue
+                candidate = deepcopy(payload)
+                candidate["slots"] = [item for item in candidate["slots"] if item["id"] != slot["id"]]
+                candidate["joins"] = [
+                    join
+                    for join in candidate["joins"]
+                    if join["left_slot"] != slot["id"] and join["right_slot"] != slot["id"]
+                ]
+                candidate["outputs"] = ["?answer"]
+                candidate.setdefault("operators", []).append({
+                    "id": next_operator_id(slot["id"]),
+                    "kind": extremum_kind,
+                    "fields": fields,
+                    "labels": labels,
+                    "output": "answer",
+                    "field": None,
+                    "comparator": None,
+                    "operation": None,
+                    "value": None,
+                    "descending": False,
+                    "limit": None,
+                })
+                try:
+                    normalized = SlotPlan.model_validate(candidate)
+                except ValidationError:
+                    continue
+                payload = normalized.model_dump(mode="python")
+                rewritten += 1
         return SlotPlan.model_validate(payload), rewritten
 
     def compile(
@@ -472,7 +581,7 @@ class SlotCompiler:
                 invalid_args = self.client.require_tool(result, "emit_slot_plan")
                 plan = SlotPlan.model_validate(invalid_args)
                 self._validate_grounding(plan, question)
-                plan, operator_rewrites = self._rewrite_functional_predicates(plan)
+                plan, operator_rewrites = self._rewrite_functional_predicates(plan, question)
                 plan = self._eliminate_anchor_slots(plan)
                 if operator_rewrites:
                     metrics = metrics.model_copy(update={
@@ -491,7 +600,7 @@ class SlotCompiler:
                         try:
                             repaired_plan = SlotPlan.model_validate(repaired_payload)
                             self._validate_grounding(repaired_plan, question)
-                            repaired_plan, operator_rewrites = self._rewrite_functional_predicates(repaired_plan)
+                            repaired_plan, operator_rewrites = self._rewrite_functional_predicates(repaired_plan, question)
                             repaired_plan = self._eliminate_anchor_slots(repaired_plan)
                         except (ValidationError, ValueError):
                             pass
@@ -742,6 +851,14 @@ def _as_date(value: object) -> datetime | None:
     return None
 
 
+def _ordered_scalar(value: object) -> tuple[str, datetime | float] | None:
+    if parsed_date := _as_date(value):
+        return "date", parsed_date
+    if (parsed_number := _as_number(value)) is not None:
+        return "number", parsed_number
+    return None
+
+
 def _compare(left: object, right: object, comparator: str) -> bool:
     left_number = _as_number(left)
     right_number = _as_number(right)
@@ -794,6 +911,35 @@ def apply_operators(rows: list[dict[str, str]], operators: list[RelationalOperat
                 result = [min(candidates, key=key) if operator.kind == "argmin" else max(candidates, key=key)]
             else:
                 result = []
+        elif operator.kind in {"field_argmin", "field_argmax"}:
+            selections: list[str] = []
+            if len(operator.fields) != len(operator.labels):
+                result = []
+                continue
+            for row in result:
+                parsed = [_ordered_scalar(row.get(field)) for field in operator.fields]
+                if any(value is None for value in parsed):
+                    selections = []
+                    break
+                typed_values = [value for value in parsed if value is not None]
+                if len({value[0] for value in typed_values}) != 1:
+                    selections = []
+                    break
+                ordered_values = [value[1] for value in typed_values]
+                selected_value = (
+                    min(ordered_values) if operator.kind == "field_argmin" else max(ordered_values)
+                )
+                selected_indices = [
+                    index for index, value in enumerate(ordered_values) if value == selected_value
+                ]
+                if len(selected_indices) != 1:
+                    selections = []
+                    break
+                selections.append(operator.labels[selected_indices[0]])
+            if not selections or len(set(selections)) != 1:
+                result = []
+            else:
+                result = [{operator.output or "answer": selections[0]}]
         elif operator.kind == "compare":
             fields = operator.fields
             value = False
@@ -837,6 +983,67 @@ def apply_operators(rows: list[dict[str, str]], operators: list[RelationalOperat
             rendered = str(int(computed)) if computed.is_integer() else f"{computed:.10f}".rstrip("0").rstrip(".")
             result = [{operator.output or "result": rendered}]
     return result
+
+
+def _cross_join_rows(left: list[BindingRow], right: list[BindingRow]) -> list[BindingRow]:
+    merged: list[BindingRow] = []
+    for left_row in left:
+        for right_row in right:
+            bindings = dict(left_row.bindings)
+            if any(key in bindings and bindings[key] != value for key, value in right_row.bindings.items()):
+                continue
+            bindings.update(right_row.bindings)
+            merged.append(BindingRow(
+                slot_id=f"{left_row.slot_id}+{right_row.slot_id}",
+                bindings=bindings,
+                source_id=f"{left_row.source_id}|{right_row.source_id}",
+                source_span=f"{left_row.source_span}\n---\n{right_row.source_span}",
+                confidence=min(left_row.confidence, right_row.confidence),
+                retrieval_score=min(left_row.retrieval_score or 0, right_row.retrieval_score or 0),
+            ))
+    return merged
+
+
+def _join_components(plan: SlotPlan) -> dict[str, int]:
+    adjacency = {slot.id: set() for slot in plan.slots}
+    for join in plan.joins:
+        adjacency[join.left_slot].add(join.right_slot)
+        adjacency[join.right_slot].add(join.left_slot)
+    components: dict[str, int] = {}
+    component_id = 0
+    for slot_id in adjacency:
+        if slot_id in components:
+            continue
+        frontier = [slot_id]
+        while frontier:
+            current = frontier.pop()
+            if current in components:
+                continue
+            components[current] = component_id
+            frontier.extend(adjacency[current] - components.keys())
+        component_id += 1
+    return components
+
+
+def _operator_connects_branches(plan: SlotPlan, materialized_slots: set[str], incoming_slot: str) -> bool:
+    components = _join_components(plan)
+    incoming_component = components[incoming_slot]
+    current_components = {components[slot_id] for slot_id in materialized_slots}
+    if incoming_component in current_components:
+        return False
+    slot_fields = {slot.id: slot.variables for slot in plan.slots}
+    for operator in plan.operators:
+        if operator.kind not in {"field_argmin", "field_argmax"}:
+            continue
+        operator_components = {
+            components[slot_id]
+            for field in operator.fields
+            for slot_id, variables in slot_fields.items()
+            if field in variables
+        }
+        if incoming_component in operator_components and current_components & operator_components:
+            return True
+    return False
 
 
 def _order_cost(order: list[str], cardinalities: dict[str, int]) -> float:
@@ -998,7 +1205,11 @@ class AdaptiveExecutor:
             elif self.options.incremental_join:
                 join = next((j for j in plan.joins if (j.left_slot in materialized and j.right_slot == slot.id) or (j.right_slot in materialized and j.left_slot == slot.id)), None)
                 if join is None:
-                    return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot.id} has no join path")
+                    previous_slots = set(materialized) - {slot.id}
+                    if not _operator_connects_branches(plan, previous_slots, slot.id):
+                        return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot.id} has no join path")
+                    join_input = len(current) + len(rows)
+                    current = _cross_join_rows(current, rows)
                 elif join.right_slot == slot.id:
                     join_input = len(current) + len(rows)
                     current = _join_rows(current, rows, join.left_field, join.right_field)
@@ -1026,10 +1237,15 @@ class AdaptiveExecutor:
             for slot_id in order[1:]:
                 join = next((item for item in plan.joins if (item.left_slot in joined_slots and item.right_slot == slot_id) or (item.right_slot in joined_slots and item.left_slot == slot_id)), None)
                 if join is None:
-                    return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot_id} has no late join path")
-                incoming = materialized[slot_id]
-                join_input = len(joined) + len(incoming)
-                joined = _join_rows(joined, incoming, join.left_field, join.right_field) if join.right_slot == slot_id else _join_rows(incoming, joined, join.left_field, join.right_field)
+                    if not _operator_connects_branches(plan, joined_slots, slot_id):
+                        return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot_id} has no late join path")
+                    incoming = materialized[slot_id]
+                    join_input = len(joined) + len(incoming)
+                    joined = _cross_join_rows(joined, incoming)
+                else:
+                    incoming = materialized[slot_id]
+                    join_input = len(joined) + len(incoming)
+                    joined = _join_rows(joined, incoming, join.left_field, join.right_field) if join.right_slot == slot_id else _join_rows(incoming, joined, join.left_field, join.right_field)
                 joined_slots.add(slot_id)
                 metrics = metrics.model_copy(update={
                     "join_input_rows": metrics.join_input_rows + join_input,
