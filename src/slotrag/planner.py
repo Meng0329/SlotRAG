@@ -1207,12 +1207,13 @@ class SlotMaterializer:
             "hasnationality",
             "countryofbirth",
             "fromcountry",
+            "nationalityof",
         }
 
     @classmethod
     def _is_normalized_anchor_window_predicate(cls, slot: Slot) -> bool:
         predicate = cls._normalized_text(slot.predicate).replace(" ", "")
-        return predicate in {"hasnationality", "countryofbirth", "fromcountry"}
+        return predicate in {"hasnationality", "countryofbirth", "fromcountry", "nationalityof"}
 
     @classmethod
     def _evidence_surface_variant(cls, value: str, source_text: str) -> str | None:

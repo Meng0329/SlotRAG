@@ -1616,7 +1616,7 @@ def test_anchor_window_is_inert_for_unregistered_predicates():
     assert metrics.anchor_window_output_chars == 0
 
 
-@pytest.mark.parametrize("predicate", ["HasNationality", "CountryOfBirth", "FromCountry"])
+@pytest.mark.parametrize("predicate", ["HasNationality", "CountryOfBirth", "FromCountry", "NationalityOf"])
 def test_normalized_anchor_window_accepts_closed_country_nationality_aliases(predicate):
     text = (
         "Washington Phillips was an American singer and instrumentalist. "
