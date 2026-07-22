@@ -1983,6 +1983,22 @@ NACEW 相对 GRPE 的平均 token 减少约 11.75%，wall mean 减少约 9.79%�
 
 预注册门判定：H80 完整性 **通过**；H81 作用域 **失败**（候选仅 3/7 alias contracts 与 3/7 normalizations，控制为 0）；H82 目标质量 **失败**（候选总体 F1 达标，但 3 个预注册 demonym 错误只修正 1 个）；H83 成本/可靠性 **通过**；H84 报告完整性 **通过**。因此不授权新的 disjoint-50 泛化门，也不在同一 7 题上改阈值重跑。失败原因是当前窗口契约依赖 `protected_anchor_values`：含计划常量的题可触发，只有约束或编译缺少实体常量的题不会伪造窗口。下一步改为独立的 **constraint-aware query anchor context** 诊断：仅从计划约束/问题中确定性恢复已出现的锚点，仍保持闭合谓词集合、无外部知识，并换新运行编号验证。
 
+#### v25：Constraint-aware Query Anchor Context
+
+schema25 新增 `query_grounded_anchor_contexts`，候选 `slotrag-context-normalized-anchor-window-projection` 只从两类本地信息恢复锚点：计划 arguments/constraints 中能在问题中逐字落地的值，以及存在 `... of film/movie/song <title>` 关系根时的问题标题短语。它不访问 gold、QID、外部字典或第二个模型，也不改变 GRPE、schema23 ACEW 或 schema24 NACEW。全仓回归为 `190 passed, 1 skipped`，运行源码提交/指纹为 `71af196...a66d6e` / `b9a238...e4af3c`。
+
+v25 是新的架构修复诊断，不改写 v24 阈值；仍明确使用同一组 7 条已观察机制题，因此不能作泛化结论。在线预注册固定 schema25、21 条 final、7 个 imported frozen plans、最大两个互斥 worker、`30 RPM provider / 20 RPM operational / 3s permit`。最终 21/21 final `ok`、21 immutable attempts、benchmark retry=0；7/7 snapshots imported/valid，所有 provenance/hash/variant/inconsistent pair 计数为 0。Agnes/embedding/reranker provider attempts=`73/48/48`，Agnes 有 2 次内部 retry；首末落盘间隔 527.90 秒，对应阶段平均 `8.30/5.46/5.46 RPM`，硬上限仍由共享 permit 保证。
+
+| 方法 | EM/F1 | Evidence Recall/MRR/nDCG | R@1/5/10 | P@1/5/10 | LLM/provider calls | tokens | wall mean/p50/p95 (s) | fail/repair/ground | context/window/norm | deterministic |
+|---|---|---|---|---|---|---:|---|---|---|---:|
+| GRPE | 0.2857/0.2857 | 0.7857/0.7500/0.7279 | 0.3571/0.7143/0.7857 | 0.7143/0.2857/0.1571 | 3.5714/8.1429 | 4109.57 | 39.30/44.59/54.07 | 1.0000/0.7143/0.7143 | 0/0/0 | 0.5714 |
+| ACEW（exact 控制） | 0.4286/0.4286 | 0.7857/0.7500/0.7279 | 0.3571/0.7143/0.7857 | 0.7143/0.2857/0.1571 | 3.4286/8.0000 | 4109.29 | 34.09/29.13/51.09 | 1.0000/0.7143/0.7143 | 0/0/0 | 0.5714 |
+| CQAC-NACEW | 0.5714/0.5714 | 0.8571/0.7738/0.7591 | 0.3571/0.7143/0.8571 | 0.7143/0.2857/0.1714 | 3.4286/8.0000 | 3515.71 | 37.56/38.99/63.19 | 0.7143/0.5714/0.4286 | 7/9/9 | 0.5714 |
+
+候选累计窗口输入/输出字符=`13267/2799`，池化削减率 `0.7668`，fallback=0；相对 GRPE token 减少 14.45%，Evidence Recall 与 nDCG@10 分别增加 0.0714/0.0312。逐题正确 4/7：`2b7192`、`42fc8c`、`a04e2f`、`bc4447`；`5f99e2` 仍由缺电影约束的上游计划产生错误导演集合，局部窗口不能恢复 join 根；`6b2fb1` 是 `American` 对 gold `America`；`a78307` 的证据明确写 `Australian`，但 extractor 两次 grounding reject 后回退成 `Australia`。
+
+预注册门判定：H85 **通过**；H86 **失败**，虽然 7/7 题都有一个 query context，但 raw contract/normalization 为 9 而非预注册的恰好 7，因为两题各物化两个 binding contexts；H87 **失败**，候选 F1 与正确数显著高于 GRPE，但同轮旧 ACEW 随机答对 `42fc8c`，候选相对该控制只新增修正 1/3 demonym IDs；H88、H89 **通过**。因此仍不授权 disjoint-50 或 held-out-200，也不再对这 7 题做在线调参。下一步先离线拆分三类剩余错误：compiler root omission、gold surface alias、grounding repair；新的在线门必须使用不同问题，而不是继续追逐七题随机波动。机器判定见 v25 `offline-validation.json`、`online-validation.json` 与完整 summaries。
+
 ---
 
 # 11. 关键消融
