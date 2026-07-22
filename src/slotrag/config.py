@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .errors import ConfigurationError
 
@@ -78,6 +78,21 @@ class DataConfig(BaseModel):
     processed_dir: Path = Path("data/processed")
 
 
+class RateLimitConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    provider_rpm: float = Field(default=30.0, gt=0)
+    operational_rpm: float = Field(default=20.0, gt=0)
+    max_concurrency: int = Field(default=4, gt=0, le=64)
+    state_dir: Path = Path("runs/.rate-limits")
+
+    @model_validator(mode="after")
+    def validate_operational_limit(self) -> "RateLimitConfig":
+        if self.operational_rpm > self.provider_rpm:
+            raise ValueError("operational_rpm cannot exceed provider_rpm")
+        return self
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -87,6 +102,7 @@ class AppConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     data: DataConfig = Field(default_factory=DataConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AppConfig":
@@ -114,6 +130,9 @@ class AppConfig(BaseModel):
             "SLOTRAG_EMBEDDING_MODEL": ("embedding", "model"),
             "SLOTRAG_RERANKER_BASE_URL": ("reranker", "base_url"),
             "SLOTRAG_RERANKER_MODEL": ("reranker", "model"),
+            "SLOTRAG_PROVIDER_RPM": ("rate_limit", "provider_rpm"),
+            "SLOTRAG_OPERATIONAL_RPM": ("rate_limit", "operational_rpm"),
+            "SLOTRAG_MAX_CONCURRENCY": ("rate_limit", "max_concurrency"),
         }
         for env_name, (section, field) in mappings.items():
             value = os.getenv(env_name)

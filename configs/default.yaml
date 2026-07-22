@@ -50,3 +50,9 @@ execution:
 data:
   cache_dir: data/raw
   processed_dir: data/processed
+
+rate_limit:
+  provider_rpm: 30
+  operational_rpm: 20
+  max_concurrency: 4
+  state_dir: runs/.rate-limits

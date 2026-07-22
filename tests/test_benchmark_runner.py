@@ -1,5 +1,6 @@
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -88,6 +89,71 @@ def test_runner_persists_atomic_items_and_resumes(tmp_path, monkeypatch):
     assert len(attempt_paths) == 1
     assert json.loads(attempt_paths[0].read_text(encoding="utf-8"))["attempt_index"] == 1
     assert not list((tmp_path / "run").rglob("*.part"))
+
+
+def test_runner_merges_concurrent_manifest_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config, **_kwargs: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(split="train", sample_size=1, methods=["hybrid", "graphrag"])},
+    )
+    output_dir = tmp_path / "run"
+    first = BenchmarkRunner(suite, _app_config(), output_dir)
+    second = BenchmarkRunner(suite, _app_config(), output_dir)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(first._write_manifest, "test", ["hotpotqa"], ["hybrid"]),
+            executor.submit(second._write_manifest, "test", ["hotpotqa"], ["graphrag"]),
+        ]
+        for future in futures:
+            future.result()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["run_requests"]) == 2
+    assert {tuple(request["methods"]) for request in manifest["run_requests"]} == {
+        ("hybrid",),
+        ("graphrag",),
+    }
+
+
+def test_runner_recomputes_global_progress_from_all_persisted_shards(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config, **_kwargs: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(split="train", sample_size=1, methods=["hybrid", "graphrag"])},
+    )
+    output_dir = tmp_path / "run"
+    runner = BenchmarkRunner(suite, _app_config(), output_dir)
+    records = {
+        "hybrid/q1.json": {"result": {"status": "ok"}},
+        "graphrag/q2.json": {"result": {"status": "failed"}},
+    }
+    for relative, record in records.items():
+        item_path = output_dir / "items" / "test" / "hotpotqa" / relative
+        item_path.parent.mkdir(parents=True, exist_ok=True)
+        item_path.write_text(json.dumps(record), encoding="utf-8")
+    for relative in ("hybrid/q1/attempt-0001.json", "graphrag/q2/attempt-0001.json", "graphrag/q2/attempt-0002.json"):
+        attempt_path = output_dir / "attempts" / "test" / "hotpotqa" / relative
+        attempt_path.parent.mkdir(parents=True, exist_ok=True)
+        attempt_path.write_text("{}", encoding="utf-8")
+
+    progress = runner._write_stage_progress("test")
+
+    assert progress["completed"] == 2
+    assert progress["attempts"] == 3
+    assert progress["retried"] == 1
+    assert progress["ok"] == 1
+    assert progress["failed"] == 1
+    assert json.loads((output_dir / "progress.json").read_text(encoding="utf-8")) == progress
 
 
 def test_runner_preserves_failed_attempt_before_successful_retry(tmp_path, monkeypatch):

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..concurrency import atomic_write_json, exclusive_file_lock, locked_update_json
 from ..config import AppConfig
 from ..data import normalize_jsonl
 from ..models import ExecutionResult, QuestionRecord, RunMetrics, SlotPlan
@@ -25,10 +26,7 @@ from .metrics import score_record
 
 
 def _atomic_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".part")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, value)
 
 
 def _safe_id(value: str) -> str:
@@ -657,26 +655,43 @@ class BenchmarkRunner:
                         elif result.status == "unsupported_operation":
                             counts["unsupported"] += 1
         self.embedding_cache.flush()
-        _atomic_json(self.output_dir / "progress.json", {"stage": stage_name, **counts})
+        self._write_stage_progress(stage_name)
         return counts
+
+    def _write_stage_progress(self, stage_name: str) -> dict[str, Any]:
+        progress_path = self.output_dir / "progress.json"
+        with exclusive_file_lock(progress_path):
+            statuses: list[str] = []
+            items_root = self.output_dir / "items" / stage_name
+            if items_root.exists():
+                for item_path in sorted(items_root.rglob("*.json")):
+                    record = json.loads(item_path.read_text(encoding="utf-8"))
+                    statuses.append(str(record.get("result", {}).get("status", "failed")))
+            attempts_root = self.output_dir / "attempts" / stage_name
+            attempts = len(list(attempts_root.rglob("attempt-*.json"))) if attempts_root.exists() else 0
+            progress = {
+                "schema_version": 1,
+                "stage": stage_name,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "completed": len(statuses),
+                "skipped": 0,
+                "attempts": attempts,
+                "retried": max(attempts - len(statuses), 0),
+                "ok": statuses.count("ok"),
+                "failed": sum(status in {"failed", "budget_exceeded"} for status in statuses),
+                "empty": statuses.count("empty"),
+                "unsupported": statuses.count("unsupported_operation"),
+            }
+            atomic_write_json(progress_path, progress)
+            return progress
 
     def _write_manifest(self, stage_name: str, datasets: list[str], methods: list[str]) -> None:
         manifest_path = self.output_dir / "manifest.json"
         request = {"stage": stage_name, "datasets": datasets, "methods": methods}
-        if manifest_path.exists():
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            stages = manifest.setdefault("stages_requested", [])
-            requests = manifest.setdefault("run_requests", [])
-            if stage_name not in stages:
-                stages.append(stage_name)
-            if request not in requests:
-                requests.append(request)
-            _atomic_json(manifest_path, manifest)
-            return
         root = Path.cwd()
         audit_path = self.output_dir / "dataset-audit.json"
         audit = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else None
-        manifest = {
+        initial_manifest = {
             "material_passport": {
                 "origin_skill": "academic-research-suite/experiment-agent",
                 "origin_mode": "run",
@@ -697,6 +712,12 @@ class BenchmarkRunner:
             },
             "suite": self.suite.model_dump(mode="json"),
             "provider_config": self.app_config.public_dict(),
+            "execution_control": {
+                "provider_rpm": self.app_config.rate_limit.provider_rpm,
+                "operational_rpm": self.app_config.rate_limit.operational_rpm,
+                "max_concurrency": self.app_config.rate_limit.max_concurrency,
+                "pacing": "cross_process_minimum_interval",
+            },
             "dataset_audit": audit,
             "dataset_audit_sha256": hashlib.sha256(audit_path.read_bytes()).hexdigest() if audit_path.exists() else None,
             "environment": {
@@ -709,4 +730,15 @@ class BenchmarkRunner:
                 "packages": _package_versions(),
             },
         }
-        _atomic_json(manifest_path, manifest)
+
+        def merge_manifest(current: dict[str, Any] | None) -> dict[str, Any]:
+            manifest = initial_manifest if current is None else current
+            stages = manifest.setdefault("stages_requested", [])
+            requests = manifest.setdefault("run_requests", [])
+            if stage_name not in stages:
+                stages.append(stage_name)
+            if request not in requests:
+                requests.append(request)
+            return manifest
+
+        locked_update_json(manifest_path, merge_manifest, default=None)

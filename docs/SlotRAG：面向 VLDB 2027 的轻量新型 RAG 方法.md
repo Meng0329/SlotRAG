@@ -1814,6 +1814,71 @@ v20 得到 30/30 条 schema21 final `ok`，五种执行方法各 6 条；30 个�
 
 因此拒绝 LGRPE，不开启新的 50 题门，也不进入 200 题 held-out。`enable_thinking=false` 在本组没有减少 tokens，反而增加结构失败与 repair；bound signature 有助于暴露已知参数，却不能独立承担关系语义验证。下一候选必须在已验证的 direct-anchor 作用域内加入通用的 predicate-role 语义约束，并先用离线反例覆盖父/母、国籍/国家等角色边界，再冻结新门槛；不得据本轮结果放宽 H64/H65。机器判定见 v20 `online-validation.json`，完整聚合、逐题、检索、分层、attempt 分母与计划审计见同运行 `summaries/lean_grounded_role_diagnostic/`。
 
+#### schema v22：角色类型矛盾过滤与 v21 诊断预注册
+
+v20 说明绑定 signature 能消除格式/grounding 错误，却不能阻止 `grandmother` 接纳带 `Earl` 头衔的 Gilbert。schema22 因此不再改 prompt，而在结构化行通过 source grounding 后增加 **Role-Type Contradiction Filter（RTCF）**。它从 unresolved 字段名读取封闭的性别化亲属角色；只有女性角色遇到明确男性头衔/亲属标记，或男性角色遇到明确女性标记时才拒绝。普通人名、未标性别实体和非性别字段全部保留；全部行冲突时记 semantic abstention 并返回空物化，不把语义拒绝误记为 schema failure，也不发起 repair。该候选不使用题目 ID、gold answer、gold evidence、外部知识或额外 LLM 调用。
+
+schema22 新增 `semantic_role_type_contracts`、`semantic_role_type_rejections`、`semantic_role_type_abstentions`，旧记录不回填。全仓 `165 passed, 1 skipped`，`compileall`、pilot YAML 与 `git diff --check` 通过。50 个 v19 冻结计划的离线范围为 10 个性别角色题、17 个可能生效的槽，另外 40 题完全惰性；在 v20 已落盘 evidence 上只回溯命中 `574...` 的 3 条 Gilbert/Earl 错误行，没有命中正确行。该回溯只用于冻结作用域，不作为在线收益。
+
+v21 复用 v20 完全相同的 6 个已观察题，样本 SHA-256 仍为 `1c6c1b...ae38`；6 个 v19 snapshots 已离线导入，6 plan attempts 全为 imported/ok，没有新增 provider 请求。在线仅执行 GECS、GRPE、RTCF 三路共 18 条。RTCF 预期 direct/role/known=`5/10/5`，semantic contracts 只出现在 `574...` 的 mother/grandmother 与 `05b...` 的 father/grandfather，总数严格为 4；其他题与两个控制方法的三项 semantic telemetry 必须为 0。
+
+```text
+H66（同源完整性）：6 imported snapshots、18 schema22 final replay；三路逐题 source/effective hash 相同且 provenance 完整。
+
+H67（作用域隔离）：两种 role 方法 direct/role/known 均为 5/10/5；RTCF semantic contracts 精确为 4，只落在两个预注册亲属题，GECS/GRPE/其余题均为 0。
+
+H68（目标题门）：RTCF 在 574... 上答 Isabel Marshal、F1=1、join=1、deterministic=1，无 Gilbert row、generation、fallback、结构失败、repair、grounding rejection、semantic abstention 或 length finish，calls/tokens 不高于同期 GECS 与 GRPE。
+
+H69（六题联合门）：RTCF 6/6 final ok，F1 不低于 GECS 与 GRPE；平均 calls、tokens、结构失败、repairs、fallbacks、length finishes 均不高于 GRPE。
+```
+
+运行仍固定最大并发 2、服务许可 30 RPM、实际运行上限 20 RPM：worker A 为 GECS+GRPE 共 12 条，worker B 为 RTCF 6 条；使用相同 warm embedding cache `314b8d...90cc`。失败 attempt 必须保留，doctor 恢复后才允许并发 1 补跑。只有 H66-H69 全过才开启新 50 题门；本轮重复使用已观察诊断集，不能作显著性、held-out 或泛化主张。机器预注册为 v21 `offline-validation.json` 与 `role-type-filter-scope-audit.json`。
+
+#### v21 在线结果：作用域精确，但 RTCF 没有产生可归因收益
+
+首次 doctor 的 Agnes 为 `ConnectError`，embedding/reranker 为 HTTP 200，因此没有启动实验；第二次完整 doctor 三项均为 HTTP 200 后才运行。最终 18/18 条 schema22 final `ok`，三种方法各 6 条；18 个不可变 attempts 全是首次成功，无失败、retry 或补跑。首末落盘间隔 267 秒，Agnes/embedding/reranker attempts 为 43/34/34，阶段平均 9.66/7.64/7.64 RPM，低于实际 20 RPM 上限。
+
+并发运行同时暴露一个记录层问题：两个 worker 创建 `manifest.json` 时发生末写覆盖，初始只保留 RTCF 的 6 条 request，使第一次 summary 误报 expected=6、observed=18。18 个 attempts/items 本身完整且未修改；补回预注册的 GECS+GRPE request 后重新汇总为 expected=observed=18、completion=1.0。6 snapshots、6 plan attempts、18 replay 全部通过 provenance/hash 审计，缺失、mismatch、unknown snapshot、inconsistent pair 与 effective variant 均为 0。因此该问题不改变方法结果，但下一 schema 必须先为 manifest/progress 写入增加跨进程锁，不能继续人工修复。
+
+RTCF 作用域与预注册完全一致：GRPE 和 RTCF 的 direct/role/known 总数均为 `5/10/5`；RTCF semantic contracts 总数为 4，只落在 `574...` 与 `05b...`，其他 4 个候选题和两个控制方法均为 0。所有方法的 length finishes 为 0。RTCF 在线 `semantic_role_type_rejections=0`、abstentions=0，说明本次模型没有产出带显式性别矛盾标记的行；因此不能把任何答案差异归因于过滤器。H66、H67 通过。
+
+| 方法 | EM / F1 | Evidence Recall / MRR | R@1 / R@5 / R@10 | P@1 / P@5 / P@10 | nDCG@10 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GECS | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9720 |
+| GRPE | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9586 |
+| RTCF | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9586 |
+
+| 方法 | LLM / extraction / generation calls | Tokens | Provider calls | Wall mean / p50 / p95 (s) | Fail / repair / grounding | Deterministic / fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GECS | 2.333 / 2.000 / 0.167 | 3865.00 | 6.333 | 24.81 / 20.24 / 43.44 | 0.000 / 0.000 / 0.000 | 0.833 / 0.000 |
+| GRPE | 2.333 / 2.167 / 0.167 | 3947.83 | 6.000 | 23.04 / 21.46 / 35.10 | 0.500 / 0.333 / 0.333 | 0.833 / 0.167 |
+| RTCF | 2.500 / 2.333 / 0.167 | 4344.83 | 6.167 | 23.87 / 24.25 / 36.32 | 0.667 / 0.500 / 0.500 | 0.833 / 0.167 |
+
+目标题三路都回答 `Isabel Marshal`、F1=1、join=1、deterministic=1，且无 generation/fallback。RTCF 的 contracts=2，但 rejections=0；它先把未在 `Baldwin...` source 中 grounded 的 grandmother 行作为原有 grounding failure 拒绝，再 repair 得到 Isabel，因此为 3 calls、7260 tokens、fail/repair/grounding=`1/1/1`。同期 GECS 与 GRPE 均为 2 calls，tokens 为 4664/4847，且三项失败计数均为 0。RTCF 通过答案与确定性条件，却明确失败于 H68 的无 repair 与成本条件，也没有形成过滤器的因果激活证据。
+
+六题上三路 F1 均为 0.6667；`254...` 与 `c520...` 仍输出 `United States` 而 gold 为 `American`。RTCF/GRPE 的 calls 为 2.500/2.333、tokens 为 4344.83/3947.83、structured failures 为 0.667/0.500、repairs 为 0.500/0.333；fallback 均为 0.167、length finishes 均为 0。质量只持平，四个预注册效率条件均变差，因此 H69 失败。
+
+| 预注册假设 | 判定 | 依据 |
+| --- | --- | --- |
+| H66 同源完整性 | **通过** | 6 snapshots、18 replay，全部 plan/provenance/hash 检查为 0 error。 |
+| H67 作用域隔离 | **通过** | role 指标为 5/10/5；4 个 contracts 精确落在两个亲属题，控制与其余题无泄漏。 |
+| H68 目标题语义/效率 | **失败** | 答案与 deterministic join 通过，但有 1 次 grounding repair，3 calls/7260 tokens 高于两基线，且 semantic rejection=0。 |
+| H69 六题联合门 | **失败** | F1 持平；calls、tokens、failures、repairs 均高于 GRPE。 |
+
+因此拒绝 RTCF，不开启 50 题或 200 题验证。它可作为“只拒绝强矛盾”的安全原型保留，但不能列为有效方法贡献：其触发依赖 extractor 是否恰好输出显式冲突，无法解决无标记的候选歧义，也没有处理 nationality/country 表面形式。下一轮先修复并发 manifest/progress 的原子聚合，再选择不依赖随机候选形态的架构方向；机器判定见 v21 `online-validation.json`，完整指标、逐题、检索、分层、失败分母与计划审计见同运行 `summaries/grounded_role_type_filter_diagnostic/`。
+
+#### v21 后基础设施闭环：20 RPM 硬限流与并发 4
+
+v20、v21 的两个 worker 虽然阶段平均 RPM 均低于 20，但执行器此前没有主动限流；同时，两个进程对 `manifest.json`、`progress.json` 和 embedding cache 的读改写不是事务。v20/v21 的 completed 计数末写覆盖以及 v21 manifest 丢失一条 run request，均属于该记录层缺陷，不能继续依赖人工修复。
+
+本轮只修改实验基础设施，不改变 schema22 方法、prompt、计划、检索、答案或评分。所有 JSON 改为同目录唯一临时文件后原子替换；共享读改写使用持久 lock file 与 `flock`。manifest 在锁内合并去重 run request；progress 在锁内重新扫描该 stage 的全部 final items 与 immutable attempts，统一计算 completed、attempts、retried 及最终状态分母；两个并发加载的 embedding cache 在 flush 时合并磁盘最新值，避免末写丢键。
+
+请求控制显式冻结为 `provider_rpm=30`、`operational_rpm=20`、`max_concurrency=4`，共享状态位于 `runs/.rate-limits/`。每个 provider 分别持有最多 4 个跨进程在途槽；取得槽后，每个 HTTP attempt 必须再取得最小间隔为 3 秒的发起配额，429/5xx/连接失败后的内部 retry 同样计入。这样服务许可 30 RPM 只作为配置合法性上界，20 RPM 才是执行硬上限；即使同时启动多个 run，也不能各自复制一套进程内配额。
+
+并发 4 来自近期在线时延的容量估算，而不是把 30 RPM 当吞吐目标：v21 并发 2 的 Agnes 阶段平均 9.66 RPM，线性外推并发 4 约为 19.32 RPM；v20 的对应外推为 24.06 RPM，因此必须由硬限流削平而不能只凭并发估算。后续正常运行最大并发设为 4，失败恢复仍降为 1；不同 worker 必须继续使用互斥 method/question 分片。
+
+本地真实时钟烟雾测试让 4 个线程同时竞争 Agnes 的 20 RPM 配额，实际取得时刻为 `0.0043/3.0053/6.0059/9.0066s`，相邻最小间隔 `3.0006s`。并发 manifest、全局 progress、cache merge、每次 retry 取配额及在途槽上限均有回归测试；全仓 `174 passed, 1 skipped`，`compileall`、YAML 解析与 `git diff --check` 通过，源码指纹为 `761b5d9a...ae5f`。机器记录见 `runs/vldb2027-infrastructure-v22/concurrency-validation.json`。下一方法实验只能在该控制层上新建 run，既有 v21 frozen artifacts 保持不变。
+
 ---
 
 # 11. 关键消融

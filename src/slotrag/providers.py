@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import httpx
 from pydantic import BaseModel, Field
 
+from .concurrency import ConcurrencyLimiter, FileConcurrencyLimiter, FileRateLimiter, RateLimiter
 from .config import AgnesConfig, EmbeddingConfig, RerankerConfig
 from .errors import ProviderError, SchemaError
 
@@ -59,8 +61,16 @@ class RerankResult(BaseModel):
 
 
 class _HTTPProvider:
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        rate_limiter: RateLimiter | None = None,
+        concurrency_limiter: ConcurrencyLimiter | None = None,
+    ) -> None:
         self._client = client
+        self._rate_limiter = rate_limiter
+        self._concurrency_limiter = concurrency_limiter
         self.stats = ProviderStats()
 
     def _post(
@@ -75,23 +85,31 @@ class _HTTPProvider:
     ) -> Any:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         for retry_index in range(max_retries + 1):
-            started = time.perf_counter()
-            self.stats.attempts += 1
-            try:
-                if self._client is None:
-                    response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+            request_error: httpx.HTTPError | None = None
+            permit = self._concurrency_limiter.permit() if self._concurrency_limiter is not None else nullcontext()
+            with permit:
+                if self._rate_limiter is not None:
+                    self._rate_limiter.acquire()
+                started = time.perf_counter()
+                self.stats.attempts += 1
+                try:
+                    if self._client is None:
+                        response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+                    else:
+                        response = self._client.post(url, headers=headers, json=payload, timeout=timeout)
+                except httpx.HTTPError as exc:
+                    elapsed = (time.perf_counter() - started) * 1000
+                    self.stats.latency_ms += elapsed
+                    request_error = exc
                 else:
-                    response = self._client.post(url, headers=headers, json=payload, timeout=timeout)
-            except httpx.HTTPError as exc:
-                elapsed = (time.perf_counter() - started) * 1000
-                self.stats.latency_ms += elapsed
+                    elapsed = (time.perf_counter() - started) * 1000
+                    self.stats.latency_ms += elapsed
+            if request_error is not None:
                 if retry_index < max_retries:
                     self.stats.retries += 1
                     time.sleep(retry_backoff_seconds * (2 ** retry_index))
                     continue
-                raise ProviderError(f"request failed for {url}: {exc.__class__.__name__}") from exc
-            elapsed = (time.perf_counter() - started) * 1000
-            self.stats.latency_ms += elapsed
+                raise ProviderError(f"request failed for {url}: {request_error.__class__.__name__}") from request_error
             transient = response.status_code == 429 or response.status_code >= 500
             if transient and retry_index < max_retries:
                 self.stats.retries += 1
@@ -112,8 +130,15 @@ class _HTTPProvider:
 
 
 class AgnesClient(_HTTPProvider):
-    def __init__(self, config: AgnesConfig, client: httpx.Client | None = None) -> None:
-        super().__init__(client)
+    def __init__(
+        self,
+        config: AgnesConfig,
+        client: httpx.Client | None = None,
+        *,
+        rate_limiter: RateLimiter | None = None,
+        concurrency_limiter: ConcurrencyLimiter | None = None,
+    ) -> None:
+        super().__init__(client, rate_limiter=rate_limiter, concurrency_limiter=concurrency_limiter)
         self.config = config
 
     def complete(
@@ -197,8 +222,15 @@ class AgnesClient(_HTTPProvider):
 
 
 class EmbeddingClient(_HTTPProvider):
-    def __init__(self, config: EmbeddingConfig, client: httpx.Client | None = None) -> None:
-        super().__init__(client)
+    def __init__(
+        self,
+        config: EmbeddingConfig,
+        client: httpx.Client | None = None,
+        *,
+        rate_limiter: RateLimiter | None = None,
+        concurrency_limiter: ConcurrencyLimiter | None = None,
+    ) -> None:
+        super().__init__(client, rate_limiter=rate_limiter, concurrency_limiter=concurrency_limiter)
         self.config = config
 
     def embed(self, texts: str | list[str]) -> list[list[float]]:
@@ -235,8 +267,15 @@ class EmbeddingClient(_HTTPProvider):
 
 
 class RerankerClient(_HTTPProvider):
-    def __init__(self, config: RerankerConfig, client: httpx.Client | None = None) -> None:
-        super().__init__(client)
+    def __init__(
+        self,
+        config: RerankerConfig,
+        client: httpx.Client | None = None,
+        *,
+        rate_limiter: RateLimiter | None = None,
+        concurrency_limiter: ConcurrencyLimiter | None = None,
+    ) -> None:
+        super().__init__(client, rate_limiter=rate_limiter, concurrency_limiter=concurrency_limiter)
         self.config = config
 
     def rerank(self, query: str, documents: list[str], top_n: int | None = None) -> list[RerankResult]:
@@ -265,4 +304,26 @@ class RerankerClient(_HTTPProvider):
 
 
 def provider_clients(config: Any, client: httpx.Client | None = None) -> tuple[AgnesClient, EmbeddingClient, RerankerClient]:
-    return AgnesClient(config.agnes, client), EmbeddingClient(config.embedding, client), RerankerClient(config.reranker, client)
+    state_dir = config.rate_limit.state_dir
+    rpm = config.rate_limit.operational_rpm
+    concurrency = config.rate_limit.max_concurrency
+    return (
+        AgnesClient(
+            config.agnes,
+            client,
+            rate_limiter=FileRateLimiter(state_dir / "agnes.json", rpm=rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "agnes", limit=concurrency),
+        ),
+        EmbeddingClient(
+            config.embedding,
+            client,
+            rate_limiter=FileRateLimiter(state_dir / "embedding.json", rpm=rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "embedding", limit=concurrency),
+        ),
+        RerankerClient(
+            config.reranker,
+            client,
+            rate_limiter=FileRateLimiter(state_dir / "reranker.json", rpm=rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "reranker", limit=concurrency),
+        ),
+    )

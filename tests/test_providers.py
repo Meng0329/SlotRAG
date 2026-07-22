@@ -114,3 +114,42 @@ def test_provider_retries_transient_status_and_records_attempts(monkeypatch):
     assert client.stats.attempts == 2
     assert client.stats.retries == 1
     assert client.stats.successes == 1
+
+
+def test_provider_acquires_rate_limit_for_every_http_attempt(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "secret")
+    attempts = 0
+
+    class Limiter:
+        def __init__(self):
+            self.calls = 0
+
+        def acquire(self):
+            self.calls += 1
+            return 0.0
+
+    limiter = Limiter()
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, json={"error": "busy"})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            base_url="http://test/v1",
+            model="m",
+            api_key_env="TEST_KEY",
+            timeout_seconds=1,
+            dimension=2,
+            max_retries=1,
+            retry_backoff_seconds=0,
+        ),
+        _transport(handler),
+        rate_limiter=limiter,
+    )
+
+    assert client.embed("a") == [[1.0, 0.0]]
+    assert limiter.calls == 2

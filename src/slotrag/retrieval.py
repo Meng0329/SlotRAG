@@ -10,6 +10,7 @@ from typing import Iterable
 import numpy as np
 from rank_bm25 import BM25Okapi
 
+from .concurrency import locked_update_json
 from .models import Passage, RetrievalResult, Slot
 from .providers import EmbeddingClient, RerankerClient
 
@@ -47,11 +48,17 @@ class EmbeddingCache:
 
     def flush(self) -> None:
         if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            import json
-            temporary = self.path.with_suffix(self.path.suffix + ".part")
-            temporary.write_text(json.dumps(self.values), encoding="utf-8")
-            temporary.replace(self.path)
+            def merge(current: dict[str, list[float]]) -> dict[str, list[float]]:
+                current.update(self.values)
+                return current
+
+            self.values = locked_update_json(
+                self.path,
+                merge,
+                default={},
+                ensure_ascii=True,
+                indent=None,
+            )
 
     def snapshot(self) -> tuple[int, int]:
         return self.hits, self.misses

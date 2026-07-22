@@ -1,5 +1,5 @@
 from slotrag.models import Passage
-from slotrag.retrieval import HybridRetriever
+from slotrag.retrieval import EmbeddingCache, HybridRetriever
 
 
 class FakeEmbeddingConfig:
@@ -36,3 +36,18 @@ def test_hybrid_retriever_builds_passage_index_before_query():
 
     retriever.search("alpha")
     assert embedding.calls == [["alpha fact", "beta fact"], ["alpha"]]
+
+
+def test_embedding_cache_flush_merges_entries_from_concurrent_instances(tmp_path):
+    path = tmp_path / "embeddings.json"
+    first = EmbeddingCache(path)
+    second = EmbeddingCache(path)
+
+    first.put("alpha", [1.0, 0.0])
+    second.put("beta", [0.0, 1.0])
+    first.flush()
+    second.flush()
+
+    merged = EmbeddingCache(path)
+    assert merged.get("alpha") == [1.0, 0.0]
+    assert merged.get("beta") == [0.0, 1.0]
