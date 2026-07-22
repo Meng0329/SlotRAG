@@ -365,6 +365,145 @@ def test_anchor_folding_candidate_derives_effective_plan_from_same_frozen_source
     assert substitution.answer == "Isabel Marshal"
 
 
+def test_role_projected_substitution_routes_anchor_metadata_to_materializer(monkeypatch):
+    raw_plan = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "Person",
+                "arguments": ["Baldwin De Redvers", "7Th Earl Of Devon", "?baldwin"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?baldwin"]},
+            {"id": "S3", "predicate": "MotherOf", "arguments": ["?grandmother", "?mother"]},
+        ],
+        "joins": [
+            ["S1.baldwin", "S2.baldwin"],
+            ["S2.mother", "S3.mother"],
+        ],
+        "outputs": ["?grandmother"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"grandmother": "Isabel Marshal"}],
+                evidence=[EvidenceRecord(
+                    source_id="Amice de Clare#0",
+                    source_span="Amice de Clare was the daughter of Isabel Marshal.",
+                    slot_id="S3",
+                    bindings={"grandmother": "Isabel Marshal"},
+                )],
+                order=[slot.id for slot in plan.slots],
+            )
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-role-projected-substitution"],
+        "2wikimultihop",
+        QuestionRecord(
+            id="q",
+            question="Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+        ),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=raw_plan,
+    )
+
+    assert materializer_options == [{
+        "max_passages": 5,
+        "typed_extraction_contracts": False,
+        "role_projected_extraction": True,
+        "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
+    }]
+    assert result.metrics.grounded_entity_anchor_substitutions == 1
+    assert result.answer == "Isabel Marshal"
+
+
+def test_role_projected_substitution_is_inert_without_a_safe_anchor(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, effective, *, strategy):
+            assert effective == plan
+            return ExecutionResult(
+                rows=[{"answer": "Alpha"}],
+                evidence=[EvidenceRecord(
+                    source_id="p",
+                    source_span="Alpha",
+                    slot_id="S1",
+                    bindings={"answer": "Alpha"},
+                )],
+                order=["S1"],
+            )
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-role-projected-substitution"],
+        "2wikimultihop",
+        QuestionRecord(id="q", question="What is the answer?"),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=plan,
+    )
+
+    assert materializer_options == [{
+        "max_passages": 5,
+        "typed_extraction_contracts": False,
+    }]
+    assert result.metrics.grounded_entity_anchor_substitutions == 0
+
+
 def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

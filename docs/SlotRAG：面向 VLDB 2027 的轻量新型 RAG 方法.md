@@ -1451,6 +1451,234 @@ H46（目标因果效率）：substitution 目标 steps/retrieval/extraction/tot
 
 H46 对非目标题的处理在看结果前已明确：当 effective plan 完全相同时，在线 LLM 抽取的随机结构失败不是变换因果效应，不能用一次波动否定表示变换；但不得隐藏，仍需逐题和历史 attempt 报告。相反，目标题三种有效计划不同，必须以严格 calls/tokens、fallback 和 deterministic 条件判定。即使 H43-H46 全过，也只说明下一步值得扩展到 50 题调优与 200 题验证，不等于达到 VLDB 证据标准。
 
+#### schema v17 在线结果（v15）
+
+`2026-07-22T16:46:23+08:00` 与中断恢复后的 `16:57:46+08:00`，Agnes、embedding、reranker 三项 doctor 均为 HTTP 200。首次串行进程在 21 条结果落盘后被实验控制端中断，没有生成失败 attempt；随后按用户给定的并发 2 将剩余 GECS 与 Hybrid 分配到两个互斥方法 worker。允许上限为 30 RPM、运行上限为 20 RPM；本次 Agnes 75 次成功请求的平均时延为 18.88 秒，并发 2 对应估算 6.36 RPM，未触碰上限。两个 worker 错峰写入不同 method 目录，启动前 10 个冻结计划已全部存在，因此没有 plan、manifest 或 item 写竞争。
+
+最终为 40/40 条 schema17 final `ok`、40 个 immutable attempts、0 个 benchmark retry、40/40 有证据金标。执行期 Agnes 共 81 attempts、75 successes、6 次提供方内部重试；这些 retry 已计入 calls、tokens 和时延，但没有用覆盖式重跑隐藏。双哈希审计为 10/10 imported valid snapshots、10 个成功 plan attempts、30 个 SlotRAG replay；missing provenance/result/effective hash、hash mismatch、unknown snapshot 与 inconsistent source pair 全为 0。恰好 1 个问题具有有效计划分歧、2 个 extra variants、单题最大 3 variants，符合四路预注册。共享编译仍为 7 calls、21,880 tokens、0 provider retry、2 次结构失败/修复、0 fallback。
+
+下表执行期均值覆盖汇总器当前全部核心质量、证据、调用、token、时延、鲁棒性、计划、连接、资源和索引指标；完整 130+ 列逐题与聚合文件保存在 v15 `summaries/entity_anchor_substitution_gate/`。`accuracy` 与 DROP 指标在 2Wiki 上为 N/A。
+
+| v15 2Wiki entity-anchor substitution gate（10 题/方法） | SlotRAG | GEAF constraint | GECS constant | Hybrid |
+| --- | ---: | ---: | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 1.000 / 1.000 | 0.900 / 0.900 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.825 / 1.000 | 0.925 / 1.000 | 0.825 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.825 / 0.825 | 0.450 / 0.875 / 0.925 | 0.450 / 0.825 / 0.825 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.380 / 0.190 | 1.000 / 0.400 / 0.210 | 1.000 / 0.380 / 0.190 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.862 | 0.922 | 0.862 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 2.1 / 2.0 / 974 | 3.0 / 2.6 / 1,953 | 2.0 / 1.9 / 973 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 9.2 / 6.1 / 9.5 / 6.2 | 8.7 / 6.1 / 9.0 / 6.2 | 8.7 / 6.1 / 9.0 / 6.2 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 2.5 / 1.9 / 1.9 / 1.9 | 2.3 / 1.8 / 1.8 / 1.8 | 2.2 / 1.8 / 1.8 / 1.8 | 1.1 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 3,045 / 2,599 / 5,645 | 3,227 / 2,655 / 5,882 | 2,922 / 2,395 / 5,317 | 1,549 / 854 / 2,403 |
+| 编译 / 抽取 / 生成 LLM calls | 0 / 2.1 / 0.1 | 0 / 2.0 / 0.2 | 0 / 2.1 / 0 | 0 / 0 / 1.0 |
+| 抽取 prompt / completion tokens | 2,981 / 2,488 | 2,794 / 2,411 | 2,922 / 2,395 | 0 / 0 |
+| 生成 prompt / completion tokens | 64 / 111 | 433 / 244 | 0 / 0 | 1,549 / 854 |
+| 执行期 provider calls | 6.3 | 5.9 | 5.8 | 3.1 |
+| +共享编译 LLM calls / tokens / provider calls | 3.2 / 7,833 / 7.0 | 3.0 / 8,070 / 6.6 | 2.9 / 7,505 / 6.5 | N/A |
+| 执行期 wall mean / P50 / P95 / P99 | 47.64 / 38.73 / 92.32 / 112.79 s | 41.93 / 40.24 / 75.90 / 82.39 s | 39.69 / 41.56 / 62.28 / 64.81 s | 15.72 / 15.21 / 21.40 / 21.77 s |
+| +共享编译 wall mean / P95 | 68.03 / 126.25 s | 62.32 / 113.25 s | 60.08 / 109.12 s | N/A |
+| Provider latency mean / P95 | 47.53 / 92.30 s | 41.90 / 75.89 s | 39.66 / 62.27 s | 15.69 / 21.28 s |
+| 执行 / 物化 / 生成时延 | 46.32 / 46.32 / 1.32 s | 38.59 / 38.59 / 3.34 s | 39.69 / 39.69 / 0 s | 0 / 0 / 15.39 s |
+| 内部 provider retry mean / benchmark retry count | 0.3 / 0 | 0.1 / 0 | 0.1 / 0 | 0.1 / 0 |
+| 结构失败 / 修复 / grounding / local repair | 0.2 / 0.2 / 0 / 0 | 0.3 / 0.2 / 0 / 0 | 0.3 / 0.3 / 0 / 0 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0 / 0.9 | 0 / 0.1 / 0.8 | 0 / 0 / 1.0 | 0 / 0 / 0 |
+| polar / span normalization / reconciliation / row consensus | 0.4 / 0 / 0 / 0 | 0.4 / 0 / 0 / 0.1 | 0.4 / 0 / 0 / 0 | 0.4 / 0 / 0 / 0 |
+| typed contract / answer / abstention / frozen replay | 0 / 0 / 0 / 1.0 | 0 / 0 / 0 / 1.0 | 0 / 0 / 0 / 1.0 | 0 / 0 / 0 / 0 |
+| GEAF fold / GECS substitution | 0 / 0 | 0.1 / 0 | 0 / 0.1 | 0 / 0 |
+| operators executed / rewrite | 0.1 / 0 | 0.1 / 0 | 0.1 / 0 | 0 / 0 |
+| join input / output rows | 1.8 / 0.9 | 1.5 / 0.8 | 1.6 / 0.8 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.9 / 0.8 / 1.9 / 1.0 / 0.1 / 5.7 | 1.8 / 0.7 / 1.9 / 1.0 / 0.1 / 5.5 | 1.8 / 0.7 / 1.8 / 1.0 / 0.1 / 5.4 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.9 / 0.0391 / 0.475 / 0.475 | 1.8 / 0.0359 / 0.450 / 0.450 | 1.8 / 0.0344 / 0.450 / 0.450 | 0 / 0.0172 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 2.209 MB / 1.2 / 0.9 | 0.600 MB / 1.3 / 0.8 | 2.461 MB / 1.2 / 0.8 | 1.718 MB / 0 / 0 |
+| 平均 selectivity error / planner regret | 2.319 / 0 | 2.293 / 0 | 2.319 / 0 | N/A / N/A |
+| 物化请求 / 物化 cache hit / reuse rate | 1.9 / 0 / 0 | 1.8 / 0 / 0 | 1.8 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 时延 / embedding calls | 518.00 / 476.37 ms / 0.9 | 1.28 / 0 ms / 0 | 1.23 / 0 ms / 0 | 1.19 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 12.2 / 8.0 / 0.605 | 20.2 / 0 / 1.000 | 20.2 / 0 / 1.000 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+目标题 `574...` 将表示变化和语义失败分开了。默认方法错答 `Baldwin de Redvers, 6th Earl of Devon`；constraint GEAF 依靠 evidence fallback + generation 答对 `Isabel Marshal`；constant GECS 则在无 fallback、非空 joined rows 和 deterministic answer 的情况下错答 `Baldwin de Redvers, 7th Earl of Devon`。GECS 的 `S2 MotherOf(?mother, "Baldwin...")` 正确抽到 `Amice de Clare`，但 `S3 MotherOf(?grandmother, ?mother)` 把原始 Baldwin 锚回填成 grandmother。说明常量替换消除了已知字段 schema 冲突，却没有解决 predicate 参数的方向与角色约束。
+
+| 目标题指标 | SlotRAG | GEAF constraint | GECS constant | Hybrid |
+| --- | ---: | ---: | ---: | ---: |
+| EM / F1 | 0 / 0 | 1 / 1 | 0 / 0 | 1 / 1 |
+| Evidence Recall / NDCG@10 | 0.5 / 0.613 | 1.0 / 0.832 | 0.5 / 0.613 | 1.0 / 0.798 |
+| slots / joins / variables / complexity | 3 / 2 / 3 / 9 | 2 / 1 / 3 / 7 | 2 / 1 / 2 / 6 | 0 / 0 / 0 / 0 |
+| steps / retrieval / extraction / generation / total LLM | 3 / 3 / 4 / 0 / 4 | 2 / 2 / 3 / 1 / 4 | 2 / 2 / 3 / 0 / 3 | 0 / 1 / 0 / 1 / 1 |
+| prompt / completion / total tokens | 8,505 / 7,552 / 16,057 | 9,991 / 6,481 / 16,472 | 6,682 / 5,023 / 11,705 | 2,975 / 875 / 3,850 |
+| provider calls / wall | 10 / 117.90 s | 8 / 84.01 s | 7 / 65.44 s | 3 / 11.89 s |
+| structured failure / repair | 1 / 1 | 2 / 1 | 1 / 1 | 0 / 0 |
+| evidence fallback / deterministic / joined rows | 0 / 1 / 2 | 1 / 0 / 0 | 0 / 1 / 1 | 0 / 0 / 0 |
+| fold / substitution | 0 / 0 | 1 / 0 | 0 / 1 | 0 / 0 |
+
+GECS 目标结构成本确有局部改善：相对默认方法少 1 step、1 retrieval、1 LLM call、4,352 tokens，且相对 GEAF 少 1 LLM call、4,767 tokens并消除生成；但未达到“恰好 2 次抽取/总 LLM、0 结构失败”的门，更重要的是答案仍错。其余 9 题三种 SlotRAG 的 effective/source hash 完全相同、fold/substitution 均为 0、F1 与答案文本均 9/9 一致。对应执行波动完整保留：默认 / GEAF / GECS 的非目标 LLM calls 为 `21/19/19`，tokens 为 `40,388/42,345/41,462`，provider calls 为 `53/51/51`。
+
+全样本 SlotRAG 对 GECS 为 0 胜/10 平/0 负、均值差与 Cliff's delta 为 0、CI `[0,0]`、`p=p_holm=1`；GECS 没有质量增益。默认方法对 GEAF 仍为 0 胜/9 平/1 负、均值差 -0.1、CI `[-0.3,0]`、`p=0.7108, p_holm=1`；对 Hybrid 为相同胜负与区间，`p=0.7128, p_holm=1`。10 题诊断不支持显著性主张。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H43 四路同源完整性 | 通过 | 10 imported snapshots、30 replay，所有双哈希/provenance 检查为 0 错误，extra/max variants 为 2/3。 |
+| H44 表示隔离 | 通过 | 两候选都只改变 `574...`；GECS 目标 profile 精确为 2 slots、1 join、2 variables、complexity 6。 |
+| H45 无 fallback 的语义修复 | 失败 | 虽有非空 joined row、deterministic=1、fallback/generation=0，但错答 Baldwin 7th，目标 F1 仍为 0，总体 F1 仍为 0.9。 |
+| H46 目标因果效率 | 失败 | 40/40 ok 且 tokens 下降，但目标 extraction/total LLM=3 而非 2，结构失败/修复为 1/1。 |
+
+因此拒绝 schema17 **GECS** 作为保留方法，`slotrag-anchor-substitution` 继续默认关闭。保留的是安全常量替换、有效计划多变体审计和“无 fallback 的确定性错误”这一诊断证据；下一候选必须显式验证关系 predicate 的参数角色与当前问题实体，防止下游槽把已知锚复制到输出字段。机器判定见 `runs/vldb2027-diagnostic-v15/online-validation.json`，完整汇总见同运行的 `summaries/entity_anchor_substitution_gate/`。
+
+#### schema v18：role-projected grounded extraction 与 v16 预注册
+
+schema17 的错误不是 GECS 计划形状错误，而是 materializer 的抽取契约过浅。旧工具对 `MotherOf(?grandmother, ?mother)` 只声明两个无描述字符串字段；即使 `?mother=Amice de Clare` 已由上一跳传播，仍要求模型重复输出 `mother`。同时，它没有说明 `grandmother` 是有序关系的第一个参数，也不知道被替换的 Baldwin 是上游输入而不是下游答案。因此 schema18 增加默认关闭的 `slotrag-role-projected-substitution`，暂称 **Role-Projected Grounded Extraction (RPGE)**。
+
+RPGE 先执行与 GECS 完全相同的安全常量替换，并额外保留精确的上游锚值。只有替换实际发生时才启用角色契约；否则构造 materializer 的参数与默认方法一致，保证非目标题完全惰性。启用后的每个槽执行三项局部操作：
+
+```text
+1. bound-field projection
+   工具 schema 只请求尚未绑定的变量；已传播字段由执行器验证证据后合并，不再要求 LLM 回显。
+
+2. ordered-role annotation
+   每个未知字段携带完整签名和参数位置，例如：
+   grandmother = argument 1 of MotherOf(?grandmother, ?mother)。
+
+3. protected-anchor validation
+   被 GECS 替换的上游锚不得赋给下游未知字段；若发生则拒绝该行，并在一次修复提示中给出有序签名、已知绑定和受保护锚。
+```
+
+候选还要求所有新抽取值与传播值都在所声明的 source title/span 中落地。新增审计指标为 `role_projected_extraction_contracts`、`known_binding_fields_projected` 和 `protected_anchor_rejections`。保护规则只覆盖安全锚替换触发的链式查询；可能合法回到起始实体的环查询不在当前候选适用域，不能据此泛化。
+
+该设计形成两个干净对照：GECS 与 RPGE 的 effective plan hash 完全相同，二者差异只来自抽取契约；默认 / GEAF / GECS 则继续分离不变计划、constraint 表示与 constant 表示。v16 固定为 `runs/vldb2027-diagnostic-v16`、阶段 `entity_anchor_role_gate`，运行默认 SlotRAG、GEAF、GECS、RPGE 和 Hybrid，各 10 题，共 50 条最终记录。四种 SlotRAG 导入 v13 的同一源计划，预期 10 个 imported snapshots、40 个 replay。
+
+离线扫描 10 个快照仅在 `574...` 启用 RPGE，保护值精确为 `Baldwin De Redvers, 7Th Earl Of Devon`；RPGE 与 GECS 的 effective hash 均为 `96c5b9...e5a`，目标 profile 均为 2 slots、1 join、2 variables、complexity 6。目标预期执行 2 个 role contracts，第二槽投影 1 个已知 `mother` 字段；其余 9 题 RPGE 完全关闭，source/effective hash 相同。数据审计与样本哈希仍为 `a24ad3...67e` 和 `5bcc22...1a4`。
+
+全仓为 `144 passed, 1 skipped`；`compileall`、pilot YAML 与 `git diff --check` 通过，冻结源码指纹为 `01f720e3...bb89`。机器离线记录见 v16 `offline-validation.json` 与 `role-projection-scope-audit.json`。在线仍采用并发 2、允许 30 RPM、运行上限 20 RPM；worker 必须按互斥方法分区，禁止多个 worker 抢同一 method/question。
+
+```text
+H47（五路同源完整性）：10 imported snapshots、40 SlotRAG replay；所有 source/effective/result/provenance 错误为 0。目标的有效计划集合只能是 source、constraint、substitution 三种，GECS 与 RPGE 必须同 hash；extra/max variants 为 2/3。
+
+H48（RPGE 作用域与审计）：只在 574... 上 substitution=1 且 role contracts=2、known fields projected=1；保护值精确为问题锚。其余 9 题 RPGE 三项指标均为 0，source/effective hash 相同，GECS/RPGE 的 F1 与答案文本均逐题一致。
+
+H49（角色语义修复）：RPGE 在 574... 答 Isabel Marshal、F1=1，产生非空 joined rows，deterministic=1、evidence fallback=0、generation calls=0；最终 grandmother 不得等于受保护锚，S3 证据必须来自明确包含 Isabel Marshal 的 source。
+
+H50（受控效率与完整性）：50/50 final ok；RPGE 目标 steps/retrieval 均为 2，extraction/total LLM calls 不超过 3，结构失败/修复和 protected-anchor rejection 各不超过 1；total tokens 严格低于同次默认 SlotRAG 与 GEAF，且总体 F1 不低于默认方法。时延和非目标题随机成本完整报告但不作硬门。
+```
+
+H50 在在线前允许最多一次角色拒绝修复，因为 protected-anchor validation 的价值正是把“确定性错误行”变成可审计拒绝；若第一跳即正确则 rejection 可以为 0，但不得要求为了满足指标而人为触发。若 H49 失败，即使 token 更低也拒绝；若 H49 通过但 H50 失败，同样不保留。即使四项全部通过，也只进入 50 题调优，不作 VLDB 级有效性结论。
+
+#### schema v18 在线结果（v16）：语义通过，遥测门失败
+
+v16 在冻结指纹 `01f720...bb89` 下先离线导入 10 个计划，再以两个互斥 worker 执行五种方法。最终 50/50 schema18 final `ok`、50 immutable attempts、0 benchmark retry；Agnes 为 99 attempts / 95 successes / 4 internal retries，平均请求时延 16.36 秒，并发 2 估算 7.33 RPM。冻结审计为 10 imported valid snapshots、40 replay、所有哈希/provenance 错误为 0，extra/max effective variants 为 2/3。
+
+| v16 2Wiki role gate（10 题/方法） | SlotRAG | GEAF | GECS | RPGE | Hybrid |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 0.900 / 0.900 | 0.900 / 0.900 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall / NDCG@10 | 0.825 / 0.862 | 0.825 / 0.862 | 0.825 / 0.862 | 0.875 / 0.900 | 1.000 / 0.938 |
+| LLM / retrieval / embedding / reranker calls | 2.4 / 1.9 / 1.9 / 1.9 | 2.2 / 1.8 / 1.8 / 1.8 | 2.1 / 1.8 / 1.8 / 1.8 | 2.1 / 1.8 / 1.8 / 1.8 | 1.1 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 3,318 / 2,698 / 6,015 | 2,818 / 2,654 / 5,472 | 2,909 / 2,435 / 5,344 | 2,713 / 2,240 / 4,954 | 1,549 / 902 / 2,451 |
+| 抽取 / 生成 LLM calls | 2.2 / 0.1 | 2.1 / 0 | 2.1 / 0 | 2.0 / 0 | 0 / 1.0 |
+| 执行期 provider calls | 6.2 | 5.8 | 5.7 | 5.7 | 3.1 |
+| wall mean / P50 / P95 | 36.96 / 30.93 / 71.61 s | 34.43 / 35.30 / 53.33 s | 32.67 / 27.24 / 58.27 s | 36.97 / 38.18 / 54.40 s | 19.62 / 16.94 / 33.21 s |
+| 结构失败 / 修复 / evidence fallback / deterministic | 0.3 / 0.3 / 0 / 0.9 | 0.3 / 0.3 / 0 / 1.0 | 0.3 / 0.3 / 0 / 1.0 | 0.2 / 0.2 / 0 / 1.0 | 0 / 0 / 0 / 0 |
+| fold / substitution | 0 / 0 | 0.1 / 0 | 0 / 0.1 | 0 / 0.1 | 0 / 0 |
+| role contracts / projected fields / protected rejection（记录值） | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | **0 / 0 / 0** | 0 / 0 / 0 |
+| join input / output | 1.9 / 1.0 | 1.6 / 0.8 | 1.6 / 0.8 | 1.6 / 0.8 | 0 / 0 |
+| slots / joins / variables / complexity | 1.9 / 0.8 / 1.9 / 5.7 | 1.8 / 0.7 / 1.9 / 5.5 | 1.8 / 0.7 / 1.8 / 5.4 | 1.8 / 0.7 / 1.8 / 5.4 | 0 / 0 / 0 / 0 |
+| steps | 1.9 | 1.8 | 1.8 | 1.8 | 0 |
+
+完整 130+ 指标、时延分位数、索引/缓存、资源、分层与逐题数据仍保存在 v16 summary 目录。目标题上，默认 / GEAF / GECS 都错答 Baldwin 7th；RPGE 与 Hybrid 答对 Isabel Marshal。GECS 与 RPGE effective hash 相同，前者为 3 calls、11,667 tokens、1 次结构失败/修复，后者为 2 calls、7,109 tokens、0 失败/修复，且 S3 证据来自 `Amice de Clare#0`，joined row=1、deterministic=1、fallback/generation=0。RPGE tokens 同时低于本次 SlotRAG 的 20,224 和 GEAF 的 7,881。
+
+但是 RPGE final record 的 `role_projected_extraction_contracts / known_binding_fields_projected / protected_anchor_rejections` 为 `0/0/0`。代码审计确认 materializer 已执行角色契约，但 `AdaptiveExecutor.execute` 的显式指标合并列表遗漏了三项字段，导致它们没有进入最终 record。这不是可以事后回填的展示问题，而是 H48 所要求的可审计证据缺失。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H47 五路同源完整性 | 通过 | 10 imported、40 replay、双哈希与 provenance 全部无错误，variants=2/3。 |
+| H48 RPGE 作用域与审计 | **失败** | 目标记录值为 contracts/projected=`0/0`，不满足预注册 `2/1`；历史记录不修改。 |
+| H49 角色语义修复 | 通过 | Isabel Marshal、F1=1、joined/deterministic=1、无 fallback/generation，S3 证据正确。 |
+| H50 受控效率与完整性 | 通过 | 50/50 ok；目标 2 calls、0 repair、7,109 tokens，低于默认与 GEAF。 |
+
+因此 v16 不足以保留 RPGE，尽管语义与效率信号同时通过。下一步只修复 executor 的指标传播，增加 materializer→executor→record 集成测试并提升记录 schema；不修改 RPGE prompt、保护规则或 H49/H50 阈值。机器判定见 `runs/vldb2027-diagnostic-v16/online-validation.json`。
+
+#### schema v19：RPGE 遥测闭环与 v17 预注册
+
+schema19 只修复 `AdaptiveExecutor.execute` 的指标传播：把 materializer 已产生的 `role_projected_extraction_contracts`、`known_binding_fields_projected`、`protected_anchor_rejections` 纳入逐槽累计。新增集成测试从假 materializer 注入 `2/1/1` 并验证 executor 原样保留；runner 记录版本升为 19。RPGE 的计划变换、抽取 prompt、保护规则、答案出口和预算阈值均未修改，v16 的 50 条 schema18 记录也不回填。
+
+v17 固定为 `runs/vldb2027-diagnostic-v17`、阶段 `entity_anchor_role_telemetry_gate`，只运行默认 SlotRAG、GECS 与 RPGE，各 10 题，共 30 条最终记录。三路均导入 v13 的同一冻结计划；预期 10 个 imported snapshots、30 个 replay。这样同时保留无变换对照、同 effective-plan 的语义对照与同次成本基线，不重复运行与遥测闭环无关的 GEAF/Hybrid。
+
+公开数据审计哈希仍为 `a24ad382...67e`，2Wiki 样本与 v16 逐字节一致，哈希仍为 `5bcc229...1a4`。离线作用域仍只有 `574...` 启用 RPGE，GECS/RPGE 目标 effective hash 均为 `96c5b9...e5a`，保护锚为 `Baldwin De Redvers, 7Th Earl Of Devon`，计划 profile 为 2 slots、1 join、2 variables、complexity 6。全仓为 `145 passed, 1 skipped`，`compileall`、pilot YAML 和 `git diff --check` 通过；冻结源码指纹为 `ef9fb958...c96c`。机器记录见 v17 `offline-validation.json` 与 `role-projection-scope-audit.json`。
+
+```text
+H51（三路同源与 schema 完整性）：30/30 final ok 且全部为 schema19；10 imported snapshots、30 replay，所有 source/effective/result/provenance 检查为 0。只有目标题出现第二个 effective-plan variant，GECS 与 RPGE 必须同 hash。
+
+H52（遥测传播与作用域）：目标题 RPGE 必须记录 role contracts=2、known fields projected=1、protected-anchor rejection∈{0,1}；其余 9 个 RPGE 记录及全部默认/GECS 记录三项均为 0。拒绝次数允许为 0，因为正确首答不应被人为改坏以制造计数。
+
+H53（语义与成本复现）：RPGE 在 574... 答 Isabel Marshal、F1=1、joined rows>0、deterministic=1、fallback/generation=0，最终证据来自包含 Isabel Marshal 的 source；steps/retrieval=2、extraction/total LLM≤3，tokens 严格低于同次默认 SlotRAG 与 GECS。RPGE 总体 F1 不低于默认方法。
+```
+
+在线调度固定为两个互斥 worker：worker A 只跑默认方法 10 条，worker B 跑 GECS+RPGE 20 条；任务并发数为 2。服务许可上限记为 30 RPM，但运行硬上限按 20 RPM，若按观测时延估算将超过 20 RPM 则主动降速。任何失败只通过 immutable attempt 续跑，不覆盖旧 attempt，也不启动第三 worker。H51-H53 全部通过才把 RPGE 作为下一轮 50 题调优候选；本次仍不构成 VLDB 级结论。
+
+#### schema v19 在线结果（v17）：遥测闭环通过
+
+v17 最终得到 30/30 schema19 final `ok`，共保留 33 个 immutable attempts。首轮有 1 次默认方法空答案失败和 2 次 RPGE `provider_connect` 失败；第二次 doctor 三服务均为 HTTP 200 后，以单 worker 逐项生成 attempt 2，三条均恢复，原 attempt 1 未删除。冻结计划审计为 10 imported valid snapshots、30 replay，所有 source/effective/result/provenance 错误为 0；只有 `574...` 出现额外 effective variant，GECS 与 RPGE 的目标 hash 同为 `96c5b9...e5a`。
+
+| v17 2Wiki telemetry gate（10 题/方法） | SlotRAG | GECS | RPGE |
+| --- | ---: | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 0.900 / 0.900 | **1.000 / 1.000** |
+| Evidence Recall / NDCG@10 | 0.875 / 0.900 | 0.875 / 0.900 | 0.875 / 0.900 |
+| LLM / retrieval / embedding / reranker calls | 2.5 / 1.7 / 1.7 / 1.7 | 2.1 / 1.8 / 1.8 / 1.8 | **2.0 / 1.8 / 1.8 / 1.8** |
+| Prompt / completion / total tokens | 2,924 / 2,718 / 5,642 | 2,905 / 2,507 / 5,412 | **2,590 / 1,846 / 4,436** |
+| Extraction / generation LLM calls | 2.0 / 0.2 | 2.1 / 0 | **1.9 / 0** |
+| 执行期 provider calls | 5.9 | 5.7 | **5.6** |
+| wall mean / P50 / P95 | 35.82 / 26.46 / 66.83 s | 29.84 / 19.22 / 60.51 s | 30.22 / 25.90 / **50.87 s** |
+| 结构失败 / 修复 / evidence fallback / deterministic | 0.5 / 0.3 / 0.2 / 0.8 | 0.3 / 0.3 / 0 / 1.0 | **0.1 / 0.1 / 0 / 1.0** |
+| substitution / role contracts / projected / rejection | 0 / 0 / 0 / 0 | 0.1 / 0 / 0 / 0 | **0.1 / 0.2 / 0.1 / 0** |
+| join input / output | 1.4 / 0.7 | 1.6 / 0.8 | 1.6 / 0.8 |
+| slots / joins / variables / complexity | 1.9 / 0.8 / 1.9 / 5.7 | 1.8 / 0.7 / 1.8 / 5.4 | 1.8 / 0.7 / 1.8 / 5.4 |
+| steps | 1.7 | 1.8 | 1.8 |
+| index build mean / cache-hit rate | 237.39 ms / 0.605 | 260.67 ms / 0.645 | 1.26 ms / 1.000 |
+
+RPGE 的 aggregate role contracts/projected 为 `0.2/0.1`，恰好对应唯一目标题的 `2/1` 除以 10；protected rejection 为 0，说明本次两跳均首答正确而没有人为触发拒绝。其余 9 个 RPGE 记录和全部 20 个控制记录的三项 role 指标均为 0。RPGE 后运行而命中共享 embedding cache，因此 index build/cache 数字不作为方法优势；质量、抽取 token 和执行期 LLM 指标才用于本门判定。完整 130+ 指标、分层、逐题、失败 attempt、配对 bootstrap 与冻结计划审计保存在 v17 `summaries/entity_anchor_role_telemetry_gate/`。
+
+| `574...` 目标题 | SlotRAG | GECS | RPGE |
+| --- | ---: | ---: | ---: |
+| answer / F1 | evidence insufficient / 0 | Baldwin 7th / 0 | **Isabel Marshal / 1** |
+| Evidence Recall / NDCG@10 | 0.5 / 0.613 | 0.5 / 0.613 | **1.0 / 1.0** |
+| steps / retrieval / extraction / total LLM | 1 / 1 / 2 / 5 | 2 / 2 / 3 / 3 | **2 / 2 / 2 / 2** |
+| prompt / completion / total tokens | 6,023 / 5,833 / 11,856 | 6,592 / 4,651 / 11,243 | **4,591 / 2,300 / 6,891** |
+| provider calls / wall | 7 / 70.80 s | 7 / 51.92 s | **6 / 44.86 s** |
+| structured failure / repair | 2 / 1 | 1 / 1 | **0 / 0** |
+| fallback / generation / deterministic / joined rows | 1 / 1 / 0 / 0 | 0 / 0 / 1 / 1 | **0 / 0 / 1 / 1** |
+| role contracts / projected / protected rejection | 0 / 0 / 0 | 0 / 0 / 0 | **2 / 1 / 0** |
+
+RPGE 的第二条证据为 `Amice de Clare#0`，span 明确包含 “daughter of ... Isabel Marshal”；最终 grandmother 不等于受保护 Baldwin 锚。RPGE 相对同次默认方法少 3 个执行期 LLM calls、4,965 tokens，相对同 effective-plan 的 GECS 少 1 call、4,352 tokens，同时把目标题 F1 从 0 提升到 1。默认方法的最终记录来自 attempt 2；其 attempt 1 的空答案失败仍计入 failure report，不能把最终 30/30 ok 误写成无失败运行。
+
+实际在线窗口共记录 Agnes 77 attempts / 67 successes / 8 internal retries，平均 attempt 时延 14.39 秒；按首末 attempt 完成时间观测为 4.93 RPM，按并发 2 与平均时延反推为 8.34 RPM，均低于 20 RPM 运行硬上限和 30 RPM 服务许可。连接失败发生后续跑主动降为并发 1。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H51 三路同源与 schema 完整性 | **通过** | 30/30 final ok、全为 schema19；10 imported、30 replay，所有哈希/provenance 错误为 0，variants=1/2。 |
+| H52 遥测传播与作用域 | **通过** | 目标 RPGE 精确记录 `2/1/0`；其余 RPGE 与全部控制记录均为 `0/0/0`。 |
+| H53 语义与成本复现 | **通过** | Isabel Marshal、F1=1、正确 evidence、2 calls、6,891 tokens，低于同次 SlotRAG 与 GECS。 |
+
+默认 SlotRAG 对 RPGE 的配对结果为 0 胜/9 平/1 负，均值差 -0.1、Cliff's delta -0.1、CI `[-0.3,0]`、`p=0.7108, p_holm=1`；10 题仅支持因果诊断，不能主张统计显著。schema19 关闭了 v16 的遥测缺口，因此 RPGE 作为**默认关闭**候选进入预注册的 50 题调优阶段；保留结论不等于默认启用，更不等于达到 VLDB 2027 的最终有效性标准。机器判定见 v17 `online-validation.json`。
+
+#### schema v19：v18 随机 50 题自然作用域预注册
+
+v18 固定为 `runs/vldb2027-diagnostic-v18`、阶段 `entity_anchor_role_tune`。2Wiki train 的 seed-2027 分层样本为 50 题，哈希 `4f8f91f...d42c`，其中 bridge-comparison/comparison/compositional/inference 为 `11/15/22/2`。采样器的 50 题集合完整包含 v17 的 10 题，故本轮含 40 个新增问题，也含已知 `574...`；它是调优和自然作用域发现集，不是独立验证集，所有范围门必须同时报告“总触发”和“新增 40 题触发”。
+
+本轮先只获取 50 个默认 SlotRAG 共享计划，不执行检索与回答。计划按确定性 sample index mod 2 分给两个 worker，并发 2；许可 30 RPM、运行硬上限 20 RPM。每题只有一个 source snapshot，失败 attempt 保留，只有 doctor 通过后才续跑。计划全部冻结后，离线对每题同时运行 GECS 常量替换和 RPGE 带保护值替换，审计 source/effective hash、计划 profile、保护锚和触发作用域。
+
+为避免看到触发率后任意决定是否花费 150 条执行，本轮在计划调用前固定条件门：新增 40 题中至少 2 题触发、总触发至少 3 题，才运行默认/GECS/RPGE 三路各 50 条；若新增触发为 0–1，则在范围审计后停止，将“自然覆盖不足”作为结果，并构造单独标注的 relation-anchor stress set，不用大量惰性记录稀释已知目标题。
+
+```text
+H54（计划获取完整性）：50/50 source snapshots 有效；每题恰好一个 final snapshot，所有 input/plan hash、source method 与 compiler options 一致。失败与续跑只增加 immutable plan attempts，不覆盖历史。
+
+H55（自然作用域门）：activation 定义为安全常量替换返回至少一个精确 protected anchor。新增触发数≥2 且总触发数≥3 才通过执行门；非触发题的 GECS/RPGE effective hash 必须等于 source hash。
+
+H56（条件语义门，仅 H55 通过后）：非触发题 GECS/RPGE 的答案、F1 与 role metrics 必须逐题一致；触发题 RPGE F1 不低于 GECS，且所有确定性输出都有 grounded source。总体 RPGE F1 不低于默认方法。
+
+H57（条件效率门，仅 H55 通过后）：触发题 RPGE 平均 extraction/total LLM 与 tokens 不高于 GECS，结构失败/修复不增加；150/150 final ok，完整报告 bootstrap、effect size、时延、缓存与 immutable failures，但调优集不用于最终显著性结论。
+```
+
+离线全仓为 `145 passed, 1 skipped`，`compileall`、pilot YAML、`git diff --check` 通过；源码指纹为 `d1fba3fa...f436`，数据审计仍为 `a24ad382...67e`。机器预注册见 v18 `offline-validation.json`。在 H55 判定前不得启动三路执行。
+
 ---
 
 # 11. 关键消融

@@ -2,7 +2,15 @@ import pytest
 from pydantic import ValidationError
 
 from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
-from slotrag.planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer, apply_operators, extraction_tool
+from slotrag.planner import (
+    AdaptiveExecutor,
+    ExecutionOptions,
+    SlotCompiler,
+    SlotMaterializer,
+    apply_operators,
+    extraction_tool,
+    substitute_grounded_entity_anchor_with_values,
+)
 from slotrag.providers import ChatResult, ToolCall, Usage
 
 
@@ -126,6 +134,58 @@ def test_boolean_variable_type_constrains_extraction_tool_domain():
     assert untyped_answer == {"type": "string"}
 
 
+def test_role_projected_tool_requests_only_unknown_fields_and_describes_argument_role():
+    slot = Slot(
+        id="S3",
+        predicate="MotherOf",
+        arguments=["?grandmother", "?mother"],
+    )
+
+    tool = extraction_tool(
+        slot,
+        ["Amice de Clare#0"],
+        requested_fields={"grandmother"},
+        role_projected=True,
+    )
+
+    row_schema = tool["function"]["parameters"]["properties"]["rows"]["items"]
+    assert set(row_schema["properties"]) == {"grandmother", "source_id"}
+    assert set(row_schema["required"]) == {"grandmother", "source_id"}
+    description = row_schema["properties"]["grandmother"]["description"]
+    assert "argument 1" in description
+    assert "MotherOf(?grandmother, ?mother)" in description
+
+
+def test_anchor_substitution_exposes_exact_grounded_value_for_downstream_role_protection():
+    source = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "Person",
+                "arguments": ["Baldwin De Redvers", "7Th Earl Of Devon", "?baldwin"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?baldwin"]},
+            {"id": "S3", "predicate": "MotherOf", "arguments": ["?grandmother", "?mother"]},
+        ],
+        "joins": [
+            ["S1.baldwin", "S2.baldwin"],
+            ["S2.mother", "S3.mother"],
+        ],
+        "outputs": ["?grandmother"],
+    })
+
+    effective, values = substitute_grounded_entity_anchor_with_values(
+        source,
+        "Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+    )
+
+    assert values == ("Baldwin De Redvers, 7Th Earl Of Devon",)
+    assert effective.slots[0].arguments == [
+        "?mother",
+        "Baldwin De Redvers, 7Th Earl Of Devon",
+    ]
+
+
 class ComparisonMaterializer:
     def __init__(self):
         self.calls = []
@@ -201,6 +261,36 @@ def test_adaptive_executor_joins_and_propagates_bindings():
     assert result.order == ["S1", "S2"]
     assert materializer.calls[1][1] == {"person": "Ada"}
     assert result.metrics.extraction_llm_calls == 2
+
+
+def test_adaptive_executor_propagates_role_projection_metrics():
+    class RoleProjectionMaterializer:
+        def materialize(self, slot, _bindings):
+            return [
+                BindingRow(
+                    slot_id=slot.id,
+                    bindings={"answer": "Isabel Marshal"},
+                    source_id="Amice de Clare#0",
+                    source_span="Amice de Clare was the daughter of Isabel Marshal.",
+                    confidence=1,
+                )
+            ], RunMetrics(
+                role_projected_extraction_contracts=2,
+                known_binding_fields_projected=1,
+                protected_anchor_rejections=1,
+            )
+
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "MotherOf", "arguments": ["?answer", "Amice de Clare"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+
+    result = AdaptiveExecutor(RoleProjectionMaterializer()).execute(plan)
+
+    assert result.metrics.role_projected_extraction_contracts == 2
+    assert result.metrics.known_binding_fields_projected == 1
+    assert result.metrics.protected_anchor_rejections == 1
 
 
 def test_executor_materializes_each_distinct_binding_context():
@@ -1080,6 +1170,43 @@ def test_materializer_accepts_propagated_binding_grounded_by_document_title():
 
     assert [item.bindings for item in rows] == [{"person": "Erica Awano", "series": "Holy Avenger"}]
     assert metrics.grounding_rejections == 0
+
+
+def test_role_projected_materializer_rejects_copied_anchor_then_repairs_relation_role():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{
+                "grandmother": "Baldwin De Redvers, 7Th Earl Of Devon",
+                "source_id": "Amice de Clare#0",
+            }],
+            [{"grandmother": "Isabel Marshal", "source_id": "Amice de Clare#0"}],
+        ]),
+        StaticRetriever(Passage(
+            id="Amice de Clare#0",
+            doc_id="Amice de Clare",
+            text=(
+                "Amice de Clare was the daughter of Gilbert de Clare and Isabel Marshal. "
+                "Her grandson was Baldwin De Redvers, 7Th Earl Of Devon."
+            ),
+        )),
+        role_projected_extraction=True,
+        protected_anchor_values={"Baldwin De Redvers, 7Th Earl Of Devon"},
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S3", predicate="MotherOf", arguments=["?grandmother", "?mother"]),
+        {"mother": "Amice de Clare"},
+    )
+
+    assert [row.bindings for row in rows] == [{
+        "grandmother": "Isabel Marshal",
+        "mother": "Amice de Clare",
+    }]
+    assert metrics.role_projected_extraction_contracts == 1
+    assert metrics.known_binding_fields_projected == 1
+    assert metrics.protected_anchor_rejections == 1
+    assert metrics.structured_output_failures == 1
+    assert metrics.structured_output_repairs == 1
 
 
 def test_typed_boolean_materializer_emits_canonical_supported_rows():

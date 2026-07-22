@@ -119,16 +119,33 @@ def extraction_tool(
     source_ids: list[str] | None = None,
     *,
     typed_extraction_contracts: bool = False,
+    requested_fields: set[str] | None = None,
+    role_projected: bool = False,
 ) -> dict[str, Any]:
-    fields = sorted(slot.variables)
-    properties = {
-        field: (
+    selected = slot.variables if requested_fields is None else requested_fields
+    if not selected.issubset(slot.variables):
+        unknown = ", ".join(sorted(selected - slot.variables))
+        raise ValueError(f"requested extraction fields are not slot variables: {unknown}")
+    fields = sorted(selected)
+    signature = f"{slot.predicate}({', '.join(slot.arguments)})"
+    properties: dict[str, dict[str, Any]] = {}
+    for field in fields:
+        schema: dict[str, Any] = (
             {"type": "string", "enum": ["yes", "no", "unknown"]}
             if typed_extraction_contracts and slot.variable_types.get(field) == "boolean"
             else {"type": "string"}
         )
-        for field in fields
-    }
+        if role_projected:
+            position = next(
+                index
+                for index, argument in enumerate(slot.arguments, start=1)
+                if argument == f"?{field}"
+            )
+            schema["description"] = (
+                f"Value for ?{field}, ordered argument {position} of {signature}. "
+                "Extract only the entity that fills this exact relation role."
+            )
+        properties[field] = schema
     required = list(fields)
     if source_ids:
         properties["source_id"] = {"type": "string", "enum": source_ids}
@@ -269,11 +286,14 @@ def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan
     return plan, 0
 
 
-def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
-    """Fold a safe anchor, then replace its known consumer variable with a constant."""
+def substitute_grounded_entity_anchor_with_values(
+    plan: SlotPlan,
+    question: str,
+) -> tuple[SlotPlan, tuple[str, ...]]:
+    """Return a safely substituted plan and the exact upstream anchor values."""
     folded, count = fold_grounded_entity_anchor(plan, question)
     if not count:
-        return plan, 0
+        return plan, ()
 
     source_slots = {slot.id: slot for slot in plan.slots}
     payload = folded.model_dump(mode="python")
@@ -291,14 +311,20 @@ def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[Sl
         variable = introduced[0]
         constant = slot["constraints"].pop(variable)
         if not isinstance(constant, str) or not constant:
-            return plan, 0
+            return plan, ()
         slot["arguments"] = [constant if argument == f"?{variable}" else argument for argument in slot["arguments"]]
         slot.get("variable_types", {}).pop(variable, None)
         try:
-            return SlotPlan.model_validate(payload), 1
+            return SlotPlan.model_validate(payload), (constant,)
         except ValidationError:
-            return plan, 0
-    return plan, 0
+            return plan, ()
+    return plan, ()
+
+
+def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
+    """Fold a safe anchor, then replace its known consumer variable with a constant."""
+    effective, values = substitute_grounded_entity_anchor_with_values(plan, question)
+    return effective, len(values)
 
 
 class SlotCompiler:
@@ -892,11 +918,15 @@ class SlotMaterializer:
         *,
         max_passages: int = 5,
         typed_extraction_contracts: bool = False,
+        role_projected_extraction: bool = False,
+        protected_anchor_values: set[str] | None = None,
     ) -> None:
         self.client = client
         self.retriever = retriever
         self.max_passages = max_passages
         self.typed_extraction_contracts = typed_extraction_contracts
+        self.role_projected_extraction = role_projected_extraction
+        self.protected_anchor_values = set(protected_anchor_values or ())
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -927,16 +957,27 @@ class SlotMaterializer:
             if key.lstrip("?") in slot.variables
         }
         effective_bindings = {**constraint_bindings, **bindings}
+        requested_fields = (
+            slot.variables - effective_bindings.keys()
+            if self.role_projected_extraction
+            else slot.variables
+        )
         boolean_fields = {
             field
             for field, value_type in slot.variable_types.items()
-            if self.typed_extraction_contracts and value_type == "boolean"
+            if self.typed_extraction_contracts and value_type == "boolean" and field in requested_fields
         }
         metrics = RunMetrics(
             retrieval_calls=1,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
             typed_extraction_contracts=int(bool(boolean_fields and passages)),
+            role_projected_extraction_contracts=int(self.role_projected_extraction and bool(passages)),
+            known_binding_fields_projected=(
+                len(slot.variables & effective_bindings.keys())
+                if self.role_projected_extraction and passages
+                else 0
+            ),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -955,6 +996,16 @@ class SlotMaterializer:
                     + (
                         "Boolean fields must be exactly yes, no, or unknown. Use unknown when the passages are insufficient or conflicting. "
                         if boolean_fields else ""
+                    )
+                    + (
+                        f"Respect the ordered relation signature {slot.predicate}({', '.join(slot.arguments)}). "
+                        f"Only emit unresolved fields {sorted(requested_fields)}; known arguments are merged by the executor. "
+                        + (
+                            "These upstream anchors are protected inputs, never values for unresolved fields: "
+                            f"{json.dumps(sorted(self.protected_anchor_values), ensure_ascii=False)}. "
+                            if self.protected_anchor_values else ""
+                        )
+                        if self.role_projected_extraction else ""
                     )
                     + "Return an empty rows list when no passage supports the relation."
                 ),
@@ -976,6 +1027,8 @@ class SlotMaterializer:
                         slot,
                         list(by_source),
                         typed_extraction_contracts=bool(boolean_fields),
+                        requested_fields=set(requested_fields),
+                        role_projected=self.role_projected_extraction,
                     )],
                     tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
                     temperature=0.0,
@@ -1010,14 +1063,20 @@ class SlotMaterializer:
                     normalized = {
                         key.lstrip("?"): value.strip()
                         for key, value in row.items()
-                        if key.lstrip("?") in expected
+                        if key.lstrip("?") in requested_fields
                     }
                     source = by_source.get(source_id)
                     propagated = {key: value for key, value in bindings.items() if key in expected}
                     invalid_bindings = []
                     for key, value in propagated.items():
                         extracted_value = normalized.get(key)
-                        if extracted_value is None or self._normalized_text(extracted_value) != self._normalized_text(value):
+                        if (
+                            not self.role_projected_extraction
+                            and (
+                                extracted_value is None
+                                or self._normalized_text(extracted_value) != self._normalized_text(value)
+                            )
+                        ):
                             invalid_bindings.append(f"{key} does not match propagated value")
                         elif source is None or not self._binding_is_grounded(
                             value,
@@ -1026,6 +1085,23 @@ class SlotMaterializer:
                             source.passage.doc_id,
                         ):
                             invalid_bindings.append(f"{key} is not grounded in source {source_id}")
+                    if self.role_projected_extraction:
+                        for key, value in normalized.items():
+                            if any(
+                                self._normalized_text(value) == self._normalized_text(anchor)
+                                for anchor in self.protected_anchor_values
+                            ):
+                                invalid_bindings.append(f"{key} copies a protected upstream anchor")
+                                metrics = metrics.model_copy(update={
+                                    "protected_anchor_rejections": metrics.protected_anchor_rejections + 1,
+                                })
+                            elif source is None or not self._binding_is_grounded(
+                                value,
+                                source_id,
+                                source.passage.text,
+                                source.passage.doc_id,
+                            ):
+                                invalid_bindings.append(f"{key} is not grounded in source {source_id}")
                     if invalid_bindings:
                         rejection_reasons.extend(invalid_bindings)
                         metrics = metrics.model_copy(update={
@@ -1051,9 +1127,18 @@ class SlotMaterializer:
                     "structured_output_repairs": metrics.structured_output_repairs + (1 if attempt == 0 else 0),
                 })
                 if attempt == 0:
+                    role_context = (
+                        f" Ordered relation: {slot.predicate}({', '.join(slot.arguments)}). "
+                        f"Known bindings: {json.dumps(effective_bindings, ensure_ascii=False)}. "
+                        f"Protected upstream anchors: {json.dumps(sorted(self.protected_anchor_values), ensure_ascii=False)}."
+                        if self.role_projected_extraction else ""
+                    )
                     messages.append({
                         "role": "user",
-                        "content": f"Correct the extraction. Required relation fields: {sorted(slot.variables)}. Error: {exc}",
+                        "content": (
+                            f"Correct the extraction. Required unresolved relation fields: {sorted(requested_fields)}. "
+                            f"Error: {exc}.{role_context}"
+                        ),
                     })
         for normalized, source_id in extracted_rows:
             source = by_source[source_id]
@@ -1093,6 +1178,9 @@ class SlotMaterializer:
                 "typed_extraction_contracts": metrics.typed_extraction_contracts + current_metrics.typed_extraction_contracts,
                 "typed_extraction_answers": metrics.typed_extraction_answers + current_metrics.typed_extraction_answers,
                 "typed_extraction_abstentions": metrics.typed_extraction_abstentions + current_metrics.typed_extraction_abstentions,
+                "role_projected_extraction_contracts": metrics.role_projected_extraction_contracts + current_metrics.role_projected_extraction_contracts,
+                "known_binding_fields_projected": metrics.known_binding_fields_projected + current_metrics.known_binding_fields_projected,
+                "protected_anchor_rejections": metrics.protected_anchor_rejections + current_metrics.protected_anchor_rejections,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
             })
             for row in rows:
@@ -1490,6 +1578,9 @@ class AdaptiveExecutor:
                 "typed_extraction_contracts": metrics.typed_extraction_contracts + slot_metrics.typed_extraction_contracts,
                 "typed_extraction_answers": metrics.typed_extraction_answers + slot_metrics.typed_extraction_answers,
                 "typed_extraction_abstentions": metrics.typed_extraction_abstentions + slot_metrics.typed_extraction_abstentions,
+                "role_projected_extraction_contracts": metrics.role_projected_extraction_contracts + slot_metrics.role_projected_extraction_contracts,
+                "known_binding_fields_projected": metrics.known_binding_fields_projected + slot_metrics.known_binding_fields_projected,
+                "protected_anchor_rejections": metrics.protected_anchor_rejections + slot_metrics.protected_anchor_rejections,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

@@ -298,6 +298,9 @@ class RunMetrics(StrictModel):
     frozen_plan_replays: int = 0
     grounded_entity_anchor_folds: int = 0
     grounded_entity_anchor_substitutions: int = 0
+    role_projected_extraction_contracts: int = 0
+    known_binding_fields_projected: int = 0
+    protected_anchor_rejections: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0

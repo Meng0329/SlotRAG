@@ -21,6 +21,7 @@ from ..planner import (
     SlotMaterializer,
     fold_grounded_entity_anchor,
     substitute_grounded_entity_anchor,
+    substitute_grounded_entity_anchor_with_values,
 )
 from ..providers import AgnesClient, ChatResult
 from ..retrieval import HybridRetriever, tokenize
@@ -39,6 +40,7 @@ class MethodSpec:
     typed_extraction_contracts: bool = False
     grounded_entity_anchor_folding: bool = False
     grounded_entity_anchor_substitution: bool = False
+    role_projected_extraction: bool = False
     description: str = ""
 
 
@@ -60,6 +62,7 @@ ABLATION_METHODS = [
     "slotrag-typed-extraction",
     "slotrag-anchor-folding",
     "slotrag-anchor-substitution",
+    "slotrag-role-projected-substitution",
 ]
 
 
@@ -122,6 +125,12 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag-anchor-substitution",
         "slotrag",
         grounded_entity_anchor_substitution=True,
+    ),
+    "slotrag-role-projected-substitution": MethodSpec(
+        "slotrag-role-projected-substitution",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
     ),
 }
 
@@ -633,6 +642,7 @@ def _run_slotrag(
     max_retrieval_calls: int,
     frozen_plan: SlotPlan | None = None,
 ) -> ExecutionResult:
+    protected_anchor_values: set[str] = set()
     if frozen_plan is None:
         plan, compiler_metrics = compile_slotrag_plan(spec, dataset, question, client)
     else:
@@ -651,7 +661,12 @@ def _run_slotrag(
             "plan_complexity": effective_metrics.plan_complexity,
         })
     if spec.grounded_entity_anchor_substitution:
-        plan, anchor_substitutions = substitute_grounded_entity_anchor(plan, question.question)
+        if spec.role_projected_extraction:
+            plan, substituted_values = substitute_grounded_entity_anchor_with_values(plan, question.question)
+            anchor_substitutions = len(substituted_values)
+            protected_anchor_values.update(substituted_values)
+        else:
+            plan, anchor_substitutions = substitute_grounded_entity_anchor(plan, question.question)
         effective_metrics = _slot_plan_metrics(plan)
         compiler_metrics = compiler_metrics.model_copy(update={
             "grounded_entity_anchor_substitutions": anchor_substitutions,
@@ -669,12 +684,16 @@ def _run_slotrag(
             plan=plan,
             metrics=compiler_metrics,
         )
-    materializer = SlotMaterializer(
-        client,
-        retriever,
-        max_passages=config.execution.materialization_top_k,
-        typed_extraction_contracts=spec.typed_extraction_contracts,
-    )
+    materializer_options: dict[str, Any] = {
+        "max_passages": config.execution.materialization_top_k,
+        "typed_extraction_contracts": spec.typed_extraction_contracts,
+    }
+    if spec.role_projected_extraction and protected_anchor_values:
+        materializer_options.update({
+            "role_projected_extraction": True,
+            "protected_anchor_values": protected_anchor_values,
+        })
+    materializer = SlotMaterializer(client, retriever, **materializer_options)
     executor = AdaptiveExecutor(
         materializer,
         default_slot_cost=config.execution.default_slot_cost,

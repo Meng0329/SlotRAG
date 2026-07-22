@@ -306,6 +306,31 @@ def test_schema17_reports_anchor_substitutions_without_backfilling_schema16():
     assert legacy_summary["grounded_entity_anchor_substitutions"] is None
 
 
+def test_schema18_reports_role_projection_without_backfilling_schema17():
+    current = _record("slotrag-role-projected-substitution", "q1", 1.0)
+    current["schema_version"] = 18
+    current["result"]["metrics"] = RunMetrics(
+        role_projected_extraction_contracts=2,
+        known_binding_fields_projected=1,
+        protected_anchor_rejections=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-anchor-substitution", "q1", 1.0)
+    legacy["schema_version"] = 17
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-role-projected-substitution"
+    )
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag-anchor-substitution")
+
+    assert current_summary["role_projected_extraction_contracts"] == 2
+    assert current_summary["known_binding_fields_projected"] == 1
+    assert current_summary["protected_anchor_rejections"] == 1
+    assert legacy_summary["role_projected_extraction_contracts"] is None
+    assert legacy_summary["known_binding_fields_projected"] is None
+    assert legacy_summary["protected_anchor_rejections"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

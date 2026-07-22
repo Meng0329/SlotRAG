@@ -43,6 +43,7 @@ stages:
       - slotrag-typed-extraction
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
+      - slotrag-role-projected-substitution
   smoke:
     split: train
     sample_size: 2
@@ -70,6 +71,7 @@ stages:
       - slotrag-typed-extraction
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
+      - slotrag-role-projected-substitution
   diagnostic:
     split: train
     sample_size: 10
@@ -95,6 +97,23 @@ stages:
     methods: [slotrag, slotrag-anchor-folding, slotrag-anchor-substitution, hybrid]
     frozen_plan_source: slotrag
     frozen_plan_import_dir: runs/vldb2027-diagnostic-v13/plans/frozen_polar_contract_gate
+  entity_anchor_role_gate:
+    split: train
+    sample_size: 10
+    methods: [slotrag, slotrag-anchor-folding, slotrag-anchor-substitution, slotrag-role-projected-substitution, hybrid]
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/vldb2027-diagnostic-v13/plans/frozen_polar_contract_gate
+  entity_anchor_role_telemetry_gate:
+    split: train
+    sample_size: 10
+    methods: [slotrag, slotrag-anchor-substitution, slotrag-role-projected-substitution]
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/vldb2027-diagnostic-v13/plans/frozen_polar_contract_gate
+  entity_anchor_role_tune:
+    split: train
+    sample_size: 50
+    methods: [slotrag, slotrag-anchor-substitution, slotrag-role-projected-substitution]
+    frozen_plan_source: slotrag
   tune:
     split: train
     sample_size: 50
@@ -120,6 +139,7 @@ stages:
       - slotrag-typed-extraction
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
+      - slotrag-role-projected-substitution
   validation:
     split: train
     sample_size: 200

@@ -88,6 +88,9 @@ METRICS = [
     "frozen_plan_replays",
     "grounded_entity_anchor_folds",
     "grounded_entity_anchor_substitutions",
+    "role_projected_extraction_contracts",
+    "known_binding_fields_projected",
+    "protected_anchor_rejections",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -406,6 +409,14 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             metrics["grounded_entity_anchor_substitutions"] if schema_version >= 17 else None
         ),
     }
+    schema18_metrics = {
+        name: metrics[name] if schema_version >= 18 else None
+        for name in (
+            "role_projected_extraction_contracts",
+            "known_binding_fields_projected",
+            "protected_anchor_rejections",
+        )
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -472,6 +483,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema15_metrics,
         **schema16_metrics,
         **schema17_metrics,
+        **schema18_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -766,6 +778,9 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "frozen_plan_replays",
         "grounded_entity_anchor_folds",
         "grounded_entity_anchor_substitutions",
+        "role_projected_extraction_contracts",
+        "known_binding_fields_projected",
+        "protected_anchor_rejections",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
