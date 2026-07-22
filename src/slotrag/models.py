@@ -300,6 +300,7 @@ class RunMetrics(StrictModel):
     grounded_entity_anchor_substitutions: int = 0
     direct_grounded_anchor_projections: int = 0
     query_grounded_anchor_contexts: int = 0
+    query_anchor_plan_repairs: int = 0
     role_projected_extraction_contracts: int = 0
     known_binding_fields_projected: int = 0
     protected_anchor_rejections: int = 0
@@ -323,6 +324,7 @@ class RunMetrics(StrictModel):
     structured_output_failures: int = 0
     structured_output_repairs: int = 0
     grounding_rejections: int = 0
+    evidence_surface_grounding_repairs: int = 0
     local_plan_repairs: int = 0
     operator_rewrites: int = 0
     plan_fallbacks: int = 0

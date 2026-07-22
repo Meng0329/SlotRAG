@@ -472,6 +472,30 @@ def test_schema25_reports_query_anchor_context_without_backfilling_schema24():
     assert legacy_summary["query_grounded_anchor_contexts"] is None
 
 
+def test_schema26_reports_plan_and_surface_repairs_without_backfilling_schema25():
+    current = _record("slotrag-repaired-context-anchor-window-projection", "q1", 1.0)
+    current["schema_version"] = 26
+    current["result"]["metrics"] = RunMetrics(
+        query_anchor_plan_repairs=1,
+        evidence_surface_grounding_repairs=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-context-normalized-anchor-window-projection", "q1", 1.0)
+    legacy["schema_version"] = 25
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-repaired-context-anchor-window-projection"
+    )
+    legacy_summary = next(
+        row for row in rows if row["method"] == "slotrag-context-normalized-anchor-window-projection"
+    )
+
+    assert current_summary["query_anchor_plan_repairs"] == 1
+    assert current_summary["evidence_surface_grounding_repairs"] == 1
+    assert legacy_summary["query_anchor_plan_repairs"] is None
+    assert legacy_summary["evidence_surface_grounding_repairs"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

@@ -24,6 +24,7 @@ from ..planner import (
     substitute_grounded_entity_anchor,
     substitute_grounded_entity_anchor_with_values,
     query_grounded_anchor_values,
+    inject_query_grounded_anchor,
 )
 from ..providers import AgnesClient, ChatResult
 from ..retrieval import HybridRetriever, tokenize
@@ -50,6 +51,8 @@ class MethodSpec:
     anchor_centered_extraction: bool = False
     normalize_anchor_window_predicates: bool = False
     query_grounded_anchor_context: bool = False
+    query_anchor_plan_repair: bool = False
+    evidence_surface_grounding_repair: bool = False
     description: str = ""
 
 
@@ -77,6 +80,7 @@ ABLATION_METHODS = [
     "slotrag-anchor-window-projection",
     "slotrag-normalized-anchor-window-projection",
     "slotrag-context-normalized-anchor-window-projection",
+    "slotrag-repaired-context-anchor-window-projection",
     "slotrag-grounded-role-no-thinking",
     "slotrag-grounded-role-bound-signature",
     "slotrag-lean-grounded-role-projection",
@@ -190,6 +194,18 @@ METHODS: dict[str, MethodSpec] = {
         anchor_centered_extraction=True,
         normalize_anchor_window_predicates=True,
         query_grounded_anchor_context=True,
+    ),
+    "slotrag-repaired-context-anchor-window-projection": MethodSpec(
+        "slotrag-repaired-context-anchor-window-projection",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        anchor_centered_extraction=True,
+        normalize_anchor_window_predicates=True,
+        query_grounded_anchor_context=True,
+        query_anchor_plan_repair=True,
+        evidence_surface_grounding_repair=True,
     ),
     "slotrag-grounded-role-no-thinking": MethodSpec(
         "slotrag-grounded-role-no-thinking",
@@ -739,6 +755,19 @@ def _run_slotrag(
     else:
         plan = frozen_plan
         compiler_metrics = _slot_plan_metrics(plan, frozen_plan_replays=1)
+    if spec.query_anchor_plan_repair:
+        plan, plan_repairs, repair_anchor_values = inject_query_grounded_anchor(plan, question.question)
+        protected_anchor_values.update(repair_anchor_values)
+        effective_metrics = _slot_plan_metrics(plan)
+        compiler_metrics = compiler_metrics.model_copy(update={
+            "query_anchor_plan_repairs": plan_repairs,
+            "plan_slot_count": effective_metrics.plan_slot_count,
+            "plan_join_count": effective_metrics.plan_join_count,
+            "plan_variable_count": effective_metrics.plan_variable_count,
+            "plan_output_count": effective_metrics.plan_output_count,
+            "plan_operator_count": effective_metrics.plan_operator_count,
+            "plan_complexity": effective_metrics.plan_complexity,
+        })
     if spec.grounded_entity_anchor_folding:
         plan, anchor_folds = fold_grounded_entity_anchor(plan, question.question)
         effective_metrics = _slot_plan_metrics(plan)
@@ -806,6 +835,8 @@ def _run_slotrag(
             materializer_options["anchor_centered_extraction"] = True
         if spec.normalize_anchor_window_predicates:
             materializer_options["normalize_anchor_window_predicates"] = True
+        if spec.evidence_surface_grounding_repair:
+            materializer_options["evidence_surface_grounding_repair"] = True
     materializer = SlotMaterializer(client, retriever, **materializer_options)
     executor = AdaptiveExecutor(
         materializer,

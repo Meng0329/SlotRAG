@@ -10,6 +10,7 @@ from slotrag.planner import (
     apply_operators,
     direct_grounded_relation_anchor_values,
     extraction_tool,
+    inject_query_grounded_anchor,
     query_grounded_anchor_values,
     substitute_grounded_entity_anchor_with_values,
 )
@@ -1677,6 +1678,51 @@ def test_query_grounded_anchor_values_uses_constraints_and_title_phrases():
         under_specified,
         "What nationality is the director of film Claire (1924 Film)?",
     ) == ("Claire (1924 Film)",)
+
+
+def test_inject_query_grounded_anchor_repairs_one_under_specified_relation_root():
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "DirectorOf", "arguments": ["?director"]},
+            {"id": "S2", "predicate": "HasNationality", "arguments": ["?director", "?nationality"]},
+        ],
+        "joins": [["S1.director", "S2.director"]],
+        "outputs": ["?nationality"],
+    })
+
+    repaired, count, values = inject_query_grounded_anchor(
+        plan,
+        "What nationality is the director of film Claire (1924 Film)?",
+    )
+
+    assert count == 1
+    assert values == ("Claire (1924 Film)",)
+    assert repaired.slots[0].arguments == ["?director", "Claire (1924 Film)"]
+
+
+def test_evidence_surface_grounding_repair_uses_exact_source_word():
+    text = "Tom Cowan (born 31 October 1942) is an Australian filmmaker."
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{
+            "country": "Australia",
+            "source_id": "Tom Cowan (director)#0",
+        }]]),
+        StaticRetriever(Passage(id="Tom Cowan (director)#0", doc_id="Tom Cowan (director)", text=text)),
+        role_projected_extraction=True,
+        protected_anchor_values={"Journey Among Women"},
+        anchor_centered_extraction=True,
+        normalize_anchor_window_predicates=True,
+        evidence_surface_grounding_repair=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="CountryOfBirth", arguments=["?director", "?country"]),
+        {"director": "Tom Cowan"},
+    )
+
+    assert [row.bindings["country"] for row in rows] == ["Australian"]
+    assert metrics.evidence_surface_grounding_repairs == 1
+    assert metrics.grounding_rejections == 0
 
 
 def test_role_type_filter_rejects_explicit_gender_contradiction_without_retry():

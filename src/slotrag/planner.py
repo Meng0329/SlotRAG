@@ -470,6 +470,61 @@ def query_grounded_anchor_values(
     return tuple(values)
 
 
+def inject_query_grounded_anchor(
+    plan: SlotPlan,
+    question: str,
+) -> tuple[SlotPlan, int, tuple[str, ...]]:
+    """Add one question-grounded title only to one unambiguous relation root."""
+    values = query_grounded_anchor_values(plan, question)
+    if len(values) != 1:
+        return plan, 0, values
+    value = values[0]
+    normalized_value = SlotMaterializer._normalized_text(value)
+    existing_values = {
+        SlotMaterializer._normalized_text(candidate)
+        for slot in plan.slots
+        for candidate in [
+            *(argument for argument in slot.arguments if not argument.startswith("?")),
+            *(item for item in slot.constraints.values() if isinstance(item, str)),
+        ]
+    }
+    if normalized_value in existing_values:
+        return plan, 0, values
+
+    degrees = {slot.id: 0 for slot in plan.slots}
+    joined_fields = {slot.id: set() for slot in plan.slots}
+    for join in plan.joins:
+        degrees[join.left_slot] += 1
+        degrees[join.right_slot] += 1
+        joined_fields[join.left_slot].add(join.left_field)
+        joined_fields[join.right_slot].add(join.right_field)
+    outputs = {output.removeprefix("?") for output in plan.outputs}
+    candidates = []
+    for slot in plan.slots:
+        predicate = re.sub(r"[^a-z0-9]", "", slot.predicate.casefold())
+        variables = [argument.removeprefix("?") for argument in slot.arguments if argument.startswith("?")]
+        if (
+            predicate.endswith("of")
+            and len(variables) == 1
+            and degrees[slot.id] == 1
+            and variables[0] in joined_fields[slot.id]
+            and variables[0] not in outputs
+            and not slot.constraints
+            and all(argument.startswith("?") for argument in slot.arguments)
+        ):
+            candidates.append(slot.id)
+    if len(candidates) != 1:
+        return plan, 0, values
+
+    payload = plan.model_dump(mode="python")
+    target = next(slot for slot in payload["slots"] if slot["id"] == candidates[0])
+    target["arguments"].append(value)
+    try:
+        return SlotPlan.model_validate(payload), 1, values
+    except ValidationError:
+        return plan, 0, values
+
+
 class SlotCompiler:
     def __init__(self, client: AgnesClient) -> None:
         self.client = client
@@ -1068,6 +1123,7 @@ class SlotMaterializer:
         semantic_role_type_filter: bool = False,
         anchor_centered_extraction: bool = False,
         normalize_anchor_window_predicates: bool = False,
+        evidence_surface_grounding_repair: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1080,6 +1136,7 @@ class SlotMaterializer:
         self.semantic_role_type_filter = semantic_role_type_filter
         self.anchor_centered_extraction = anchor_centered_extraction
         self.normalize_anchor_window_predicates = normalize_anchor_window_predicates
+        self.evidence_surface_grounding_repair = evidence_surface_grounding_repair
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1156,6 +1213,21 @@ class SlotMaterializer:
     def _is_normalized_anchor_window_predicate(cls, slot: Slot) -> bool:
         predicate = cls._normalized_text(slot.predicate).replace(" ", "")
         return predicate in {"hasnationality", "countryofbirth", "fromcountry"}
+
+    @classmethod
+    def _evidence_surface_variant(cls, value: str, source_text: str) -> str | None:
+        needle = cls._normalized_text(value)
+        if len(needle) < 5 or " " in needle:
+            return None
+        for match in re.finditer(r"[A-Za-z][A-Za-z'-]*", source_text):
+            candidate = cls._normalized_text(match.group(0))
+            if (
+                candidate != needle
+                and abs(len(candidate) - len(needle)) <= 2
+                and (candidate.startswith(needle) or needle.startswith(candidate))
+            ):
+                return match.group(0)
+        return None
 
     @classmethod
     def _semantic_role_gender(cls, field: str) -> str | None:
@@ -1418,13 +1490,30 @@ class SlotMaterializer:
                                 metrics = metrics.model_copy(update={
                                     "protected_anchor_rejections": metrics.protected_anchor_rejections + 1,
                                 })
-                            elif source is None or not self._binding_is_grounded(
+                            elif source is None:
+                                invalid_bindings.append(f"{key} is not grounded in source {source_id}")
+                            elif not self._binding_is_grounded(
                                 value,
                                 source_id,
                                 source.passage.text,
                                 source.passage.doc_id,
                             ):
-                                invalid_bindings.append(f"{key} is not grounded in source {source_id}")
+                                repaired_value = (
+                                    self._evidence_surface_variant(value, source.passage.text)
+                                    if self.evidence_surface_grounding_repair
+                                    and key in {"country", "nationality", "citizenship"}
+                                    and self._uses_anchor_window(slot, normalize_predicates=True)
+                                    else None
+                                )
+                                if repaired_value is None:
+                                    invalid_bindings.append(f"{key} is not grounded in source {source_id}")
+                                else:
+                                    normalized[key] = repaired_value
+                                    metrics = metrics.model_copy(update={
+                                        "evidence_surface_grounding_repairs": (
+                                            metrics.evidence_surface_grounding_repairs + 1
+                                        ),
+                                    })
                     if invalid_bindings:
                         rejection_reasons.extend(invalid_bindings)
                         metrics = metrics.model_copy(update={
@@ -1522,6 +1611,7 @@ class SlotMaterializer:
                 "structured_output_failures": metrics.structured_output_failures + current_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + current_metrics.structured_output_repairs,
                 "grounding_rejections": metrics.grounding_rejections + current_metrics.grounding_rejections,
+                "evidence_surface_grounding_repairs": metrics.evidence_surface_grounding_repairs + current_metrics.evidence_surface_grounding_repairs,
                 "typed_extraction_contracts": metrics.typed_extraction_contracts + current_metrics.typed_extraction_contracts,
                 "typed_extraction_answers": metrics.typed_extraction_answers + current_metrics.typed_extraction_answers,
                 "typed_extraction_abstentions": metrics.typed_extraction_abstentions + current_metrics.typed_extraction_abstentions,
@@ -1937,6 +2027,7 @@ class AdaptiveExecutor:
                 "structured_output_failures": metrics.structured_output_failures + slot_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + slot_metrics.structured_output_repairs,
                 "grounding_rejections": metrics.grounding_rejections + slot_metrics.grounding_rejections,
+                "evidence_surface_grounding_repairs": metrics.evidence_surface_grounding_repairs + slot_metrics.evidence_surface_grounding_repairs,
                 "typed_extraction_contracts": metrics.typed_extraction_contracts + slot_metrics.typed_extraction_contracts,
                 "typed_extraction_answers": metrics.typed_extraction_answers + slot_metrics.typed_extraction_answers,
                 "typed_extraction_abstentions": metrics.typed_extraction_abstentions + slot_metrics.typed_extraction_abstentions,

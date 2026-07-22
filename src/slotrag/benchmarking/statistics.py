@@ -90,6 +90,8 @@ METRICS = [
     "grounded_entity_anchor_substitutions",
     "direct_grounded_anchor_projections",
     "query_grounded_anchor_contexts",
+    "query_anchor_plan_repairs",
+    "evidence_surface_grounding_repairs",
     "role_projected_extraction_contracts",
     "known_binding_fields_projected",
     "protected_anchor_rejections",
@@ -480,6 +482,13 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             metrics["query_grounded_anchor_contexts"] if schema_version >= 25 else None
         ),
     }
+    schema26_metrics = {
+        name: metrics[name] if schema_version >= 26 else None
+        for name in (
+            "query_anchor_plan_repairs",
+            "evidence_surface_grounding_repairs",
+        )
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -553,6 +562,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema23_metrics,
         **schema24_metrics,
         **schema25_metrics,
+        **schema26_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -863,6 +873,8 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "anchor_window_fallbacks",
         "anchor_window_predicate_normalizations",
         "query_grounded_anchor_contexts",
+        "query_anchor_plan_repairs",
+        "evidence_surface_grounding_repairs",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
