@@ -312,6 +312,93 @@ def test_slot_compiler_eliminates_redundant_grounded_anchor_slot():
     assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S2")]
 
 
+def test_grounded_entity_anchor_fold_propagates_question_constant_to_single_consumer():
+    raw = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "Person",
+                "arguments": ["Baldwin De Redvers", "7Th Earl Of Devon", "?baldwin"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?baldwin"]},
+            {"id": "S3", "predicate": "MotherOf", "arguments": ["?grandmother", "?mother"]},
+        ],
+        "joins": [
+            ["S1.baldwin", "S2.baldwin"],
+            ["S2.mother", "S3.mother"],
+        ],
+        "outputs": ["?grandmother"],
+    })
+
+    folded, count = SlotCompiler.fold_grounded_entity_anchor(
+        raw,
+        "Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+    )
+
+    assert count == 1
+    assert [slot.id for slot in folded.slots] == ["S2", "S3"]
+    assert folded.slots[0].constraints == {
+        "baldwin": "Baldwin De Redvers, 7Th Earl Of Devon",
+    }
+    assert [(join.left_slot, join.right_slot, join.left_field) for join in folded.joins] == [
+        ("S2", "S3", "mother"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("predicate", "anchor_arguments", "outputs"),
+    [
+        ("DirectorOf", ["American Daughter", "?director"], ["?father"]),
+        ("Person", ["Hallucinated Person", "?director"], ["?father"]),
+        ("Person", ["American Daughter", "?director"], ["?director"]),
+    ],
+)
+def test_grounded_entity_anchor_fold_rejects_relation_ungrounded_or_output_anchors(
+    predicate,
+    anchor_arguments,
+    outputs,
+):
+    raw = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": predicate, "arguments": anchor_arguments},
+            {"id": "S2", "predicate": "FatherOf", "arguments": ["?director", "?father"]},
+        ],
+        "joins": [["S1.director", "S2.director"]],
+        "outputs": outputs,
+    })
+
+    folded, count = SlotCompiler.fold_grounded_entity_anchor(
+        raw,
+        "Who is the father of the director of film American Daughter?",
+    )
+
+    assert folded == raw
+    assert count == 0
+
+
+def test_grounded_entity_anchor_fold_rejects_multiple_consumers():
+    raw = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S0", "predicate": "Person", "arguments": ["Michael Jordan", "?player"]},
+            {"id": "S1", "predicate": "Rebounds", "arguments": ["?player", "?rebounds"]},
+            {"id": "S2", "predicate": "Assists", "arguments": ["?player", "?assists"]},
+        ],
+        "joins": [
+            ["S0.player", "S1.player"],
+            ["S0.player", "S2.player"],
+        ],
+        "outputs": ["?rebounds", "?assists"],
+    })
+
+    folded, count = SlotCompiler.fold_grounded_entity_anchor(
+        raw,
+        "How many rebounds and assists did Michael Jordan average?",
+    )
+
+    assert folded == raw
+    assert count == 0
+
+
 def test_slot_compiler_rewrites_date_difference_predicate_to_typed_operator():
     plan_payload = {
         "slots": [

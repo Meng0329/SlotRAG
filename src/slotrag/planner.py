@@ -174,6 +174,101 @@ class ExecutionOptions(BaseModel):
     typed_operators: bool = True
 
 
+def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
+    """Fold one grounded identity leaf into its sole consumer constraint."""
+    anchor_predicates = {"person", "entity", "item", "place"}
+    payload = plan.model_dump(mode="python")
+    question_folded = question.casefold()
+
+    for anchor in payload["slots"]:
+        arguments = anchor["arguments"]
+        variables = [argument[1:] for argument in arguments if argument.startswith("?")]
+        constants = [argument for argument in arguments if not argument.startswith("?")]
+        if (
+            anchor["predicate"].casefold() not in anchor_predicates
+            or len(variables) != 1
+            or not constants
+            or anchor.get("constraints")
+            or anchor.get("variable_types")
+        ):
+            continue
+
+        variable = variables[0]
+        if f"?{variable}" in payload["outputs"]:
+            continue
+        operator_fields = {
+            field
+            for operator in payload.get("operators", [])
+            for field in [*operator.get("fields", []), operator.get("field"), operator.get("output")]
+            if field
+        }
+        if variable in operator_fields:
+            continue
+
+        consumers = [
+            slot
+            for slot in payload["slots"]
+            if slot["id"] != anchor["id"] and f"?{variable}" in slot["arguments"]
+        ]
+        touching_joins = [
+            join
+            for join in payload["joins"]
+            if anchor["id"] in {join["left_slot"], join["right_slot"]}
+        ]
+        if len(consumers) != 1 or len(touching_joins) != 1:
+            continue
+        consumer = consumers[0]
+        join = touching_joins[0]
+        other_slot = join["right_slot"] if join["left_slot"] == anchor["id"] else join["left_slot"]
+        if (
+            other_slot != consumer["id"]
+            or join["left_field"] != variable
+            or join["right_field"] != variable
+            or variable in consumer.get("constraints", {})
+        ):
+            continue
+
+        span_start: int | None = None
+        span_end: int | None = None
+        cursor = 0
+        grounded = True
+        for constant in constants:
+            normalized = constant.strip()
+            if not normalized:
+                grounded = False
+                break
+            start = question_folded.find(normalized.casefold(), cursor)
+            if start < 0 or (
+                span_end is not None
+                and re.fullmatch(r"[\W_]*", question[span_end:start], flags=re.UNICODE) is None
+            ):
+                grounded = False
+                break
+            span_start = start if span_start is None else span_start
+            span_end = start + len(normalized)
+            cursor = span_end
+        if not grounded or span_start is None or span_end is None:
+            continue
+
+        candidate = deepcopy(payload)
+        candidate["slots"] = [slot for slot in candidate["slots"] if slot["id"] != anchor["id"]]
+        candidate_consumer = next(slot for slot in candidate["slots"] if slot["id"] == consumer["id"])
+        candidate_consumer["constraints"] = {
+            **candidate_consumer.get("constraints", {}),
+            variable: question[span_start:span_end],
+        }
+        candidate["joins"] = [
+            item
+            for item in candidate["joins"]
+            if anchor["id"] not in {item["left_slot"], item["right_slot"]}
+        ]
+        try:
+            return SlotPlan.model_validate(candidate), 1
+        except ValidationError:
+            continue
+    return plan, 0
+
+
 class SlotCompiler:
     def __init__(self, client: AgnesClient) -> None:
         self.client = client
@@ -258,6 +353,10 @@ class SlotCompiler:
                     })
             return SlotPlan.model_validate(payload)
         return plan
+
+    @staticmethod
+    def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
+        return fold_grounded_entity_anchor(plan, question)
 
     @staticmethod
     def _repair_join_keys(payload: dict[str, Any]) -> dict[str, Any] | None:

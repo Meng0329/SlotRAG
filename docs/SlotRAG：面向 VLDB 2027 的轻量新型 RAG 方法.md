@@ -1246,6 +1246,97 @@ H35/H36 是协议验收，H37/H38 才是候选因果判定。任一哈希审计�
 
 离线 TDD 验证已完成：覆盖编译兼容配置拒绝、重放路径不构造编译器、单次共享编译、同哈希续跑、失败 attempt 恢复、过期输入拒绝、schema15 向后兼容和汇总审计。全仓为 `123 passed, 1 skipped`，Python `compileall`、pilot YAML 解析和 `git diff --check` 通过；冻结源码/配置/测试指纹为 `1ef387ec7d9d3836cbf6606bf094ff6abae752d9c52284a71034e0f8516d2044`。机器离线记录为 `runs/vldb2027-diagnostic-v13/offline-validation.json`；只有样本与数据审计哈希复现、三项服务 doctor 通过后才创建 v13 manifest。
 
+#### schema v15 在线结果（v13）
+
+`2026-07-22T14:57:49+08:00` 三项 service doctor 全部为 `HTTP 200`，随后在指纹 `1ef387...d2044`、数据审计 `a24ad3...67e` 和样本 `5bcc22...1a4` 下创建 v13 manifest。一次运行完成 30/30 条 schema15 最终记录，30 个执行 attempts、0 benchmark retry、0 final failed/empty/unsupported，30/30 都有证据金标。
+
+固定计划审计先于方法效果判定且全部通过：
+
+| schema15 协议审计 | 在线值 |
+| --- | ---: |
+| snapshot / valid / invalid | 10 / 10 / 0 |
+| plan attempts / failed plan attempts | 10 / 0 |
+| replay records / replay questions | 20 / 10 |
+| missing provenance / missing result plan | 0 / 0 |
+| plan hash mismatch / unknown snapshot hash / inconsistent pair | 0 / 0 / 0 |
+| 共享编译 LLM calls（total / mean） | 7 / 0.7 |
+| 共享编译 prompt / completion / total tokens | 10,037 / 11,843 / 21,880 |
+| 共享编译 token mean / P95 | 2,188 / 6,477 |
+| 共享编译时延 mean / P50 / P95 / P99 | 20.39 / 10.82 / 57.26 / 63.28 s |
+| 共享编译 provider attempts / retries | 7 / 0 |
+| 共享编译结构失败 / 修复 / fallback | 2 / 2 / 0 |
+| 共享 heuristic / typed / field / polar / direct templates | 5 / 1 / 1 / 4 / 0 |
+| 共享 slots / joins / complexity mean | 1.9 / 0.8 / 5.7 |
+
+下表中 SlotRAG 两列的主 calls/tokens/wall 是执行期因果口径，不含上表共享编译；`+共享编译` 行则是每个方法独立部署时加回一次编译的估计。Hybrid 本身为端到端口径。
+
+| v13 2Wiki frozen gate（10 题/方法） | SlotRAG | Typed candidate | Hybrid |
+| --- | ---: | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 0.900 / 0.900 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.825 / 1.000 | 0.725 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.825 / 0.825 | 0.450 / 0.725 / 0.725 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.380 / 0.190 | 1.000 / 0.340 / 0.170 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.862 | 0.784 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 2.1 / 2.0 / 974 | 2.1 / 2.1 / 1,260 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 9.2 / 6.1 / 9.5 / 6.2 | 8.2 / 5.9 / 8.5 / 6.0 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 2.3 / 1.9 / 1.9 / 1.9 | 2.4 / 1.7 / 1.7 / 1.7 | 1.0 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 2,766 / 2,014 / 4,780 | 2,876 / 2,421 / 5,297 | 1,549 / 879 / 2,429 |
+| 编译 / 抽取 / 生成 LLM calls | 0 / 2.0 / 0 | 0 / 2.0 / 0.1 | 0 / 0 / 1.0 |
+| 抽取 prompt / completion tokens | 2,766 / 2,014 | 2,701 / 2,217 | 0 / 0 |
+| 生成 prompt / completion tokens | 0 / 0 | 175 / 204 | 1,549 / 879 |
+| 执行期 provider calls | 6.1 | 5.8 | 3.0 |
+| +共享编译 LLM calls / tokens / provider calls | 3.0 / 6,968 / 6.8 | 3.1 / 7,485 / 6.5 | N/A |
+| 执行期 wall mean / P50 / P95 / P99 | 37.02 / 40.46 / 55.63 / 58.50 s | 46.86 / 38.00 / 108.81 / 120.64 s | 16.70 / 18.12 / 23.47 / 25.50 s |
+| +共享编译 wall mean / P95 | 57.41 / 101.27 s | 67.25 / 137.72 s | N/A |
+| Provider latency mean / P95 | 36.93 / 55.59 s | 46.77 / 108.66 s | 16.69 / 23.46 s |
+| 执行 / 物化 / 生成时延 | 37.02 / 37.02 / 0 s | 44.71 / 44.71 / 2.15 s | 0 / 0 / 16.33 s |
+| 内部 provider retry / benchmark retry | 0.3 / 0 | 0.3 / 0 | 0 / 0 |
+| 结构失败 / 修复 / grounding / local repair | 0.1 / 0.1 / 0 / 0 | 0.4 / 0.3 / 0 / 0 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0 / 1.0 | 0 / 0.1 / 0.9 | 0 / 0 / 0 |
+| polar / span normalization / reconciliation / row consensus | 0.4 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0.4 / 0 / 0 / 0 |
+| typed contract / answer / abstention / frozen replay | 0 / 0 / 0 / 1.0 | 0.4 / 0.4 / 0 / 1.0 | 0 / 0 / 0 / 0 |
+| operators executed / rewrite | 0.1 / 0 | 0.1 / 0 | 0 / 0 |
+| join input / output rows | 1.8 / 0.9 | 1.4 / 0.7 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.9 / 0.8 / 1.9 / 1.0 / 0.1 / 5.7 | 1.9 / 0.8 / 1.9 / 1.0 / 0.1 / 5.7 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.9 / 0.0359 / 0.475 / 0.475 | 1.7 / 0.0375 / 0.425 / 0.425 | 0 / 0.0156 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 1.104 MB / 1.2 / 0.9 | 0 / 0.9 / 0.7 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 2.319 / 0 | 2.470 / 0 | N/A / N/A |
+| 物化请求 / 物化 cache hit / reuse rate | 1.9 / 0 / 0 | 1.7 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 时延 / embedding calls | 420.68 / 343.47 ms / 1.0 | 1.36 / 0 ms / 0 | 1.34 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 11.2 / 9.0 / 0.555 | 20.2 / 0 / 1.000 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 和 DROP 专用指标在 2Wiki 上为 N/A。SlotRAG 先运行并承担冷语料索引，后两种方法复用热索引；在线 `wall_latency` 按既定协议排除索引构建，`with-index` 指标保留顺序影响。因此 H38 以成对 calls/tokens 和质量为主，延迟只完整报告。
+
+四个类型契约目标题的计划哈希 4/4 相同，双方答案均为 canonical `no`、EM/F1 均为 1；候选 contract=4、typed answer=4、abstention=0，默认方法三项均为 0，另外 6 题也没有误触发。
+
+| 4 个目标题合计 | SlotRAG | Typed candidate |
+| --- | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall | 0.688 | 0.438 |
+| extraction / generation / total LLM calls | 5 / 0 / 7 | 6 / 0 / 8 |
+| prompt / completion / total tokens | 5,849 / 7,057 / 12,906 | 7,285 / 8,827 / 16,112 |
+| retrieval / embedding / reranker calls | 4 / 4 / 4 | 4 / 4 / 4 |
+| provider calls | 15 | 16 |
+| structured failure / repair | 1 / 1 | 2 / 2 |
+| deterministic answers | 4 | 4 |
+| wall latency | 105.28 s | 121.55 s |
+
+候选相对默认方法的目标题 generation saving 为 0，LLM calls、tokens、provider calls、wall 分别增加 14.3%、24.8%、6.7%、15.5%，Evidence Recall 下降 36.4%。`49b5...` 和 `904a...` 上候选各多一次结构失败/修复；虽然契约覆盖稳定为 4/4，但没有成本收益。
+
+全样本两种 SlotRAG 逐题 F1 10/10 一致，bootstrap 为 0 胜/10 平/0 负、均值差/Cliff's delta=0、CI `[0,0]`、`p=p_holm=1`；文本答案只有 9/10 一致。唯一不同的 `574...` 两者都 F1=0：共享计划把问题已给定的人物拆成冗余 `Person(Baldwin De Redvers, 7Th Earl Of Devon, ?baldwin)` 身份槽，再连接两层 `MotherOf`。默认方法错答 `Baldwin de Redvers, 6th Earl of Devon`，候选因抽取随机性回答证据不足；Hybrid 答对 `Isabel Marshal`。这是一个共享的语义计划错误，不是类型契约处理效应。SlotRAG 对 Hybrid 为 0 胜/9 平/1 负、均值差 -0.1、Cliff's delta=-0.1、CI `[-0.3,0]`、`p=0.7128, p_holm=1`。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H35 计划同一性 | 通过 | 10 快照、20 重放，所有 provenance/内容/成对哈希检查均为 0 错误。 |
+| H36 成本隔离与恢复 | 通过 | 每题共享编译只保存一次，重放编译指标为 0，共享和加回成本均可查，0 失败 plan attempts。 |
+| H37 消融隔离 | 通过 | contract 严格 4 vs 0、非目标为 0；相同计划下全 10 题 F1 一致。 |
+| H38 候选保留门 | 失败 | 30/30 ok、4 目标题质量/覆盖通过；但两种 SlotRAG 总 F1=0.9，候选目标 calls/tokens 高于默认方法。 |
+
+schema15 协议保留，后续所有执行型消融必须使用它或等价的同计划机制。schema14 类型契约则再次明确拒绝：保持 `slotrag-typed-extraction` 显式实验方法且默认关闭，不得纳入论文贡献。机器判定见 `runs/vldb2027-diagnostic-v13/online-validation.json`，完整逐题、分层、bootstrap、失败分母和 130+ 指标见 `runs/vldb2027-diagnostic-v13/summaries/frozen_polar_contract_gate/`。下一候选应针对 `574...` 暴露的通用冗余实体锚定槽做语义计划修复，而不是再增加极性短语规则。
+
 ---
 
 # 11. 关键消融

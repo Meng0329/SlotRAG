@@ -274,6 +274,21 @@ def test_schema15_reports_frozen_plan_replays_without_backfilling_schema14():
     assert legacy_summary["frozen_plan_replays"] is None
 
 
+def test_schema16_reports_grounded_anchor_folds_without_backfilling_schema15():
+    current = _record("slotrag-anchor-folding", "q1", 1.0)
+    current["schema_version"] = 16
+    current["result"]["metrics"] = RunMetrics(grounded_entity_anchor_folds=1).model_dump(mode="json")
+    legacy = _record("slotrag", "q1", 1.0)
+    legacy["schema_version"] = 15
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag-anchor-folding")
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag")
+
+    assert current_summary["grounded_entity_anchor_folds"] == 1
+    assert legacy_summary["grounded_entity_anchor_folds"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

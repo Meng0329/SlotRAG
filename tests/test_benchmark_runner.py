@@ -266,6 +266,7 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
     records = [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "run" / "items" / "test").rglob("*.json")]
     assert {record["schema_version"] for record in records} == {15}
     assert len({record["plan_provenance"]["plan_sha256"] for record in records}) == 1
+    assert len({record["plan_provenance"]["effective_plan_sha256"] for record in records}) == 1
     assert {record["plan_provenance"]["source_method"] for record in records} == {"slotrag"}
     assert {record["plan_provenance"]["compiler_metrics"]["compilation_llm_calls"] for record in records} == {1}
     assert {record["result"]["metrics"]["llm_calls"] for record in records} == {0}
@@ -325,6 +326,69 @@ def test_frozen_plan_attempts_are_immutable_and_stale_inputs_are_rejected(tmp_pa
     loaded, _ = runner._load_or_create_frozen_plan("test", "hotpotqa", question, "slotrag")
     assert loaded == plan
     assert len(compile_calls) == 2
+
+
+def test_frozen_plan_stage_can_import_verified_snapshots_without_compiling(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    source_suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"source": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag"],
+            frozen_plan_source="slotrag",
+        )},
+    )
+    source_runner = BenchmarkRunner(source_suite, _app_config(), tmp_path / "source-run")
+    question = QuestionRecord(
+        id="q1",
+        question="What is named Alpha?",
+        passages=[Passage(id="p1", doc_id="d1", text="Alpha is the answer.")],
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.compile_slotrag_plan",
+        lambda *_args: (plan, RunMetrics(compilation_llm_calls=1)),
+    )
+    source_runner._load_or_create_frozen_plan("source", "hotpotqa", question, "slotrag")
+
+    import_dir = tmp_path / "source-run" / "plans" / "source"
+    imported_suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"imported": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag", "slotrag-anchor-folding"],
+            frozen_plan_source="slotrag",
+            frozen_plan_import_dir=import_dir,
+        )},
+    )
+    imported_runner = BenchmarkRunner(imported_suite, _app_config(), tmp_path / "imported-run")
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.compile_slotrag_plan",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("verified import must not compile")),
+    )
+
+    imported_plan, provenance = imported_runner._load_or_create_frozen_plan(
+        "imported",
+        "hotpotqa",
+        question,
+        "slotrag",
+    )
+
+    assert imported_plan == plan
+    assert provenance["preparation_mode"] == "imported"
+    assert provenance["imported_from"].endswith("plans/source/hotpotqa/q1-6ca202c88e54.json")
+    assert len(list((tmp_path / "imported-run" / "plans" / "imported").rglob("*.json"))) == 1
+    assert len(list((tmp_path / "imported-run" / "plan_attempts" / "imported").rglob("attempt-*.json"))) == 1
 
     changed = question.model_copy(update={"question": "What is named Beta?"})
     with pytest.raises(ValueError, match="input hash"):

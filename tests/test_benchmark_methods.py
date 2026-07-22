@@ -255,6 +255,95 @@ def test_slotrag_replays_frozen_plan_without_calling_compiler(monkeypatch):
     assert result.metrics.plan_slot_count == 1
 
 
+def test_anchor_folding_candidate_derives_effective_plan_from_same_frozen_source(monkeypatch):
+    raw_plan = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "Person",
+                "arguments": ["Baldwin De Redvers", "7Th Earl Of Devon", "?baldwin"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?baldwin"]},
+            {"id": "S3", "predicate": "MotherOf", "arguments": ["?grandmother", "?mother"]},
+        ],
+        "joins": [
+            ["S1.baldwin", "S2.baldwin"],
+            ["S2.mother", "S3.mother"],
+        ],
+        "outputs": ["?grandmother"],
+    })
+    executed_plans = []
+
+    class Compiler:
+        def __init__(self, _client):
+            raise AssertionError("candidate must transform the frozen source rather than recompile")
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, plan, *, strategy):
+            executed_plans.append(plan)
+            return ExecutionResult(
+                rows=[{"grandmother": "Isabel Marshal"}],
+                evidence=[EvidenceRecord(
+                    source_id="p1",
+                    source_span="Isabel Marshal was the maternal grandmother.",
+                    slot_id=plan.slots[-1].id,
+                    bindings={"grandmother": "Isabel Marshal"},
+                )],
+                order=[slot.id for slot in plan.slots],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    question = QuestionRecord(
+        id="q",
+        question="Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+    )
+
+    base = methods._run_slotrag(
+        methods.METHODS["slotrag"],
+        "2wikimultihop",
+        question,
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=raw_plan,
+    )
+    candidate = methods._run_slotrag(
+        methods.METHODS["slotrag-anchor-folding"],
+        "2wikimultihop",
+        question,
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=raw_plan,
+    )
+
+    assert executed_plans[0] == raw_plan
+    assert [slot.id for slot in executed_plans[1].slots] == ["S2", "S3"]
+    assert base.metrics.grounded_entity_anchor_folds == 0
+    assert candidate.metrics.grounded_entity_anchor_folds == 1
+    assert base.metrics.plan_slot_count == 3
+    assert candidate.metrics.plan_slot_count == 2
+    assert candidate.metrics.plan_join_count == 1
+    assert candidate.answer == "Isabel Marshal"
+
+
 def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

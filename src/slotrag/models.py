@@ -296,6 +296,7 @@ class RunMetrics(StrictModel):
     typed_extraction_answers: int = 0
     typed_extraction_abstentions: int = 0
     frozen_plan_replays: int = 0
+    grounded_entity_anchor_folds: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
