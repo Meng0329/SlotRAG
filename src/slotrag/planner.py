@@ -1013,6 +1013,7 @@ class SlotMaterializer:
         bound_role_signatures: bool = False,
         semantic_role_type_filter: bool = False,
         anchor_centered_extraction: bool = False,
+        normalize_anchor_window_predicates: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1024,6 +1025,7 @@ class SlotMaterializer:
         self.bound_role_signatures = bound_role_signatures
         self.semantic_role_type_filter = semantic_role_type_filter
         self.anchor_centered_extraction = anchor_centered_extraction
+        self.normalize_anchor_window_predicates = normalize_anchor_window_predicates
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1080,14 +1082,26 @@ class SlotMaterializer:
         return " ".join(sentences[start:end])
 
     @classmethod
-    def _uses_anchor_window(cls, slot: Slot) -> bool:
+    def _uses_anchor_window(cls, slot: Slot, *, normalize_predicates: bool = False) -> bool:
         predicate = cls._normalized_text(slot.predicate).replace(" ", "")
-        return predicate in {
+        exact_predicates = {
             "countryof",
             "countryoforigin",
             "countryofcitizenship",
             "nationality",
         }
+        if predicate in exact_predicates:
+            return True
+        return normalize_predicates and predicate in {
+            "hasnationality",
+            "countryofbirth",
+            "fromcountry",
+        }
+
+    @classmethod
+    def _is_normalized_anchor_window_predicate(cls, slot: Slot) -> bool:
+        predicate = cls._normalized_text(slot.predicate).replace(" ", "")
+        return predicate in {"hasnationality", "countryofbirth", "fromcountry"}
 
     @classmethod
     def _semantic_role_gender(cls, field: str) -> str | None:
@@ -1144,9 +1158,17 @@ class SlotMaterializer:
         passages = retrieved_passages
         anchor_window_contract = bool(
             self.anchor_centered_extraction
-            and self._uses_anchor_window(slot)
+            and self._uses_anchor_window(
+                slot,
+                normalize_predicates=self.normalize_anchor_window_predicates,
+            )
             and retrieved_passages
             and (effective_bindings or self.protected_anchor_values)
+        )
+        anchor_window_predicate_normalization = bool(
+            anchor_window_contract
+            and self.normalize_anchor_window_predicates
+            and self._is_normalized_anchor_window_predicate(slot)
         )
         anchor_window_fallback = False
         anchor_window_input_chars = 0
@@ -1212,6 +1234,7 @@ class SlotMaterializer:
             anchor_window_input_chars=anchor_window_input_chars,
             anchor_window_output_chars=anchor_window_output_chars,
             anchor_window_fallbacks=int(anchor_window_fallback),
+            anchor_window_predicate_normalizations=int(anchor_window_predicate_normalization),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -1463,6 +1486,7 @@ class SlotMaterializer:
                 "anchor_window_input_chars": metrics.anchor_window_input_chars + current_metrics.anchor_window_input_chars,
                 "anchor_window_output_chars": metrics.anchor_window_output_chars + current_metrics.anchor_window_output_chars,
                 "anchor_window_fallbacks": metrics.anchor_window_fallbacks + current_metrics.anchor_window_fallbacks,
+                "anchor_window_predicate_normalizations": metrics.anchor_window_predicate_normalizations + current_metrics.anchor_window_predicate_normalizations,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + current_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + current_metrics.extraction_validation_errors,
@@ -1877,6 +1901,7 @@ class AdaptiveExecutor:
                 "anchor_window_input_chars": metrics.anchor_window_input_chars + slot_metrics.anchor_window_input_chars,
                 "anchor_window_output_chars": metrics.anchor_window_output_chars + slot_metrics.anchor_window_output_chars,
                 "anchor_window_fallbacks": metrics.anchor_window_fallbacks + slot_metrics.anchor_window_fallbacks,
+                "anchor_window_predicate_normalizations": metrics.anchor_window_predicate_normalizations + slot_metrics.anchor_window_predicate_normalizations,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

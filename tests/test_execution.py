@@ -1614,6 +1614,37 @@ def test_anchor_window_is_inert_for_unregistered_predicates():
     assert metrics.anchor_window_output_chars == 0
 
 
+@pytest.mark.parametrize("predicate", ["HasNationality", "CountryOfBirth", "FromCountry"])
+def test_normalized_anchor_window_accepts_closed_country_nationality_aliases(predicate):
+    text = (
+        "Washington Phillips was an American singer and instrumentalist. "
+        "He recorded gospel blues in the 1920s."
+    )
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"nationality": "American", "source_id": "Washington Phillips#0"}]]),
+        StaticRetriever(Passage(id="Washington Phillips#0", doc_id="Washington Phillips", text=text)),
+        role_projected_extraction=True,
+        anchor_centered_extraction=True,
+        normalize_anchor_window_predicates=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate=predicate, arguments=["?performer", "?nationality"]),
+        {"performer": "Washington Phillips"},
+    )
+
+    assert [row.bindings["nationality"] for row in rows] == ["American"]
+    assert metrics.anchor_window_contracts == 1
+    assert metrics.anchor_window_predicate_normalizations == 1
+
+
+@pytest.mark.parametrize("predicate", ["CountryMusicAwards", "HasCountryClub", "CountryPopulation"])
+def test_normalized_anchor_window_rejects_unrelated_country_substrings(predicate):
+    slot = Slot(id="S2", predicate=predicate, arguments=["?entity", "?value"])
+
+    assert SlotMaterializer._uses_anchor_window(slot, normalize_predicates=True) is False
+
+
 def test_role_type_filter_rejects_explicit_gender_contradiction_without_retry():
     materializer = SlotMaterializer(
         SequenceExtractionClient([[

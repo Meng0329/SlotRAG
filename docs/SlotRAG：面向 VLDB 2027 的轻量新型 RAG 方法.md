@@ -1957,6 +1957,16 @@ ACEW 作用域精确命中 `254.../CountryOf` 与 `c520.../CountryOfOrigin` 两�
 
 训练门必须报告 paired bootstrap、效应量、Holm 校正以及逐题 win/tie/loss，但不以训练集显著性作硬门。只有 H74-H79 全部通过，才授权单独冻结 200 题 held-out；若观察本门后修改架构，必须换一组不重叠训练门，不能在同一 50 题上重新宣称通过。机器预注册与交集审计见 v23 `offline-validation.json`、`historical-sample-overlap-audit.json`。
 
+#### v23 提前停止：计划谓词漂移使 H75 不可达
+
+source phase 先完成 50 个默认 SlotRAG 计划与执行：plan/plan-attempt/final/execution-attempt=`50/50/50/50`，全部 snapshot 与 final 为 `ok`，final 均为 schema23/attempt1，benchmark retry=0；唯一一次 provider 内部 retry 同时计入共享编译成本与限流配额。frozen-plan 审计的 missing provenance/result/effective hash、hash mismatch、unknown snapshot、inconsistent pair 与 effective variant 均为 0。source execution-only 的 EM/F1=`0.6200/0.6834`，Evidence Recall/MRR/nDCG@10=`0.7950/0.8723/0.7910`，calls/provider calls/tokens=`2.08/5.32/2709.42`，wall mean/p50/p95=`25.79/22.46/56.93s`；完整列和分层结果保存在 v23 summaries。
+
+在启动三路 replay 前对 75 个冻结槽做必要条件审计，schema23 精确注册的 `CountryOf/CountryOfOrigin/CountryOfCitizenship/Nationality` 出现 **0 次**，因此旧 ACEW 在 50 题上必然完全惰性，H75 的“至少两题激活”已不可达。按预注册的不可变门槛执行 futility stop：不修改 H75，不运行无法改变计划谓词的 150 条 GECS/GRPE/ACEW replay，也不以随机 LLM 差异制造伪组件效果。H75 判失败，H74/H79 因提前停止记为未完成，H76-H78 不评估，200 题 held-out 不授权。
+
+该失败揭示的不是样本中没有国籍关系，而是 **compiler predicate vocabulary drift**。50 个计划中实际有 7 个语义对应 country/nationality 的二跳槽，编译为 `CountryOfBirth×3`、`FromCountry×1`、`HasNationality×3`；其原始 2Wiki evidence relation 七题全部为 `country of citizenship`。source 在这七题只答对 2 题，并出现三个明确的 country/demonym 错误：`United States→American` 两题、`Australia→Australian` 一题。另有 `American→America` 属于 gold 表面别名问题，ACEW 不能自行定义评分别名；`Danish` 题的第一槽遗漏电影约束并检索错导演，局部第二槽也不能修复上游锚点。
+
+因此下一架构组件限定为 **Predicate-Family Normalization for ACEW**：把语义明确的 country/nationality 计划别名映射到同一局部窗口作用域，同时保留 schema23 exact-registry ACEW 作消融。不得使用任意 `country` 子串扩张，不得声称解决上游检索或 gold alias。先在这 7 个已观察训练别名题做新编号诊断；若通过，再换另一组不重叠样本检验泛化。机器判定见 v23 `predicate-scope-audit.json` 与 `early-stop-validation.json`。
+
 ---
 
 # 11. 关键消融

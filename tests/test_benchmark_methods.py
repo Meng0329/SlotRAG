@@ -799,6 +799,68 @@ def test_anchor_window_projection_routes_only_inside_direct_anchor_scope(monkeyp
     assert result.answer == "American"
 
 
+def test_normalized_anchor_window_projection_enables_predicate_family_mapping(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "PerformerOf", "arguments": ["Lift Him Up That's All", "?performer"]},
+            {"id": "S2", "predicate": "FromCountry", "arguments": ["?performer", "?country"]},
+        ],
+        "joins": [["S1.performer", "S2.performer"]],
+        "outputs": ["?country"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, effective, *, strategy):
+            return ExecutionResult(rows=[{"country": "American"}], order=[slot.id for slot in effective.slots])
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-normalized-anchor-window-projection"],
+        "2wikimultihop",
+        QuestionRecord(
+            id="q",
+            question="Which country is the performer of Lift Him Up That's All from?",
+        ),
+        object(),
+        object(),
+        config,
+        seed=2028,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=plan,
+    )
+
+    assert materializer_options == [{
+        "max_passages": 5,
+        "typed_extraction_contracts": False,
+        "role_projected_extraction": True,
+        "protected_anchor_values": {"Lift Him Up That's All"},
+        "anchor_centered_extraction": True,
+        "normalize_anchor_window_predicates": True,
+    }]
+    assert result.answer == "American"
+
+
 def test_grounded_role_projection_prefers_substitution_activation(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [

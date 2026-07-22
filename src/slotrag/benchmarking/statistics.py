@@ -105,6 +105,7 @@ METRICS = [
     "anchor_window_output_chars",
     "anchor_window_char_reduction_rate",
     "anchor_window_fallbacks",
+    "anchor_window_predicate_normalizations",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -468,6 +469,11 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         if schema_version >= 23 and metrics["anchor_window_input_chars"]
         else None
     )
+    schema24_metrics = {
+        "anchor_window_predicate_normalizations": (
+            metrics["anchor_window_predicate_normalizations"] if schema_version >= 24 else None
+        ),
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -539,6 +545,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema21_metrics,
         **schema22_metrics,
         **schema23_metrics,
+        **schema24_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -847,6 +854,7 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "anchor_window_output_chars",
         "anchor_window_char_reduction_rate",
         "anchor_window_fallbacks",
+        "anchor_window_predicate_normalizations",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",

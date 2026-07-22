@@ -190,6 +190,7 @@ stages:
       - slotrag-role-projected-substitution
       - slotrag-grounded-role-projection
       - slotrag-anchor-window-projection
+      - slotrag-normalized-anchor-window-projection
       - slotrag-grounded-role-type-filter
       - slotrag-grounded-role-no-thinking
       - slotrag-grounded-role-bound-signature

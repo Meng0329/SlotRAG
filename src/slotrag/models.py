@@ -314,6 +314,7 @@ class RunMetrics(StrictModel):
     anchor_window_input_chars: int = 0
     anchor_window_output_chars: int = 0
     anchor_window_fallbacks: int = 0
+    anchor_window_predicate_normalizations: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0

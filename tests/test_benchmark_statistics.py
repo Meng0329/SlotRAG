@@ -435,6 +435,26 @@ def test_schema23_reports_anchor_windows_without_backfilling_schema22():
     assert legacy_summary["anchor_window_char_reduction_rate"] is None
 
 
+def test_schema24_reports_predicate_normalizations_without_backfilling_schema23():
+    current = _record("slotrag-normalized-anchor-window-projection", "q1", 1.0)
+    current["schema_version"] = 24
+    current["result"]["metrics"] = RunMetrics(
+        anchor_window_contracts=1,
+        anchor_window_predicate_normalizations=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-anchor-window-projection", "q1", 1.0)
+    legacy["schema_version"] = 23
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-normalized-anchor-window-projection"
+    )
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag-anchor-window-projection")
+
+    assert current_summary["anchor_window_predicate_normalizations"] == 1
+    assert legacy_summary["anchor_window_predicate_normalizations"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
