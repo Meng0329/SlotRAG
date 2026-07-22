@@ -1,0 +1,21 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - 2wikimultihop
+seed: 2028
+random_seeds: [2028, 2029, 2030, 2031, 2032]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  anchor_window_training_gate:
+    split: train
+    sample_size: 50
+    methods:
+      - slotrag
+      - slotrag-anchor-substitution
+      - slotrag-grounded-role-projection
+      - slotrag-anchor-window-projection
+    frozen_plan_source: slotrag

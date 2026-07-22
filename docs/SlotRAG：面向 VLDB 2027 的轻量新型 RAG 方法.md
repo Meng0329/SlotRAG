@@ -1903,6 +1903,60 @@ H73（六题联合门）：ACEW 6/6 final ok，F1 至少 0.8333 且比两个控�
 
 只有 H70-H73 全过才新建 50 题训练门；门槛不得在线后修改。该六题已经被多轮观察，只能作机制诊断，不能作显著性、held-out 或泛化证据。机器预注册与作用域审计见 v22 `offline-validation.json`、`anchor-window-scope-audit.json`。
 
+#### v22 在线闭环：ACEW 通过四门并晋级 50 题训练门
+
+2026-07-22 服务检查三路均为 HTTP 200 后，三个互斥 method worker 并发完成 GECS、GRPE、ACEW 共 18 条 schema23 replay。18/18 final 为 `ok`，18 条 immutable attempt 均停在 attempt 1；manifest 自动保留三条 run request，progress 自动汇总为 completed/attempts/ok=`18/18/18`，没有人工修补。frozen-plan 审计为 6/6 snapshot 有效、6 imported plan attempts 成功、18 replay provenance 完整，缺失、hash mismatch、未知 snapshot、题内 effective-plan variant 均为 0。
+
+以下均为 execution-only 指标，共享的历史编译成本排除在方法比较之外。答案与检索指标如下；`R/P@k` 分别为 evidence recall/precision：
+
+| 方法 | EM | F1 | Evidence Recall | MRR | R@1 | R@5 | R@10 | P@1 | P@5 | P@10 | nDCG@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| GECS | 0.5000 | 0.5000 | 0.8750 | 0.9167 | 0.3750 | 0.8750 | 0.8750 | 0.8333 | 0.4000 | 0.2000 | 0.8698 |
+| GRPE | 0.6667 | 0.6667 | 0.9583 | 1.0000 | 0.4583 | 0.9583 | 0.9583 | 1.0000 | 0.4333 | 0.2167 | 0.9586 |
+| **ACEW** | **1.0000** | **1.0000** | **0.9583** | **1.0000** | **0.4583** | **0.9583** | **0.9583** | **1.0000** | **0.4333** | **0.2167** | **0.9720** |
+
+成本、时延与可靠性如下；数值为逐题均值，时延单位为毫秒：
+
+| 方法 | LLM calls | Provider calls | Tokens | Wall mean | p50 | p95 | Structured fail | Repair | Ground reject | Evidence fallback | Deterministic |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| GECS | 2.3333 | 6.3333 | 3874.2 | 28269 | 21961 | 53532 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.8333 |
+| GRPE | 2.3333 | 6.0000 | 3952.3 | 23776 | 20821 | 37575 | 0.5000 | 0.3333 | 0.3333 | 0.1667 | 0.8333 |
+| **ACEW** | **2.0000** | **5.6667** | **3454.7** | **21603** | 22177 | **30026** | **0.1667** | **0.1667** | **0.0000** | **0.0000** | **1.0000** |
+
+相对 GRPE，ACEW 的 F1 提高 0.3333，LLM calls、tokens、provider calls 与平均 wall latency 分别下降 14.29%、12.59%、5.56% 和 9.14%。唯一一次 ACEW structured failure/repair 出现在非目标 `05b0...`，最终仍正确；两个预注册国籍目标题均没有该波动。完整列而非本文节选保存在 v22 `metrics.csv` 与 `per_question.csv`，另有 retrieval、macro、stratified、paired-bootstrap、seed-variance、failure 与 frozen-plan CSV；文件 hash 和入口由 `online-validation.json` 固化。
+
+ACEW 作用域精确命中 `254.../CountryOf` 与 `c520.../CountryOfOrigin` 两槽，contracts/selected/dropped=`2/4/6`，fallback=0。抽取输入从合计 4318 字符降至 1466 字符，池化缩减率 66.05%；控制方法和其余四题的全部 window telemetry 均为 0。两题 ACEW 都输出 `American`、F1=1、join output=1、deterministic=1，且 generation、evidence fallback、structured failure、repair、grounding rejection、length finish 全为 0；逐题 calls/tokens 为 `2/2717` 与 `2/2011`，均不高于对应 GRPE 的 `2/3352` 与 `4/4362`。
+
+| 预注册门 | 结果 | 不可变判据核验 |
+|---|---|---|
+| H70 | **通过** | 6 imported snapshots、18 schema23 replay，同源 provenance/hash 完整且无 variant |
+| H71 | **通过** | 精确两个目标 contract；控制和非目标惰性；fallback=0；1466 < 4318 |
+| H72 | **通过** | 两个目标均 `American`/F1=1/确定性单行，零生成、回退及错误遥测，成本不高于 GRPE |
+| H73 | **通过** | ACEW 6/6 ok、F1=1，较两个控制至少高 0.3333，全部预注册成本/失败项不劣于 GRPE |
+
+运行控制与用户给定额度保持一致：服务许可为 30 RPM，跨进程执行硬上限为每 provider 20 RPM，即相邻 HTTP attempt 至少 3 秒；最大在途并发为 4，本轮因只有三个方法而实际启动三个 worker。最终 item 的 provider attempts 与共享 limiter acquisition counter 完全一致，Agnes/embedding/reranker=`40/34/34`；按首末持久化 final 的 153.07 秒窗口计算，阶段平均分别为 `15.68/13.33/13.33 RPM`。该均值不是瞬时峰值证明，硬上限由每次 retry 也必须取得的共享 permit 保证，本地四竞争者时钟测试最小间隔为 3.0006 秒。
+
+因此 H70-H73 在未改阈值的前提下全部通过，**只授权另建不重叠的 50 题训练门**；200 题 held-out 仍未授权。六题 F1=1 不能作为显著性或泛化结论，也不能用于继续修改 ACEW。机器闭环见 `runs/vldb2027-diagnostic-v22/online-validation.json`。
+
+#### v23：不重叠 50 题训练门预注册
+
+新运行固定为 `runs/vldb2027-training-v23`、阶段 `anchor_window_training_gate`，仅使用 2Wiki train。此前 33 个 2Wiki sample artifact 实际合计只覆盖相同的 50 个唯一 ID；新门在任何模型调用前用确定性种子 2028 冻结另 50 题，历史交集为 0，sample SHA-256 为 `b70d60...6895c`。分层为 bridge-comparison/comparison/compositional/inference=`11/15/22/2`，50/50 题均有 evidence gold；原始 train 为 167,454 条、0 invalid，SHA-256 为 `ad0f27...18f01`。
+
+四路方法固定为默认 SlotRAG、GECS、GRPE、ACEW，共预期 200 条 schema23 final。默认 SlotRAG 只作为 frozen-plan source 和次级方法对照，先顺序生成 50 个计划快照；快照完整后，再让 GECS、GRPE、ACEW 三个互斥 worker 并发 replay，避免计划创建竞争并使三种主比较方法从同一缓存状态开始。共享计划编译成本排除在主方法成本之外；index-inclusive 与 wall latency 必须报告，但因 source 预热和 20 RPM 共享调度不作为晋级硬门。服务许可/执行上限/在途并发继续固定为 `30 RPM / 20 RPM / 4`，相邻同 provider attempt 至少 3 秒，retry 同样占配额。
+
+预注册门槛在在线调用前冻结如下：
+
+| 门 | 通过条件 |
+|---|---|
+| H74 同源完整性 | 新 50 题保持唯一且历史交集为 0；50 个有效 frozen snapshots、200 个 replay 的 provenance/hash 完整，无缺失、未知、mismatch 或题内 variant |
+| H75 作用域与压缩 | 控制 window telemetry 全 0；ACEW 仅在注册的 country/nationality 且 direct-anchor + role-projection 作用域触发，至少 2 题激活、scope mismatch=0、fallback 至多 1、非回退窗不扩张，池化字符缩减至少 30% |
+| H76 答案质量 | ACEW 总体 F1 ≥ `max(GECS, GRPE)-0.02`；触发子集 F1 不低于 GRPE 且 paired wins 不少于 losses；ACEW success rate ≥0.98 |
+| H77 成本可靠性 | ACEW 的 calls/provider calls/tokens 各 ≤ `1.05×GRPE`；结构失败、repair、ground rejection、evidence fallback、generation、length finish 各 ≤ `GRPE+0.02/题`；deterministic rate ≥`GRPE-0.02` |
+| H78 检索保持 | Evidence Recall、MRR、R@1/5/10、P@1/5/10、nDCG@10 每项均 ≥`GRPE-0.02` |
+| H79 分母与报告 | 至少 196/200 final ok；全部 benchmark/provider retry 保留；limiter counter 与 provider delta 对账且遵守 20 RPM；aggregate、逐题、retrieval、macro、stratified、paired bootstrap、seed variance、failure、frozen-plan artifact 齐全 |
+
+训练门必须报告 paired bootstrap、效应量、Holm 校正以及逐题 win/tie/loss，但不以训练集显著性作硬门。只有 H74-H79 全部通过，才授权单独冻结 200 题 held-out；若观察本门后修改架构，必须换一组不重叠训练门，不能在同一 50 题上重新宣称通过。机器预注册与交集审计见 v23 `offline-validation.json`、`historical-sample-overlap-audit.json`。
+
 ---
 
 # 11. 关键消融
