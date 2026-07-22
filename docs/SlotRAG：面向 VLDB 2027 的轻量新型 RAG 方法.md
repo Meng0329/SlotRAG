@@ -2047,6 +2047,26 @@ source 阶段 benchmark provider attempts（计划编译、索引和执行合计
 
 这次早停说明的是**随机样本的机制覆盖不足**，不是 surface repair 已被证伪。下一步不在这 50 题上补跑；改为新建完全不重叠的、按公开 2Wiki relation strata 预注册的机制门：单独保证足够的 country-of-citizenship 目标题与标题关系根控制题，再重新执行同一 2×2 消融。该机制门的结论只能作为组件诊断，不能替代随机 held-out 泛化评估。
 
+#### v27：Relation-stratified 2×2 机制门预注册
+
+v27 使用 `runs/vldb2027-training-v27` 和阶段 `mechanism_stratified_repair_gate`，方法代码不再改变，仍使用 schema26 与 v26 的四格消融。样本仅按公开 2Wiki `evidences` relation label 和问题文本正则分层，不读取答案：`country of citizenship + film/movie/song title-root` 20 题、`country of citizenship + non-title` 20 题、无 country/nationality 关系的 title-root 控制 10 题。种子 2031 在每层保留最小 `SHA256(seed:dataset:stratum:id)`，排除 37 份历史 sample artifact 的 150 个唯一 ID；最终 50/50 唯一、历史交集 0，sample SHA-256=`94db4089...073d5`。三个候选池在排除历史后分别仍有 `18757/26046/49981` 条，抽样不是因候选不足而放宽。
+
+这是一组**机制分层训练诊断**，不能用于估计自然分布总体 F1，也不能替代随机 held-out。配置提交为 `e516bd6`，冻结源码指纹为 `44f4488e...7e8977`；六路方法仍为 source SlotRAG、GRPE、CQAC、CQAC+root、CQAC+surface、CQAC+root+surface，共预期 300 条 schema26 final。先运行 50 条 source；只有 H99-H101 全部通过，才以最多两个互斥 worker 运行 250 条同计划 replay。30 RPM provider 许可、20 RPM operational 硬限、3 秒 permit、retry 占配额与并发 2 保持不变。
+
+| 门 | 预注册通过条件 |
+|---|---|
+| H99 材料完整性 | 三个 mechanism strata 精确为 20/20/10；50 个唯一 ID；与全部 150 个历史 2Wiki ID 交集为 0；dataset/config/sample/source fingerprint hash 冻结 |
+| H100 source 完整性 | 50 个有效 frozen plans 与 50 个 schema26 source final，至少 49/50 final ok；attempt、retry、provenance 与 hash 全保留 |
+| H101 机制覆盖 | 40 个 target 中至少 30 个唯一计划出现闭合 country/nationality 谓词；10 个非目标控制中至多 1 个误入该谓词族；30 个 title-root 题中至少 4 个可前瞻触发 query-root repair；source success rate ≥0.98，否则提前停止 |
+| H102 replay 完整性 | 总计 300 final、至少 294 ok；250 replay 同源；missing/unknown/hash mismatch/inconsistent pair/effective variant 全为 0 |
+| H103 回答质量 | 完整候选总体 F1 ≥`max(GRPE,CQAC)-0.02`；40 个 target 和每个新修复激活子集上 F1 均不低于 CQAC、paired wins≥losses；success rate ≥0.98 |
+| H104 2×2 作用域 | 四格只改变 root/surface 开关；root 与 surface 各在至少 4 个唯一题真实激活；surface 在 10 个非目标控制上为 0；所有修复满足 query-grounded/exact-source/closed-predicate 边界；窗口累计字符削减 ≥30% 且非回退窗不扩张 |
+| H105 成本可靠性 | 完整候选 calls/provider attempts/tokens 各 ≤`1.10×CQAC`；结构失败、repair、ground reject、fallback、generation、length finish 各 ≤`CQAC+0.02/题`；deterministic rate ≥`CQAC-0.02` |
+| H106 检索保持 | 完整候选的 Evidence Recall、MRR、R@1/5/10、P@1/5/10、nDCG@10 每项均 ≥`CQAC-0.02` |
+| H107 完整统计 | 全指标、三层逐层结果、逐题、失败与 provider/RPM 分母、计划审计、paired bootstrap 95% CI、精确配对检验、Holm 校正及配对效应量全部落盘；显著性不作硬门 |
+
+只有 H102-H107 全部通过，才授权另建一组自然分布、无历史交集的随机 100 题训练泛化门；v27 本身不直接授权 held-out-200。若观察 v27 后修改方法或阈值，必须换新样本，不能在这 50 题上重新宣称通过。
+
 ---
 
 # 11. 关键消融
