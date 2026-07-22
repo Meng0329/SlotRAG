@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
-from slotrag.planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer, apply_operators
+from slotrag.planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer, apply_operators, extraction_tool
 from slotrag.providers import ChatResult, ToolCall, Usage
 
 
@@ -94,6 +94,36 @@ class StaticRetriever:
 
     def search(self, _query):
         return [RetrievalResult(passage=self.passage, score=1.0)]
+
+
+def test_slot_variable_types_must_reference_exposed_variables():
+    with pytest.raises(ValidationError, match="variable_types keys must be slot variables"):
+        Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            variable_types={"other": "boolean"},
+        )
+
+
+def test_boolean_variable_type_constrains_extraction_tool_domain():
+    typed = extraction_tool(Slot(
+        id="S1",
+        predicate="EvidenceAnsweringQuestion",
+        arguments=["?answer"],
+        variable_types={"answer": "boolean"},
+    ), typed_extraction_contracts=True)
+    untyped = extraction_tool(Slot(
+        id="S1",
+        predicate="EvidenceAnsweringQuestion",
+        arguments=["?answer"],
+    ))
+
+    typed_answer = typed["function"]["parameters"]["properties"]["rows"]["items"]["properties"]["answer"]
+    untyped_answer = untyped["function"]["parameters"]["properties"]["rows"]["items"]["properties"]["answer"]
+
+    assert typed_answer == {"type": "string", "enum": ["yes", "no", "unknown"]}
+    assert untyped_answer == {"type": "string"}
 
 
 class ComparisonMaterializer:
@@ -463,6 +493,90 @@ def test_field_extremum_template_compiles_and_executes_within_four_step_budget()
     assert result.metrics.operators_executed == 1
 
 
+def test_polar_comparison_template_skips_llm_with_fallback_equivalent_plan():
+    question = "Do Alpha Film and Beta Film share the same nationality?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(question)
+
+    assert metrics.llm_calls == 0
+    assert metrics.heuristic_plans == 1
+    assert metrics.polar_comparison_templates == 1
+    assert metrics.plan_fallbacks == 0
+    assert plan == SlotPlan(
+        slots=[Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            constraints={"question": question},
+            variable_types={"answer": "boolean"},
+            estimated_cardinality=5,
+        )],
+        outputs=["?answer"],
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Can you name both directors?",
+        "Do you know which films have the same director?",
+        "What films are from the same country?",
+        "Are Alpha and Beta related?",
+        "Are both Alpha and Beta from the same country",
+    ],
+)
+def test_polar_comparison_template_rejects_non_whitelisted_boundaries(question):
+    fallback_payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([fallback_payload])).compile(question)
+
+    assert metrics.llm_calls == 1
+    assert metrics.polar_comparison_templates == 0
+
+
+def test_polar_comparison_template_can_be_disabled_for_ablation():
+    question = "Are both Alpha and Beta from the same country?"
+    fallback_payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([fallback_payload])).compile(
+        question,
+        polar_comparison_templates=False,
+    )
+
+    assert metrics.llm_calls == 1
+    assert metrics.polar_comparison_templates == 0
+
+
+def test_explicit_boolean_route_is_not_counted_as_inferred_polar_comparison():
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(
+        "Are both Alpha and Beta from the same country?",
+        answer_kind="boolean",
+    )
+
+    assert metrics.llm_calls == 0
+    assert metrics.heuristic_plans == 1
+    assert metrics.polar_comparison_templates == 0
+    assert plan.slots[0].estimated_cardinality == 2
+
+
 @pytest.mark.parametrize(
     ("noun", "extremum", "expected_kind"),
     [
@@ -829,6 +943,115 @@ def test_materializer_accepts_propagated_binding_grounded_by_document_title():
 
     assert [item.bindings for item in rows] == [{"person": "Erica Awano", "series": "Holy Avenger"}]
     assert metrics.grounding_rejections == 0
+
+
+def test_typed_boolean_materializer_emits_canonical_supported_rows():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"answer": "no", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Alpha and Beta are from different countries.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            constraints={"question": "Are Alpha and Beta from the same country?"},
+            variable_types={"answer": "boolean"},
+        ),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"answer": "no"}]
+    assert metrics.typed_extraction_contracts == 1
+    assert metrics.typed_extraction_answers == 1
+    assert metrics.typed_extraction_abstentions == 0
+
+
+@pytest.mark.parametrize(
+    "extracted_rows",
+    [
+        [],
+        [{"answer": "unknown", "source_id": "p"}],
+        [
+            {"answer": "yes", "source_id": "p"},
+            {"answer": "no", "source_id": "p"},
+        ],
+    ],
+)
+def test_typed_boolean_materializer_abstains_on_empty_unknown_or_conflict(extracted_rows):
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([extracted_rows]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Partial evidence.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            variable_types={"answer": "boolean"},
+        ),
+        {},
+    )
+
+    assert rows == []
+    assert metrics.llm_calls == 1
+    assert metrics.typed_extraction_contracts == 1
+    assert metrics.typed_extraction_answers == 0
+    assert metrics.typed_extraction_abstentions == 1
+    assert metrics.structured_output_failures == 0
+
+
+def test_typed_boolean_materializer_repairs_invalid_value_then_abstains():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"answer": "maybe", "source_id": "p"}],
+            [{"answer": "unknown", "source_id": "p"}],
+        ]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Partial evidence.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            variable_types={"answer": "boolean"},
+        ),
+        {},
+    )
+
+    assert rows == []
+    assert metrics.llm_calls == 2
+    assert metrics.structured_output_failures == 1
+    assert metrics.structured_output_repairs == 1
+    assert metrics.typed_extraction_abstentions == 1
+
+
+def test_typed_extraction_is_disabled_by_default_and_keeps_free_text_rows():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"answer": "No, Alpha differs from Beta.", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Alpha differs from Beta.")),
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="EvidenceAnsweringQuestion",
+            arguments=["?answer"],
+            variable_types={"answer": "boolean"},
+        ),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"answer": "No, Alpha differs from Beta."}]
+    assert metrics.typed_extraction_contracts == 0
+    assert metrics.typed_extraction_answers == 0
+    assert metrics.typed_extraction_abstentions == 0
 
 
 def test_materializer_counts_and_skips_repeated_invalid_extractions():

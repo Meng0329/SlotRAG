@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from slotrag.benchmarking.statistics import (
@@ -9,7 +10,7 @@ from slotrag.benchmarking.statistics import (
     stratified_aggregate,
     summarize_run,
 )
-from slotrag.models import RunMetrics
+from slotrag.models import RunMetrics, SlotPlan
 
 
 def _record(method, question_id, score, seed=2027, label=None):
@@ -199,6 +200,160 @@ def test_schema11_reports_field_extremum_templates_without_backfilling_schema10(
 
     assert current_summary["field_extremum_templates"] == 1
     assert legacy_summary["field_extremum_templates"] is None
+
+
+def test_schema12_reports_polar_comparison_templates_without_backfilling_schema11():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 12
+    current["result"]["metrics"] = RunMetrics(
+        polar_comparison_templates=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 11
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["polar_comparison_templates"] == 1
+    assert legacy_summary["polar_comparison_templates"] is None
+
+
+def test_schema13_reports_polar_row_consensus_without_backfilling_schema12():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 13
+    current["result"]["metrics"] = RunMetrics(
+        polar_row_consensus=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 12
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["polar_row_consensus"] == 1
+    assert legacy_summary["polar_row_consensus"] is None
+
+
+def test_schema14_reports_typed_extraction_metrics_without_backfilling_schema13():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 14
+    current["result"]["metrics"] = RunMetrics(
+        typed_extraction_contracts=1,
+        typed_extraction_answers=1,
+        typed_extraction_abstentions=0,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 13
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["typed_extraction_contracts"] == 1
+    assert current_summary["typed_extraction_answers"] == 1
+    assert current_summary["typed_extraction_abstentions"] == 0
+    assert legacy_summary["typed_extraction_contracts"] is None
+    assert legacy_summary["typed_extraction_answers"] is None
+    assert legacy_summary["typed_extraction_abstentions"] is None
+
+
+def test_schema15_reports_frozen_plan_replays_without_backfilling_schema14():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 15
+    current["result"]["metrics"] = RunMetrics(frozen_plan_replays=1).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 14
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["frozen_plan_replays"] == 1
+    assert legacy_summary["frozen_plan_replays"] is None
+
+
+def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    plan_payload = plan.model_dump(mode="json")
+    plan_sha256 = hashlib.sha256(json.dumps(
+        plan_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    compiler_metrics = RunMetrics(
+        llm_calls=1,
+        prompt_tokens=11,
+        completion_tokens=3,
+        compilation_llm_calls=1,
+        compilation_prompt_tokens=11,
+        compilation_completion_tokens=3,
+        compilation_latency_ms=12.5,
+    ).model_dump(mode="json")
+    provenance = {
+        "status": "ok",
+        "source_method": "slotrag",
+        "plan_sha256": plan_sha256,
+        "compiler_metrics": compiler_metrics,
+        "wall_latency_ms": 20.0,
+        "provider_delta": {
+            "attempts": 2,
+            "agnes": {"attempts": 2, "successes": 1, "retries": 1, "latency_ms": 18.0, "request_ids": ["r1"]},
+        },
+    }
+    for method in ("slotrag", "slotrag-typed-extraction"):
+        record = _record(method, "q1", 1.0)
+        record["schema_version"] = 15
+        record["result"]["plan"] = plan_payload
+        record["result"]["metrics"] = RunMetrics(frozen_plan_replays=1).model_dump(mode="json")
+        record["plan_provenance"] = provenance
+        item_path = tmp_path / "items" / "test" / "hotpotqa" / method / "q1.json"
+        item_path.parent.mkdir(parents=True, exist_ok=True)
+        item_path.write_text(json.dumps(record), encoding="utf-8")
+
+    snapshot = {
+        "status": "ok",
+        "source_method": "slotrag",
+        "plan_sha256": plan_sha256,
+        "plan": plan_payload,
+        "compiler_metrics": compiler_metrics,
+        "wall_latency_ms": 20.0,
+        "provider_delta": {
+            "attempts": 2,
+            "agnes": {"attempts": 2, "successes": 1, "retries": 1, "latency_ms": 18.0, "request_ids": ["r1"]},
+        },
+    }
+    snapshot_path = tmp_path / "plans" / "test" / "hotpotqa" / "q1.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    report = summarize_run(tmp_path, "test")
+    audit = report["frozen_plan_audit"]
+
+    assert audit["enabled"] is True
+    assert audit["snapshot_count"] == 1
+    assert audit["invalid_snapshot_count"] == 0
+    assert audit["replay_record_count"] == 2
+    assert audit["replay_question_count"] == 1
+    assert audit["plan_hash_mismatch_count"] == 0
+    assert audit["inconsistent_pair_count"] == 0
+    assert audit["shared_compiler"]["llm_calls_total"] == 1
+    assert audit["shared_compiler"]["total_tokens_total"] == 14
+    assert audit["shared_compiler"]["provider_attempts_total"] == 2
+    assert audit["shared_compiler"]["provider_retries_total"] == 1
+    slotrag_summary = next(row for row in report["summary"] if row["method"] == "slotrag")
+    assert slotrag_summary["llm_calls_with_shared_compile"] == 2
+    assert slotrag_summary["total_tokens_with_shared_compile"] == 14
+    assert slotrag_summary["wall_latency_with_shared_compile_ms"] == 20
+    assert slotrag_summary["provider_calls_with_shared_compile"] == 2
+    summary_dir = tmp_path / "summaries" / "test"
+    assert (summary_dir / "frozen_plan_audit.json").exists()
+    assert (summary_dir / "frozen_plan_metrics.csv").exists()
 
 
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):

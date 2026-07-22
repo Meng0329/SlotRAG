@@ -14,6 +14,7 @@ class Slot(StrictModel):
     predicate: str = Field(min_length=1)
     arguments: list[str] = Field(min_length=1)
     constraints: dict[str, Any] = Field(default_factory=dict)
+    variable_types: dict[str, Literal["string", "boolean", "number", "date"]] = Field(default_factory=dict)
     importance: float = Field(default=1.0, gt=0)
     estimated_cardinality: float = Field(default=100.0, gt=0)
     estimated_cost: float = Field(default=1.0, gt=0)
@@ -28,8 +29,12 @@ class Slot(StrictModel):
     @model_validator(mode="after")
     def requires_variable(self) -> "Slot":
         self.constraints = {key.lstrip("?"): value for key, value in self.constraints.items()}
+        self.variable_types = {key.lstrip("?"): value for key, value in self.variable_types.items()}
         if not self.variables:
             raise ValueError("a slot must expose at least one ?variable")
+        unknown_types = sorted(set(self.variable_types) - self.variables)
+        if unknown_types:
+            raise ValueError(f"variable_types keys must be slot variables: {', '.join(unknown_types)}")
         return self
 
     @property
@@ -286,6 +291,11 @@ class RunMetrics(StrictModel):
     answer_reconciliations: int = 0
     answer_span_normalizations: int = 0
     polar_answer_normalizations: int = 0
+    polar_row_consensus: int = 0
+    typed_extraction_contracts: int = 0
+    typed_extraction_answers: int = 0
+    typed_extraction_abstentions: int = 0
+    frozen_plan_replays: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
@@ -299,6 +309,7 @@ class RunMetrics(StrictModel):
     heuristic_plans: int = 0
     typed_plan_templates: int = 0
     field_extremum_templates: int = 0
+    polar_comparison_templates: int = 0
     direct_plan_templates: int = 0
     operators_executed: int = 0
     plan_slot_count: int = 0

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from slotrag.benchmarking import methods
 from slotrag.models import EvidenceRecord, ExecutionResult, Passage, QuestionRecord, RelationalOperator, RunMetrics, SlotPlan
 from slotrag.providers import ChatResult
@@ -91,8 +93,9 @@ def test_no_operators_reports_unsupported_without_llm_calculation(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, field_extremum_templates):
+        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates):
             assert field_extremum_templates is True
+            assert polar_comparison_templates is True
             return plan, RunMetrics()
 
     class Executor:
@@ -149,8 +152,9 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, field_extremum_templates):
+        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates):
             assert field_extremum_templates is True
+            assert polar_comparison_templates is True
             return plan, RunMetrics()
 
     class Executor:
@@ -192,6 +196,65 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
     assert result.metrics.deterministic_answers == 1
 
 
+def test_slotrag_replays_frozen_plan_without_calling_compiler(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Partner", "arguments": ["Person", "?partner"]}],
+        "joins": [],
+        "outputs": ["?partner"],
+    })
+
+    class Compiler:
+        def __init__(self, _client):
+            raise AssertionError("frozen-plan replay must not construct the compiler")
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, replayed_plan, *, strategy):
+            assert replayed_plan == plan
+            return ExecutionResult(
+                rows=[{"partner": "Ernie Wise"}],
+                evidence=[EvidenceRecord(
+                    source_id="p1",
+                    source_span="fact",
+                    slot_id="S1",
+                    bindings={"partner": "Ernie Wise"},
+                )],
+                order=["S1"],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag"],
+        "hotpotqa",
+        QuestionRecord(id="q", question="Who was the partner?"),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=plan,
+    )
+
+    assert result.answer == "Ernie Wise"
+    assert result.plan == plan
+    assert result.metrics.frozen_plan_replays == 1
+    assert result.metrics.compilation_llm_calls == 0
+    assert result.metrics.compilation_latency_ms == 0
+    assert result.metrics.plan_slot_count == 1
+
+
 def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
@@ -204,8 +267,17 @@ def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, field_extremum_templates, document_count=None):
+        def compile(
+            self,
+            _question,
+            *,
+            answer_kind,
+            field_extremum_templates,
+            polar_comparison_templates,
+            document_count=None,
+        ):
             assert field_extremum_templates is True
+            assert polar_comparison_templates is True
             observed_document_counts.append(document_count)
             return plan, RunMetrics()
 
@@ -424,3 +496,279 @@ def test_no_extremum_template_ablation_only_disables_compiler_entry(monkeypatch)
         assert methods.METHODS[method].options.typed_operators is True
 
     assert observed == [True, False]
+
+
+def test_no_polar_template_ablation_only_disables_compiler_entry(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    observed = []
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **kwargs):
+            observed.append(kwargs["polar_comparison_templates"])
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"answer": "no"}],
+                evidence=[EvidenceRecord(source_id="p", source_span="no", slot_id="S1", bindings={"answer": "no"})],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    question = QuestionRecord(id="q", question="Are both facts the same?")
+
+    for method in ("slotrag", "slotrag-no-polar-template"):
+        result = methods._run_slotrag(
+            methods.METHODS[method],
+            "2wikimultihop",
+            question,
+            object(),
+            object(),
+            config,
+            seed=2027,
+            max_steps=4,
+            max_retrieval_calls=4,
+        )
+        assert result.answer == "no"
+        assert methods.METHODS[method].options.typed_operators is True
+        assert methods.METHODS[method].field_extremum_templates is True
+
+    assert observed == [True, False]
+
+
+def test_slotrag_uses_explicit_polar_row_consensus_without_final_llm(monkeypatch):
+    question = QuestionRecord(id="q", question="Do Alpha and Beta share the same nationality?")
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "EvidenceAnsweringQuestion", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    rows = [
+        {"answer": "No, Alpha is French."},
+        {"answer": "No, Beta is German."},
+    ]
+    evidence = [EvidenceRecord(source_id="p", source_span="facts", slot_id="S1", bindings={})]
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **_kwargs):
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(rows=rows, evidence=evidence, order=["S1"])
+
+    class Client:
+        def complete(self, *_args, **_kwargs):
+            raise AssertionError("explicit polar consensus must not call the final generator")
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag"],
+        "2wikimultihop",
+        question,
+        object(),
+        Client(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+    )
+    normalized = methods._normalize_polar_answer(question.question, result)
+
+    assert result.answer == "No"
+    assert result.rows == rows
+    assert result.evidence == evidence
+    assert result.metrics.deterministic_answers == 1
+    assert result.metrics.polar_row_consensus == 1
+    assert normalized.answer == "no"
+    assert normalized.metrics.polar_row_consensus == 1
+    assert normalized.metrics.polar_answer_normalizations == 1
+
+
+@pytest.mark.parametrize(
+    ("question", "values"),
+    [
+        ("Do Alpha and Beta match?", ["No, Alpha differs.", "Yes, Beta matches."]),
+        ("Do Alpha and Beta match?", ["No, Alpha differs.", "Beta is German."]),
+        ("Do Alpha and Beta match?", ["No", "No"]),
+        ("Which facts match?", ["No, Alpha differs.", "No, Beta differs."]),
+    ],
+)
+def test_polar_row_consensus_rejects_conflict_missing_token_unique_and_nonpolar(question, values):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "EvidenceAnsweringQuestion", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    result = ExecutionResult(rows=[{"answer": value} for value in values])
+
+    assert methods._polar_row_consensus(question, plan, result) is None
+
+
+def test_no_polar_consensus_ablation_only_disables_projection(monkeypatch):
+    question = QuestionRecord(id="q", question="Do Alpha and Beta share the same nationality?")
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "EvidenceAnsweringQuestion", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **_kwargs):
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"answer": "No, Alpha is French."}, {"answer": "No, Beta is German."}],
+                evidence=[EvidenceRecord(source_id="p", source_span="facts", slot_id="S1", bindings={})],
+                order=["S1"],
+            )
+
+    finalized = []
+
+    def finalize(_client, _dataset, _question, result):
+        finalized.append(result)
+        return result.model_copy(update={"answer": "generated"})
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    monkeypatch.setattr(methods, "_finalize", finalize)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    results = []
+    for method in ("slotrag", "slotrag-no-polar-consensus"):
+        results.append(methods._run_slotrag(
+            methods.METHODS[method],
+            "2wikimultihop",
+            question,
+            object(),
+            object(),
+            config,
+            seed=2027,
+            max_steps=4,
+            max_retrieval_calls=4,
+        ))
+
+    assert [result.answer for result in results] == ["No", "generated"]
+    assert [result.metrics.polar_row_consensus for result in results] == [1, 0]
+    assert len(finalized) == 1
+    assert methods.METHODS["slotrag-no-polar-consensus"].options.typed_operators is True
+    assert methods.METHODS["slotrag-no-polar-consensus"].field_extremum_templates is True
+    assert methods.METHODS["slotrag-no-polar-consensus"].polar_comparison_templates is True
+
+
+def test_typed_extraction_candidate_only_enables_materializer_contract(monkeypatch):
+    question = QuestionRecord(id="q", question="Are Alpha and Beta from the same country?")
+    plan = SlotPlan.model_validate({
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "variable_types": {"answer": "boolean"},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    observed = []
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **_kwargs):
+            return plan, RunMetrics(polar_comparison_templates=1)
+
+    class Materializer:
+        def __init__(self, *_args, typed_extraction_contracts, **_kwargs):
+            observed.append(typed_extraction_contracts)
+            self.accessed_document_ids = set()
+            self.accessed_passage_ids = set()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"answer": "no"}],
+                evidence=[EvidenceRecord(source_id="p", source_span="fact", slot_id="S1", bindings={})],
+                order=["S1"],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    results = []
+    for method in ("slotrag", "slotrag-typed-extraction"):
+        results.append(methods._run_slotrag(
+            methods.METHODS[method],
+            "2wikimultihop",
+            question,
+            object(),
+            object(),
+            config,
+            seed=2027,
+            max_steps=4,
+            max_retrieval_calls=4,
+        ))
+
+    assert [result.answer for result in results] == ["no", "no"]
+    assert observed == [False, True]
+    assert methods.METHODS["slotrag-typed-extraction"].options.typed_operators is True
+    assert methods.METHODS["slotrag-typed-extraction"].field_extremum_templates is True
+    assert methods.METHODS["slotrag-typed-extraction"].polar_comparison_templates is True
+    assert methods.METHODS["slotrag-typed-extraction"].polar_row_consensus is True

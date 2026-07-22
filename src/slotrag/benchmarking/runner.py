@@ -15,12 +15,12 @@ from typing import Any
 
 from ..config import AppConfig
 from ..data import normalize_jsonl
-from ..models import ExecutionResult, QuestionRecord, RunMetrics
+from ..models import ExecutionResult, QuestionRecord, RunMetrics, SlotPlan
 from ..providers import AgnesClient, EmbeddingClient, RerankerClient, provider_clients
 from ..retrieval import EmbeddingCache, HybridRetriever
 from .config import BenchmarkSuite
 from .datasets import DATASETS, load_sample
-from .methods import METHODS, run_method
+from .methods import METHODS, compile_slotrag_plan, run_method, slotrag_compile_options
 from .metrics import score_record
 
 
@@ -35,6 +35,15 @@ def _safe_id(value: str) -> str:
     prefix = "".join(char if char.isalnum() or char in "-_" else "_" for char in value)[:80]
     digest = hashlib.sha256(value.encode()).hexdigest()[:12]
     return f"{prefix}-{digest}"
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _plan_sha256(plan: SlotPlan) -> str:
+    return _canonical_sha256(plan.model_dump(mode="json"))
 
 
 def _failure_category(status: str, error: str | None, answer: str | None) -> str:
@@ -124,6 +133,12 @@ class BenchmarkBudgetExceeded(RuntimeError):
     pass
 
 
+class FrozenPlanPreparationError(RuntimeError):
+    def __init__(self, message: str, provenance: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.provenance = provenance
+
+
 class _BudgetedAgnes:
     def __init__(self, client: AgnesClient, max_calls: int) -> None:
         self.client = client
@@ -185,6 +200,12 @@ class BenchmarkRunner:
     def _sample_path(self, stage: str, dataset: str) -> Path:
         return self.output_dir / "samples" / stage / f"{dataset}.jsonl"
 
+    def _plan_snapshot_path(self, stage: str, dataset: str, question_id: str) -> Path:
+        return self.output_dir / "plans" / stage / dataset / f"{_safe_id(question_id)}.json"
+
+    def _plan_attempt_dir(self, stage: str, dataset: str, question_id: str) -> Path:
+        return self.output_dir / "plan_attempts" / stage / dataset / _safe_id(question_id)
+
     def _load_or_create_sample(self, stage_name: str, dataset: str) -> list[QuestionRecord]:
         stage = self.suite.stage(stage_name)
         sample_path = self._sample_path(stage_name, dataset)
@@ -238,6 +259,122 @@ class BenchmarkRunner:
             "embedding": self.embedding.stats.snapshot(),
             "reranker": self.reranker.stats.snapshot(),
         }
+
+    @staticmethod
+    def _plan_provenance(record: dict[str, Any], snapshot_path: str | None) -> dict[str, Any]:
+        provenance = {key: value for key, value in record.items() if key != "plan"}
+        provenance["snapshot_path"] = snapshot_path
+        return provenance
+
+    def _frozen_plan_input(
+        self,
+        stage_name: str,
+        dataset: str,
+        question: QuestionRecord,
+        source_method: str,
+    ) -> dict[str, Any]:
+        return {
+            "stage": stage_name,
+            "dataset": dataset,
+            "question_id": question.id,
+            "question": question.question,
+            "source_method": source_method,
+            "compiler_options": slotrag_compile_options(METHODS[source_method], dataset, question),
+        }
+
+    def _load_or_create_frozen_plan(
+        self,
+        stage_name: str,
+        dataset: str,
+        question: QuestionRecord,
+        source_method: str,
+    ) -> tuple[SlotPlan, dict[str, Any]]:
+        snapshot_path = self._plan_snapshot_path(stage_name, dataset, question.id)
+        relative_snapshot_path = snapshot_path.relative_to(self.output_dir).as_posix()
+        compile_input = self._frozen_plan_input(stage_name, dataset, question, source_method)
+        input_sha256 = _canonical_sha256(compile_input)
+        if snapshot_path.exists():
+            try:
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                if snapshot.get("status") != "ok":
+                    raise ValueError("snapshot status is not ok")
+                if snapshot.get("input_sha256") != input_sha256:
+                    raise ValueError("snapshot input hash does not match the current stage question and compiler options")
+                plan = SlotPlan.model_validate(snapshot["plan"])
+                if snapshot.get("plan_sha256") != _plan_sha256(plan):
+                    raise ValueError("snapshot plan hash does not match its plan payload")
+            except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
+                raise ValueError(f"invalid frozen plan snapshot {snapshot_path}: {exc}") from exc
+            return plan, self._plan_provenance(snapshot, relative_snapshot_path)
+
+        attempt_dir = self._plan_attempt_dir(stage_name, dataset, question.id)
+        attempt_paths = sorted(attempt_dir.glob("attempt-*.json")) if attempt_dir.exists() else []
+        attempt_indices = [
+            int(path.stem.rsplit("-", 1)[-1])
+            for path in attempt_paths
+            if path.stem.rsplit("-", 1)[-1].isdigit()
+        ]
+        attempt_index = max(attempt_indices, default=0) + 1
+        before = self._provider_snapshot()
+        started = time.perf_counter()
+        plan: SlotPlan | None = None
+        compiler_metrics: RunMetrics | None = None
+        error: Exception | None = None
+        try:
+            with _question_deadline(self.suite.budget.question_timeout_seconds):
+                plan, compiler_metrics = compile_slotrag_plan(
+                    METHODS[source_method],
+                    dataset,
+                    question,
+                    _BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
+                )
+        except Exception as exc:
+            error = exc
+        after = self._provider_snapshot()
+        delta = {name: _stats_delta(before[name], after[name]) for name in before}
+        provider_delta = {
+            "attempts": sum(value["attempts"] for value in delta.values()),
+            **delta,
+        }
+        base_record: dict[str, Any] = {
+            "schema_version": 1,
+            "stage": stage_name,
+            "dataset": dataset,
+            "question_id": question.id,
+            "source_method": source_method,
+            "input_sha256": input_sha256,
+            "compiler_options": compile_input["compiler_options"],
+            "attempt_index": attempt_index,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "wall_latency_ms": (time.perf_counter() - started) * 1000,
+            "provider_delta": provider_delta,
+        }
+        attempt_path = attempt_dir / f"attempt-{attempt_index:04d}.json"
+        if error is not None or plan is None or compiler_metrics is None:
+            message = f"{error.__class__.__name__}: {error}" if error is not None else "RuntimeError: compiler returned no plan"
+            failed_record = {
+                **base_record,
+                "status": "failed",
+                "error": message,
+                "failure_category": _failure_category("failed", message, None),
+            }
+            _atomic_json(attempt_path, failed_record)
+            raise FrozenPlanPreparationError(
+                message,
+                self._plan_provenance(failed_record, None),
+            )
+        snapshot = {
+            **base_record,
+            "status": "ok",
+            "error": None,
+            "failure_category": "ok",
+            "plan_sha256": _plan_sha256(plan),
+            "plan": plan.model_dump(mode="json"),
+            "compiler_metrics": compiler_metrics.model_dump(mode="json"),
+        }
+        _atomic_json(attempt_path, snapshot)
+        _atomic_json(snapshot_path, snapshot)
+        return plan, self._plan_provenance(snapshot, relative_snapshot_path)
 
     def _instrument(
         self,
@@ -339,13 +476,29 @@ class BenchmarkRunner:
                             if path.stem.rsplit("-", 1)[-1].isdigit()
                         ]
                         attempt_index = max(attempt_indices, default=0) + 1
+                        frozen_plan: SlotPlan | None = None
+                        plan_provenance: dict[str, Any] | None = None
+                        plan_error: Exception | None = None
+                        if stage.frozen_plan_source is not None and METHODS[method].family == "slotrag":
+                            try:
+                                frozen_plan, plan_provenance = self._load_or_create_frozen_plan(
+                                    stage_name,
+                                    dataset,
+                                    question,
+                                    stage.frozen_plan_source,
+                                )
+                            except FrozenPlanPreparationError as exc:
+                                plan_error = exc
+                                plan_provenance = exc.provenance
+                            except Exception as exc:
+                                plan_error = exc
                         index_provider_before = self._provider_snapshot()
                         index_cache_before = self.embedding_cache.snapshot()
                         retriever: HybridRetriever | None = None
                         index_build_ms = 0.0
                         index_bytes = 0
                         index_error: Exception | None = None
-                        if METHODS[method].family != "graphrag":
+                        if plan_error is None and METHODS[method].family != "graphrag":
                             index_started = time.perf_counter()
                             try:
                                 retriever = self._retriever(question)
@@ -370,7 +523,12 @@ class BenchmarkRunner:
                         cache_before = index_cache_after
                         started = time.perf_counter()
                         rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-                        if index_error is not None:
+                        if plan_error is not None:
+                            result = ExecutionResult(
+                                status="failed",
+                                error=f"{plan_error.__class__.__name__}: {plan_error}",
+                            )
+                        elif index_error is not None:
                             result = ExecutionResult(status="failed", error=f"{index_error.__class__.__name__}: {index_error}")
                         else:
                             try:
@@ -385,6 +543,7 @@ class BenchmarkRunner:
                                         seed=seed,
                                         max_steps=self.suite.budget.max_steps,
                                         max_retrieval_calls=self.suite.budget.max_retrieval_calls,
+                                        frozen_plan=frozen_plan,
                                     )
                             except BenchmarkBudgetExceeded as exc:
                                 result = ExecutionResult(status="budget_exceeded", error=str(exc))
@@ -411,7 +570,7 @@ class BenchmarkRunner:
                         if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
                             result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
                         record = {
-                            "schema_version": 11,
+                            "schema_version": 15,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
@@ -427,6 +586,7 @@ class BenchmarkRunner:
                             "scores": score_record(dataset, question, result),
                             "provider_delta": provider_delta,
                             "index_provider_delta": index_delta,
+                            "plan_provenance": plan_provenance,
                             "failure_category": _failure_category(result.status, result.error, result.answer),
                         }
                         _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record)

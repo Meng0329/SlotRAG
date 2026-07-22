@@ -911,6 +911,341 @@ H22（同样本范围与成本）：2Wiki 10 题中只 F5 的 field_extremum_tem
 
 在线因果验证继续使用相同 2Wiki 样本；只有离线测试、冻结执行和负例范围全部通过后才创建新 manifest。若在线 F5 因检索/抽取未获得两个可解析日期而失败，必须保留空结果或证据 fallback，不允许类型算子猜测标签。
 
+#### schema v11 在线结果（v9）
+
+三项服务于 `2026-07-22T11:48:52+08:00` 均返回 `HTTP 200` 后创建 manifest；源码指纹、审计 SHA-256 与样本 SHA-256 均与预注册值一致。首次运行最先两条 SlotRAG 成功，随后 Agnes 在 `11:57:04--12:01:59+08:00` 之间发生连接中断：SlotRAG 8 条、Hybrid 10 条共 18 个 `attempt-0001` 以同一 `provider_connect/ConnectError` 失败。失败 attempts 未删除；`12:22:52+08:00` 三项 doctor 再次通过后，在同一目录续跑并为这 18 条追加成功的 `attempt-0002`。最终为 20/20 条 schema 11 `ok` 记录、38 个不可变 attempts、18 个 benchmark retries、0 个最终 failed/empty/unsupported；故障时间线保存在 `service-doctor-history.json`，汇总失败率仍以 attempts 为分母。
+
+| v9 2Wiki diagnostic（10 题/方法） | SlotRAG | Hybrid |
+| --- | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.975 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.975 / 0.975 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.460 / 0.230 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.983 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 2.5 / 2.5 / 1,099 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 8.7 / 6.0 / 9.0 / 6.1 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 4.3 / 1.8 / 1.8 / 1.8 | 1.0 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 5,886 / 2,793 / 8,679 | 1,549 / 319 / 1,868 |
+| 编译 / 抽取 / 生成 LLM calls | 2.0 / 1.9 / 0.2 | 0 / 0 / 1.0 |
+| 编译 prompt/completion tokens | 3,148 / 1,380 | 0 / 0 |
+| 抽取 prompt/completion tokens | 2,596 / 1,236 | 0 / 0 |
+| 生成 prompt/completion tokens | 141 / 177 | 1,549 / 319 |
+| Provider calls / 含索引 provider calls | 7.9 / 8.1 | 3.0 / 3.0 |
+| 在线延迟 mean / P50 / P95 / P99 | 69.90 / 47.02 / 160.02 / 175.65 s | 10.91 / 10.14 / 14.80 / 15.76 s |
+| Provider latency / 含索引总延迟 | 69.83 / 69.93 s | 10.90 / 10.91 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 34.78 / 31.84 / 31.83 / 3.29 s | 0 / 0 / 0 / 10.45 s |
+| 内部 provider retry / benchmark 失败 attempts | 0.2 / 8 | 0 / 10 |
+| 结构失败 / 修复 / grounding / local repair | 1.8 / 1.3 / 0 / 0.1 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0.4 / 0.1 / 0.8 | 0 / 0 / 0 |
+| operator rewrite / executed | 0 / 0.1 | 0 / 0 |
+| heuristic / typed / field-extremum / direct templates | 0.1 / 0.1 / 0.1 / 0 | 0 / 0 / 0 / 0 |
+| polar / span normalization / reconciliation | 0.4 / 0 / 0 | 0.4 / 0 / 0 |
+| join input / output rows | 1.6 / 0.8 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.8 / 0.7 / 1.8 / 1.0 / 0.1 / 5.4 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.8 / 0.067 / 0.450 / 0.450 | 0 / 0.016 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 1.750 MB / 1.2 / 0.8 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 1.956 / 0 | N/A / N/A |
+| 物化请求 / 物化 cache hit / reuse rate | 1.8 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 延迟 / embedding calls | 31.97 / 25.95 ms / 0.2 | 1.40 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 18.4 / 1.8 / 0.910 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 与 DROP 专用 EM/F1 在 2Wiki 上均为 N/A。分层结果没有隐藏失败：`bridge_comparison`（2 题）双方 F1=1，SlotRAG/Hybrid Evidence Recall=0.875/1.000、wall=88.98/13.27 s；`comparison`（3 题）双方 F1=1、Evidence Recall=1、wall=56.58/9.44 s；`compositional`（4 题）双方 F1=1、Evidence Recall=1、wall=76.00/10.33 s；`inference`（1 题）双方 F1=1、Evidence Recall=1、wall=47.29/12.91 s。配对 bootstrap 为 0 胜/10 平/0 负，均值与中位差均为 0，Cliff's delta=0，95% CI `[0,0]`，`p=p_holm=1.0`。
+
+| F5 同题因果比较 | v8 schema 10 | v9 schema 11 |
+| --- | ---: | ---: |
+| EM / F1 | 0 / 0 | 1 / 1 |
+| Evidence Recall / NDCG@10 | 0.750 / 0.832 | 1.000 / 1.000 |
+| 编译 LLM calls / tokens / latency | 3 / 9,068 / 166.98 s | 0 / 0 / 0.00062 s |
+| 总 LLM calls / tokens | 8 / 23,241 | 4 / 7,413 |
+| retrieval / embedding / reranker calls | 1 / 1 / 1 | 4 / 4 / 4 |
+| 总 provider calls | 10 | 12 |
+| wall latency | 270.46 s | 41.82 s |
+| 结构失败 / fallback / executed operator | 5 / 1 / 0 | 0 / 0 / 1 |
+| steps / slots / joins / operators | 1 / 1 / 0 / 0 | 4 / 4 / 2 / 1 |
+| 累计/唯一文档，累计/唯一 passage | 4/4，5/5 | 18/8，20/9 |
+
+F5 的答案变为 `Tear Gas Squad`；`field_extremum_templates=typed_plan_templates=heuristic_plans=1`、`operator_rewrites=0`，同样本其余 9 条 SlotRAG 和全部 Hybrid 均为 0。相对 v8，F5 总 LLM calls 减少 50%，总 tokens 减少 68.1%，wall latency 减少 84.5%（6.47 倍加速），同时 retrieval/embedding/reranker calls 各增加 300%、总 provider calls 增加 20%。因此 H19、H20、H21 在线通过；H22 的触发范围、编译成本、总 token 和延迟部分通过，但 provider 调用成本维度未通过，只能判为部分通过。未配置提供方价格，不能宣称货币成本下降。
+
+v9 修复了 F5 并消除 10 题答案差距，但 SlotRAG 全样本平均仍比 Hybrid 使用 4.65 倍 tokens、2.63 倍 provider calls 和 6.41 倍 wall time；当前证据量更小、NDCG 更高，但尚不满足“质量持平时成本下降”的内部 Go 门槛。因此 v9 不直接进入 Tune50，下一轮必须独立预注册编译/抽取调用削减，而不能把本轮单题修复外推为整体效率优势。完整指标、分层、逐题、bootstrap 与 attempts 失败分母见 `runs/vldb2027-diagnostic-v9/summaries/diagnostic/`，在线判定见 `online-validation.json`。
+
+### schema v12 极性比较拓扑路由预注册（2026-07-22）
+
+v9 的 4 个极性比较题均先经历三轮 LLM 编译失败，再回退为同一个 `EvidenceAnsweringQuestion(?answer)` 单槽计划；四题合计浪费 12 次编译调用、28,508 个编译 tokens、180.86 s 编译延迟，产生 14 次结构失败和 4 次 plan fallback。最终答案均为 `no` 且 F1=1，说明答案路径不需要改变，瓶颈是数据集级 `answer_kind=short` 未识别封闭比较问句的拓扑。
+
+schema v12 增加无 gold 的极性比较路由：仅在 `answer_kind=short` 时，问题必须以白名单助动词 `Do/Does/Did/Is/Are/Was/Were/Has/Have/Had/Can/Could/Would/Will` 开头、以 `?` 完整结束、含独立词 `same` 或 `both`，且不含 WH 词；`Can/Could/Would/Will you ...` 请求式问句显式排除。触发后生成与 v9 fallback 完全相同的单槽计划和 `estimated_cardinality=5`，不读取答案、证据、数据集 stratum 或实体；检索、抽取、共享极性规范化及最终判分均不改变。优先级为“月份差 → 字段极值 → 极性比较 → 显式 boolean/单文档/LLM 编译”。新增 `polar_comparison_templates` 和只关闭该入口的 `slotrag-no-polar-template`，schema 11 及以前报告 N/A。
+
+冻结 v9 反事实直接复用四题的同构 fallback 计划，仅去除其编译阶段：全 10 题 SlotRAG 平均 LLM calls 从 4.3 降至 3.1、tokens 从 8,679 降至 5,828、wall 下界估计从 69.90 降至 51.81 s、provider calls 从 7.9 降至 6.7；该估计不重写答案、rows 或 EvidenceRecord，也不当作在线观测值。
+
+```text
+H23（计划同一性）：4 个冻结极性比较题均零编译 LLM 调用，polar_comparison_templates=heuristic_plans=1；生成计划与各自 v9 fallback 计划完全相同，plan_fallbacks=structured_output_failures=0。
+H24（触发边界）：同样本恰好命中上述 4 题；Can you name both...、嵌套 WH、WH 首问、无 same/both 线索和缺少问号均不触发；StrategyQA 的显式 boolean 路由不改。
+H25（质量与路径）：同样本最终 20 条仍全部 ok，SlotRAG/Hybrid EM=F1=1；四题检索/抽取/规范化路径除随机提供方输出外与 v9 同构，不以 gold 或基线结果选择路由。
+H26（成本）：四题 compilation calls/tokens 均为 0；SlotRAG 聚合 compilation calls≤0.8、structured failures≤0.4、plan fallbacks=0，LLM calls≤3.3、tokens≤6,500。延迟完整报告但不设跨时段硬阈值。
+```
+
+只有 H23/H24 的离线计划同一性和边界测试全部通过后才启动独立 v10 目录。若任一极性题的候选计划与 v9 fallback 不同，或非目标题触发，必须停止在线实验而不是扩大正则范围。
+
+离线实现与门槛检查已完成。开发过程先观察正例继续调用编译 LLM 的 RED，再实现最小路由；方法消融、schema 12 统计与 runner 版本也分别经过 RED/GREEN。相关测试为 `74 passed`，全仓为 `100 passed, 1 skipped`；Python 编译、三阶段消融配置、YAML 校验和 `git diff --check` 均通过。冻结源码/配置/测试指纹为 `0acf3536f92a9fa242930b3735b16c7d96388bd268ac8a2dfdd3efb7c6d6e2e4`。
+
+对冻结 v9 样本和实际最终计划执行同一性审计后，候选入口恰好命中预注册的 4 个 question IDs，4 个候选计划都与对应 v9 fallback `SlotPlan` 完全相同，其余 6 题触发 0。请求式 modal-you、嵌套 WH、WH 首问、缺少 same/both 和缺少问号五类边界均拒绝，显式 boolean 路由保持原 `estimated_cardinality=2` 且新计数为 0。H23/H24 离线通过，H25/H26 待在线验证；机器记录为 `runs/vldb2027-diagnostic-v10/offline-validation.json`。
+
+#### schema v12 在线结果（v10）
+
+`2026-07-22T12:47:09+08:00` 三项 service doctor 全部为 `HTTP 200` 后创建 v10 manifest；源码指纹、数据审计和样本哈希均与预注册值一致。运行一次完成 20/20 条 schema 12 记录，20 attempts、0 benchmark retry、0 final failed/empty/unsupported，证据金标覆盖 20/20。
+
+| v10 2Wiki diagnostic（10 题/方法） | SlotRAG | Hybrid |
+| --- | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.975 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.925 / 0.975 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.440 / 0.230 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.966 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 3.1 / 2.7 / 2,010 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 8.7 / 6.1 / 9.0 / 6.2 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 2.9 / 1.8 / 1.8 / 1.8 | 1.0 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 4,052 / 1,740 / 5,792 | 1,549 / 341 / 1,891 |
+| 编译 / 抽取 / 生成 LLM calls | 0.6 / 1.9 / 0.4 | 0 / 0 / 1.0 |
+| 编译 prompt/completion tokens | 845 / 241 | 0 / 0 |
+| 抽取 prompt/completion tokens | 2,680 / 1,296 | 0 / 0 |
+| 生成 prompt/completion tokens | 527 / 203 | 1,549 / 341 |
+| Provider calls / 含索引 provider calls | 6.5 / 7.5 | 3.0 / 3.0 |
+| 在线延迟 mean / P50 / P95 / P99 | 40.53 / 40.33 / 58.34 / 63.68 s | 9.77 / 9.54 / 12.02 / 12.19 s |
+| Provider latency / 含索引总延迟 | 40.52 / 40.90 s | 9.77 / 9.78 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 6.62 / 29.92 / 29.92 / 3.98 s | 0 / 0 / 0 / 9.08 s |
+| 内部 provider retry / benchmark retry attempts | 0 / 0 | 0 / 0 |
+| 结构失败 / 修复 / grounding / local repair | 0.3 / 0.2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0.1 / 0.6 | 0 / 0 / 0 |
+| operator rewrite / executed | 0 / 0.1 | 0 / 0 |
+| heuristic / typed / field / polar / direct templates | 0.5 / 0.1 / 0.1 / 0.4 / 0 | 0 / 0 / 0 / 0 / 0 |
+| polar / span normalization / reconciliation | 0.4 / 0 / 0 | 0.4 / 0 / 0 |
+| join input / output rows | 1.4 / 0.7 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.8 / 0.7 / 1.8 / 1.0 / 0.1 / 5.4 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.8 / 0.045 / 0.450 / 0.450 | 0 / 0.016 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 0.186 MB / 1.5 / 0.8 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 1.264 / 0 | N/A / N/A |
+| 物化请求 / cache hit / reuse rate | 1.8 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 延迟 / embedding calls | 372.96 / 262.57 ms / 1.0 | 1.27 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 11.2 / 9.0 / 0.555 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 与 DROP 专用指标在本数据集为 N/A。v10 使用独立冷 embedding cache 且方法顺序为 SlotRAG 后 Hybrid，因此共享索引 embedding calls 被记在 SlotRAG，Hybrid 复用热 cache；主 `wall_latency` 按既定协议排除共享索引，`with-index` 指标完整保留但具有顺序依赖，不能作为方法优势或劣势的因果证据。
+
+分层 F1 均为 1：`bridge_comparison`（2 题）SlotRAG/Hybrid Evidence Recall=0.875/1.000、tokens=5,265/2,033、wall=33.45/10.53 s；`comparison`（3 题）Evidence Recall=1/1、tokens=3,008/1,790、wall=37.47/8.71 s，三题均触发极性路由；`compositional`（4 题）Evidence Recall=1/1、tokens=5,490/1,550、wall=40.24/10.31 s；`inference`（1 题）Evidence Recall=1/1、tokens=16,405/3,273、wall=65.01/9.33 s。配对 bootstrap 仍为 0 胜/10 平/0 负、均值/中位差 0、Cliff's delta=0、95% CI `[0,0]`、`p=p_holm=1.0`。
+
+| 4 个极性比较题合计 | v9 schema 11 | v10 schema 12 |
+| --- | ---: | ---: |
+| 每题答案 / F1 / Evidence 指标 | 全部不变 | 全部不变 |
+| 编译 LLM calls / tokens | 12 / 28,508 | 0 / 0 |
+| 总 LLM calls / tokens | 20 / 43,573 | 7 / 11,664 |
+| wall latency | 305.89 s | 134.36 s |
+| 结构失败 / plan fallback | 14 / 4 | 0 / 0 |
+| polar comparison template | 0 | 4 |
+
+四个触发 ID 与预注册集合完全相同，非目标题触发 0，`polar_answer_normalizations=1` 仍逐题成立；F5 独立保持 `field_extremum_templates=1`、F1=1，两种路由没有混淆。相对 v9 全样本，SlotRAG 平均 LLM calls 减少 32.6%、tokens 减少 33.3%、provider calls 减少 17.7%、wall 减少 42.0%、编译 calls 减少 70.0%、结构失败减少 83.3%，plan fallback 从 0.4 降为 0。因此 H23-H26 全部在线通过，机器判定见 `runs/vldb2027-diagnostic-v10/online-validation.json`。
+
+schema v12 证明了基于计划同一性的拓扑路由可以无质量变化地删除冗余编译阶段，但尚未达到全面效率优势：相对 Hybrid，SlotRAG 检索文档数减少 72.4%、唯一访问文档减少 37.8%，同时 tokens、provider calls 和 wall 仍高 3.06、2.17 和 4.15 倍。v10 仍不进入 Tune50；下一步应针对占 SlotRAG tokens 68.7% 的抽取阶段和 4 个生成 calls 做机制级削减，并先用冻结 rows/evidence 证明不改变答案路径，而不是继续增加数据集短语模板。完整 122 列逐题指标及所有汇总保存在 v10 `summaries/diagnostic/`。
+
+### schema v13 行级极性共识投影预注册（2026-07-22）
+
+v10 有 4 个生成 calls，其中 3 个来自极性比较题。进一步检查 rows 后只能安全删除 2 个：`904a...` 和 `fce9...` 各有多条字符串不同的 `answer`，但每条都显式以同一 `No` token 开头；现有确定性出口按完整字符串去重，误把一致解释当作多个答案。`d6a...` 的两条 rows 只陈述不同地点，没有显式 yes/no，仍需生成器完成比较，不能因 gold 为 `no` 而确定化。
+
+schema v13 在执行完成后、最终生成前增加保守共识投影。仅当结果为 `ok`、计划只有一个输出、问题满足现有助动词开头与问号边界、至少有两个不同非空输出字符串、且每个字符串首 token 都属于 `yes/no/true/false` 并规范化到同一极性时，返回 `Yes` 或 `No`；rows、EvidenceRecord 和计划保持原样，随后仍经过共享出口映射为小写 canonical 答案。任一行缺 token、出现 yes/no 冲突、非极性问题或原字符串本就唯一时均不触发。新增 `polar_row_consensus`、`slotrag-no-polar-consensus` 消融和 schema 13 门控；原 `polar_answer_normalizations` 应继续计数，证明共享输出协议未被绕过。
+
+冻结 v10 重放恰好命中 `904a637d08e611ebbda5ac1f6bf848b6` 与 `fce934db085b11ebbd5cac1f6bf848b6`，两题共可删除 2 个 generation calls、2,239 tokens 和 26.60 s generation latency；全样本反事实为 LLM calls 2.7、tokens 5,567.9、wall 37.87 s。该反事实只从已记录指标减去被证明冗余的生成阶段，不把它当作在线时延观测。
+
+```text
+H27（共识安全性）：同极性多解释触发；yes/no 冲突、缺少极性 token、单一原始值、非极性问题均不触发，且 rows/evidence/plan 不变。
+H28（冻结范围）：同样本只命中上述 2 题，答案仍为 no，d6a... 与其余 7 题触发 0；polar_answer_normalizations 在 4 个极性题上仍各为 1。
+H29（方法隔离）：完整方法记录 polar_row_consensus=2/10；slotrag-no-polar-consensus 只关闭该投影，不改变两个编译模板、类型算子或共享规范化。
+H30（质量与成本）：20 条最终记录全部 ok，双方 EM=F1=1；两题 generation calls=0，SlotRAG 聚合 generation calls≤0.2、LLM calls≤2.8、tokens≤6,000，延迟完整报告不设硬阈值。
+```
+
+只有冻结 rows 重放、冲突/缺 token 负例和消融隔离全部通过后才启动独立 v11 目录。不得从地点、日期、国籍等事实值自行推断极性；这类推断仍属于生成器职责。
+
+离线实现已完成。共识投影端到端 RED/GREEN、4 类拒绝边界、消融隔离及 schema 13 统计门控均通过；相关测试 `81 passed`，全仓 `107 passed, 1 skipped`，Python 编译、YAML/消融注册和 diff 检查通过。冻结指纹为 `76a81af851133941d125309dda9860f4c27a022b1c4eae5957c26daa0d1c2add`。对 v10 实际 rows 重放恰好命中 `904a...`、`fce9...` 两题，答案、rows、evidence 完全不变，输出经共享出口仍为 `no`；H27-H29 离线通过，H30 待在线验证，机器记录为 `runs/vldb2027-diagnostic-v11/offline-validation.json`。
+
+#### schema v13 在线结果（v11）
+
+`2026-07-22T13:08:11+08:00` 三项 service doctor 全部为 `HTTP 200`，随后在冻结指纹、数据审计和样本哈希下启动 v11。运行一次完成 20/20 条 schema 13 记录，20 attempts、0 benchmark retry、0 final failed/empty/unsupported，证据金标覆盖 20/20。源码指纹为 `76a81a...2add`，数据审计与样本哈希仍分别为 `a24ad3...67e`、`5bcc22...1a4`。
+
+| v11 2Wiki diagnostic（10 题/方法） | SlotRAG | Hybrid |
+| --- | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.925 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.925 / 0.925 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.420 / 0.210 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.939 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 2.1 / 2.1 / 971 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 8.7 / 6.2 / 9.0 / 6.3 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 2.9 / 1.8 / 1.8 / 1.8 | 1.1 / 1.0 / 1.0 / 1.0 |
+| Prompt / completion / total tokens | 3,630 / 1,793 / 5,423 | 1,549 / 516 / 2,066 |
+| 编译 / 抽取 / 生成 LLM calls | 0.7 / 1.9 / 0.1 | 0 / 0 / 1.0 |
+| 编译 prompt/completion tokens | 1,004 / 357 | 0 / 0 |
+| 抽取 prompt/completion tokens | 2,572 / 1,378 | 0 / 0 |
+| 生成 prompt/completion tokens | 53 / 59 | 1,549 / 516 |
+| Provider calls / 含索引 provider calls | 6.5 / 7.5 | 3.1 / 3.1 |
+| 在线延迟 mean / P50 / P95 / P99 | 41.56 / 42.93 / 70.45 / 74.46 s | 14.41 / 12.94 / 28.54 / 32.17 s |
+| Provider latency / 含索引总延迟 | 41.50 / 42.16 s | 14.38 / 14.41 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 10.50 / 29.98 / 29.98 / 1.09 s | 0 / 0 / 0 / 13.14 s |
+| 内部 provider retry / benchmark retry attempts | 0.2 / 0 | 0.1 / 0 |
+| 结构失败 / 修复 / grounding / local repair | 0.5 / 0.5 / 0 / 0.2 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0 / 0.9 | 0 / 0 / 0 |
+| polar row consensus / polar normalization | 0 / 0.4 | 0 / 0.4 |
+| operator rewrite / executed | 0 / 0.1 | 0 / 0 |
+| heuristic / typed / field / polar / direct templates | 0.5 / 0.1 / 0.1 / 0.4 / 0 | 0 / 0 / 0 / 0 / 0 |
+| span normalization / reconciliation | 0 / 0 | 0 / 0 |
+| join input / output rows | 1.6 / 0.8 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.8 / 0.7 / 1.8 / 1.0 / 0.1 / 5.4 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.8 / 0.045 / 0.450 / 0.450 | 0 / 0.017 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 0.207 MB / 1.3 / 0.8 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 1.887 / 0 | N/A / N/A |
+| 物化请求 / cache hit / reuse rate | 1.8 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 延迟 / embedding calls | 593.79 / 545.76 ms / 1.0 | 1.35 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 11.2 / 9.0 / 0.555 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 与 DROP 专用指标在本数据集为 N/A。冷索引与方法顺序限制同 v10：SlotRAG 先运行并承担共享索引 embedding，Hybrid 复用热 cache；主 wall 延迟排除索引构建，含索引指标仅用于完整核算。分层 F1 均为 1：`bridge_comparison`（2 题）SlotRAG/Hybrid Evidence Recall=0.625/1.000、tokens=6,679/2,211、wall=39.74/11.01 s；`comparison`（3 题）为 1/1、2,457/2,117、20.61/23.77 s；`compositional`（4 题）为 1/1、6,284/1,601、56.41/9.25 s；`inference`（1 题）为 1/1、8,369/3,478、48.67/13.75 s。配对 bootstrap 为 0 胜/10 平/0 负、Cliff's delta=0、95% CI `[0,0]`、`p=p_holm=1.0`。
+
+在线 `polar_row_consensus` 实际为 **0/10**，不是预注册的 2/10。`904a...` 的两行变成不含显式极性 token 的事实句，安全规则正确拒绝且保留 1 次生成；`fce9...` 的两行都精确等于 `No`，因只有一个唯一原始值而被共识规则拒绝，随后由已有确定性出口直接回答。`d6a...` 也生成两条完全相同的显式 `No` 解释并由旧出口确定化，`49b5...` 只有一行 `No`。因此极性题 generation calls 从 v10 的 3 次降到 v11 的 1 次、全样本 generation calls 从 0.4 降到 0.1，均是抽取输出随机变化触发现有路径，**不能归因于 schema v13**。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H27 共识安全性 | 通过 | 离线冲突/缺 token/单值/非极性负例全部通过，在线 0 次误触发。 |
+| H28 冻结范围 | 失败 | 冻结 v10 rows 命中 2 题，但新在线 rows 命中 0 题，触发范围不可复现。 |
+| H29 方法隔离与计数 | 失败 | 计数为 0/10，而非预注册的 2/10；消融接口正确但没有在线处理效应。 |
+| H30 质量与成本 | 整体失败 | 20/20 ok、双方 EM=F1=1、tokens=5,423、generation calls=0.1 通过；但 `904a...` 未删除生成，且 LLM calls=2.9 高于 2.8 门槛。 |
+
+v10→v11 的 SlotRAG 观测变化为：LLM/provider calls 均不变（2.9/6.5），tokens 降 6.4%（5,792→5,423），wall 反升 2.6%（40.53→41.56 s），Evidence Recall 从 0.975 降到 0.925；其中 `49b5...` Evidence Recall 从 0.75 降到 0.25。相对同轮 Hybrid，SlotRAG 检索文档少 78.6%、唯一访问文档少 36.7%、证据字符少 66.6%，但 LLM calls、tokens、provider calls、wall 分别为 2.64、2.63、2.10、2.89 倍。v11 不进入 Tune50，schema v13 只保留为安全但未获在线支持的候选，不应写成有效贡献。机器判定见 `runs/vldb2027-diagnostic-v11/online-validation.json`，完整逐题与分层结果见 v11 `summaries/diagnostic/`。
+
+失败原因不是判断规则过严，而是自由文本抽取没有稳定的极性表示契约。下一轮应把极性变成抽取 schema 中受约束的 `yes/no/unknown`，只在返回 `yes/no` 时确定化，`unknown` 继续交给生成器；不得放宽为从地点、国籍、日期等事实值推断答案。该改变需要新的预注册、独立计数和只关闭契约的消融。
+
+### schema v14 类型化变量域与抽取期弃权预注册（2026-07-22）
+
+schema v13 的失败表明，执行层不能把自由文本措辞当作稳定接口。schema v14 将类型信息前移到 `Slot`：新增可选 `variable_types`，键必须属于该槽位变量，首个支持域为 `boolean`。极性比较拓扑模板把 `answer` 标为 boolean；普通槽位、字段极值模板和 LLM 编译计划不自动获得该类型，因此检索查询、连接、算子和非目标题执行路径保持不变。
+
+启用类型化抽取契约时，boolean 字段的工具 schema 只接受小写 `yes/no/unknown`。若抽取返回非空且所有行都是同一 `yes` 或同一 `no`，保留具有效 source attribution 的 canonical rows，已有确定性出口直接作答；若 rows 为空、任一行为 `unknown`、或同时出现 yes/no，则计为一次 abstention、向执行器返回空 rows，并由现有 evidence-only 生成器兜底。字段缺失、非法枚举或未知 source ID 仍进入既有一次结构修复；禁止根据地点、国籍、日期等事实字符串自行计算极性。
+
+新增三项独立计数：`typed_extraction_contracts`、`typed_extraction_answers`、`typed_extraction_abstentions`。消融 `slotrag-no-typed-extraction` 仅让物化器忽略 `variable_types` 并使用原自由文本抽取工具；计划、极性拓扑模板、类型化算子、共识安全检查和最终规范化全部保留。在线门使用新阶段 `polar_contract_gate`，冻结同一 2Wiki train 10 题，方法为 SlotRAG、Hybrid、该消融，共 30 条最终记录。
+
+```text
+H31（契约安全）：boolean 工具域严格为 yes/no/unknown；同极性有效来源可确定化，空/unknown/冲突均弃权并调用生成器；非法值和未知来源进入结构修复；普通槽位工具不变。
+H32（范围与隔离）：冻结样本仅 4 个极性模板计划带 answer:boolean，另外 6 题为 0；完整方法 contract=4，消融 contract=0，双方计划拓扑与检索查询相同。
+H33（在线稳定性）：完整方法 4 个 contract outcome 均被 answers 或 abstentions 覆盖，typed_extraction_answers>=3，所有非弃权 rows 只含 canonical yes/no，4 题最终 polar normalization 均为 1。
+H34（质量与成本）：30/30 final ok；SlotRAG、Hybrid、消融均 EM=F1=1，4 个极性题的完整方法与消融答案/F1一致；完整方法极性题 generation calls<=1、聚合 generation calls<=0.1、LLM calls<=2.9、tokens<=6,000，且 generation calls 不高于消融。延迟完整报告但不设硬阈值。
+```
+
+schema v14 仍只是对核心按需物化框架的接口收紧，不作为独立论文贡献。只有 H31-H34 均通过并在独立重复运行中保持触发稳定，才考虑把类型化抽取写入最终方法；否则回滚该候选，转向削减非极性题的通用编译/抽取成本。
+
+离线实现与范围审计已完成。新增类型键校验、boolean 工具枚举、canonical rows、空/unknown/冲突弃权、非法值修复、自由文本消融及 schema14 统计门控；全仓 `117 passed, 1 skipped`，Python 编译、YAML 和 diff 检查通过。冻结样本恰好只有 `49b5...`、`904a...`、`d6a...`、`fce9...` 四个计划携带 `answer:boolean`，其余 6 题为 0；消融恢复普通 string schema 而保留同一计划。冻结源码指纹为 `e9c00b0280cd3e2e05a23548d9de80a8f8deab39dfef58354306d55225eed795`，H31/H32 离线通过，H33/H34 待在线，机器记录为 `runs/vldb2027-diagnostic-v12/offline-validation.json`。
+
+#### schema v14 在线结果（v12）
+
+`2026-07-22T13:35:02+08:00` 三项 service doctor 全部为 `HTTP 200` 后，在冻结指纹 `e9c00b...d795` 下启动 `polar_contract_gate`；新阶段样本哈希精确复现 `5bcc22...1a4`。运行中 Agnes 再次进入 `ReadTimeout`，主方法 1 条、Hybrid 2 条 immutable attempts 失败；进程暂停、两次 doctor 恢复后在同一目录续跑，最终 30/30 条 schema14 记录均为 `ok`。总计 33 attempts、3 benchmark retry attempts、0 final failed/empty/unsupported，故障时间线见 `service-doctor-history.json`。下表均为最终成功记录的每题均值，attempt 级故障率另行保留。
+
+| v12 2Wiki polar contract gate（10 题/方法） | SlotRAG | Hybrid | No typed extraction |
+| --- | ---: | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 | 0.900 / 0.900 |
+| Evidence Recall / MRR | 0.975 / 1.000 | 1.000 / 1.000 | 0.875 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.975 / 0.975 | 0.450 / 0.925 / 1.000 | 0.450 / 0.875 / 0.875 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.460 / 0.230 | 1.000 / 0.440 / 0.240 | 1.000 / 0.400 / 0.200 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.983 | 0.938 | 0.900 |
+| 检索证据数 / 文档数 / 文本字符 | 2.5 / 2.5 / 1,099 | 9.9 / 9.8 / 2,906 | 2.4 / 2.4 / 1,418 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 8.7 / 6.4 / 9.0 / 6.5 | 9.8 / 9.8 / 9.9 / 9.9 | 8.2 / 5.9 / 8.5 / 6.0 |
+| LLM / retrieval / embedding / reranker calls | 2.9 / 1.8 / 1.8 / 1.8 | 1.4 / 1.0 / 1.0 / 1.0 | 2.8 / 1.7 / 1.7 / 1.7 |
+| Prompt / completion / total tokens | 3,991 / 1,954 / 5,945 | 1,549 / 730 / 2,279 | 3,842 / 3,327 / 7,168 |
+| 编译 / 抽取 / 生成 LLM calls | 0.8 / 2.0 / 0.1 | 0 / 0 / 1.0 | 0.7 / 1.9 / 0.2 |
+| 编译 prompt/completion tokens | 1,235 / 373 | 0 / 0 | 1,007 / 1,156 |
+| 抽取 prompt/completion tokens | 2,668 / 1,387 | 0 / 0 | 2,593 / 1,849 |
+| 生成 prompt/completion tokens | 88 / 195 | 1,549 / 730 | 241 / 322 |
+| Provider calls / 含索引 provider calls | 6.5 / 7.4 | 3.4 / 3.4 | 6.2 / 6.2 |
+| 在线延迟 mean / P50 / P95 / P99 | 48.84 / 38.07 / 106.79 / 126.67 s | 47.56 / 26.54 / 137.08 / 137.99 s | 51.58 / 42.34 / 109.02 / 134.47 s |
+| Provider latency / 含索引总延迟 | 48.83 / 49.18 s | 47.40 / 47.56 s | 51.57 / 51.58 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 12.12 / 34.71 / 34.70 / 2.01 s | 0 / 0 / 0 / 45.88 s | 15.01 / 33.30 / 33.30 / 3.27 s |
+| 内部 provider retry / benchmark retry attempts | 0 / 1 | 0.4 / 2 | 0 / 0 |
+| 结构失败 / 修复 / grounding / local repair | 0.6 / 0.5 / 0 / 0 | 0 / 0 / 0 / 0 | 0.6 / 0.4 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0.1 / 0.9 | 0 / 0 / 0 | 0.1 / 0.1 / 0.8 |
+| typed contract / answer / abstention | 0.4 / 0.3 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| polar consensus / polar normalization | 0 / 0.1 | 0 / 0.4 | 0 / 0.4 |
+| operator rewrite / executed | 0 / 0.1 | 0 / 0 | 0 / 0.1 |
+| heuristic / typed / field / polar / direct templates | 0.5 / 0.1 / 0.1 / 0.4 / 0 | 0 / 0 / 0 / 0 / 0 | 0.5 / 0.1 / 0.1 / 0.4 / 0 |
+| reconciliation / span normalization / early stop / binding prune | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| join input / output rows | 1.6 / 0.8 | 0 / 0 | 1.4 / 0.7 |
+| slots / joins / variables / outputs / operators / complexity | 1.8 / 0.7 / 2.0 / 1.0 / 0.1 / 5.6 | 0 / 0 / 0 / 0 / 0 / 0 | 1.7 / 0.6 / 1.7 / 1.0 / 0.1 / 5.1 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.8 / 0.045 / 0.450 / 0.450 | 0 / 0.022 / 0.250 / 0 | 1.7 / 0.044 / 0.425 / 0.425 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 1.085 MB / 1.2 / 0.8 | 0.739 MB / 0 / 0 | 0.100 MB / 1.2 / 0.7 |
+| 平均 selectivity error / planner regret | 1.956 / 0 | N/A / N/A | 2.066 / 0 |
+| 物化请求 / cache hit / reuse rate | 1.8 / 0 / 0 | 0 / 0 / N/A | 1.7 / 0 / 0 |
+| 运行时 cache hit/miss | 0/0 | 0/0 | 0/0 |
+| 索引构建 / provider 延迟 / embedding calls | 340.75 / 300.60 ms / 0.9 | 1.27 / 0 ms / 0 | 1.46 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 12.2 / 8.0 / 0.605 | 20.2 / 0 / 1.000 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 与 DROP 专用指标为 N/A。主方法先运行并承担大部分冷索引成本，后续两方法复用热 cache；同时本轮跨越 Agnes 故障、退化与恢复三个服务时段，因此绝对延迟和方法间 wall 比值仅作完整记录，不作因果结论。attempt 级故障为 SlotRAG 1/11、Hybrid 2/12、消融 0/10，三条失败均为 `provider_connect/ReadTimeout`，最终记录已通过续跑恢复。
+
+四个极性目标题提供了干净的计划级消融：两方法 4/4 计划完全相同、答案和 F1 均为 1。完整方法得到 contract=4、typed answer=3、abstention=0；`49b5...` 两次结构校验均失败，安全回退生成器。目标题合计如下：
+
+| 4 个极性题合计 | SlotRAG typed contract | No typed extraction |
+| --- | ---: | ---: |
+| EM / F1 | 1.000 / 1.000 | 1.000 / 1.000 |
+| extraction / generation / total LLM calls | 6 / 1 / 7 | 5 / 1 / 6 |
+| total tokens | 17,896 | 14,295 |
+| structured failure / repair | 3 / 2 | 1 / 1 |
+| wall latency | 144.23 s | 101.83 s |
+
+契约在 `904a...` 上删除了消融的 1 次生成，却在 `49b5...` 上因结构耗尽增加了 1 次生成，净 generation saving 为 0；同时 LLM calls、tokens 和 wall 分别高 16.7%、25.2%、41.6%。`d6a...`、`fce9...` 两边都被原确定性出口处理。因此 schema14 没有证明效率收益。完整方法的 `polar_answer_normalizations=1` 而非预注册的 4，不是输出错误：3 个 typed answer 已经是小写 canonical `no`，共享规范化函数无需改写便不会增加“发生变化”计数；但按预注册计数条件仍判失败。
+
+全样本消融 F1=0.9 的唯一错误来自非目标题 `574...`。完整方法独立 LLM 编译得到正确两跳 `MotherOf→MotherOf` 计划并回答 `Isabel Marshal`；消融的独立编译连续结构失败后退化为单槽 evidence plan，最终回答证据不足。10 题中只有 6 对计划相同，4 个非目标题计划不同。因此 SlotRAG 对消融的配对结果（1 胜/9 平、均值差 0.1、Cliff's delta=0.1、95% CI `[0,0.3]`、`p=0.7108, p_holm=1`）**不能解释为类型契约的质量贡献**。SlotRAG 对 Hybrid 仍为 0 胜/10 平/0 负、差值/Cliff's delta=0、CI `[0,0]`、`p=p_holm=1`。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H31 契约安全 | 通过 | 3 个 canonical `no` 直接回答；结构耗尽题安全回退生成器，4 题答案均正确。 |
+| H32 范围与隔离 | 目标题通过、协议有缺口 | 完整方法 contract=4、消融=0，4 个目标题计划相同；但 4/6 个非目标题因独立 LLM 编译而计划不同。 |
+| H33 在线稳定性 | 失败 | typed answer=3 达标，但 answer+abstention 只覆盖 3/4，结构耗尽未归类；normalization 变更计数仅 1/4。 |
+| H34 质量与成本 | 失败 | 30/30 final ok、主方法/Hybrid F1=1、主方法 calls/tokens 门槛通过；但消融 F1=0.9，且目标题没有生成净节省并增加 calls/tokens。 |
+
+schema v14 候选拒绝，不纳入默认方法贡献。相对 Hybrid，主方法仍少检索 74.5% 文档、少访问 34.7% 唯一文档、少处理 62.2% 证据字符，但 LLM calls、tokens、provider calls 仍为 2.07、2.61、1.91 倍；本轮 wall 仅为 1.03 倍是服务时段污染，不能视为效率突破。机器判定见 `runs/vldb2027-diagnostic-v12/online-validation.json`，完整逐题、分层与 attempt 汇总见 v12 `summaries/polar_contract_gate/`。
+
+本轮还暴露了比继续做极性优化更优先的实验协议问题：执行型消融必须复用完全相同的编译计划，否则 LLM compiler 随机性会制造伪质量差。下一步先实现“冻结计划配对消融”协议，将计划生成成本作为共享前置成本单列；随后在相同 plan/evidence 下研究非极性题的通用抽取成本。不得再从全样本独立编译的消融差值主张因果贡献。
+
+在线判定后已立即回滚默认架构：`slotrag` 的 `typed_extraction_contracts` 默认为关闭，候选改名为显式实验方法 `slotrag-typed-extraction`；原 `slotrag-no-typed-extraction` 仅为读取 v12 历史 manifest 保留，不再进入后续消融清单。schema14 统计字段和运行解析保持兼容，故 v12 机器记录不受回滚影响。回滚审计还发现并修复了通用 CLI 直接构造物化器时仍默认开启契约的缺口；现在方法注册、`SlotMaterializer` 和 `extraction_tool` 三层默认均为关闭，仅候选方法显式开启。离线验证为 `117 passed, 1 skipped`，`compileall` 与 `git diff --check` 均通过；回滚后、schema15 改造前的源码指纹为 `d6c3922a3380e30f7a384dab1746b4dcb7d2c3da5942e90394173e9d0fa68f77`。当前方法默认不包含 schema13 行级共识以外的新类型契约贡献；下一次在线运行必须使用新的源码指纹和独立目录。
+
+### schema v15 固定计划成对消融协议预注册（2026-07-22）
+
+schema v15 只修复实验设计，不改变 SlotRAG 答案逻辑，也不作为论文方法贡献。新阶段可指定 `frozen_plan_source`；runner 对每个问题只调用一次该来源方法的 Slot Compiler，将 `SlotPlan`、编译指标、provider delta 和时延原子化保存，随后所有编译兼容的 SlotRAG 方法绕过编译器并重放该计划。配置层比较 `direct_single_document`、`field_extremum_templates` 和 `polar_comparison_templates`；任一开关不同的方法不得伪装成执行期成对消融。
+
+快照有两层完整性约束。输入哈希覆盖 stage、dataset、question ID/文本、source method 和实际 compiler options；计划哈希是规范 JSON `SlotPlan` 的 SHA-256。同一输出目录中问题或编译选项改变时直接拒绝旧快照，计划内容与哈希不同时也直接失败。共享编译失败写入独立 `plan_attempts/` 且不覆盖；恢复后追加 attempt 并且最终只产生一个成功快照。
+
+成本同时报告两种口径：
+
+```text
+执行期因果口径：每个重放方法的 result.metrics 不包含共享编译，frozen_plan_replays=1；
+独立部署口径：llm_calls/total_tokens/provider_calls/wall_latency_with_shared_compile 为执行成本加回一次共享编译；
+共享编译审计：独立报告 calls、prompt/completion/total tokens、provider attempts/retries/latency、wall P50/P95/P99、结构失败/修复/fallback 和计划复杂度。
+```
+
+汇总新增 `frozen_plan_audit.json` 和 `frozen_plan_metrics.csv`，必须报告 snapshot/attempt/replay 数、无 provenance 记录、result-plan 哈希不匹配、未知快照哈希和同题多计划对数。冻结阶段仍输出原有全部答案、证据、调用、token、分阶段、时延分位数、索引、cache、绑定/连接、计划和异常指标，不用新协议取代端到端基线。
+
+v13 在线门固定为 `runs/vldb2027-diagnostic-v13`，阶段 `frozen_polar_contract_gate`，仅使用 2Wiki train 原 10 题，样本 SHA-256 预期仍为 `5bcc2298686f2c3d1e0e570bcfa6197454f32660009d6cf3e9599dae63f1c1a4`。方法为 `slotrag`、`slotrag-typed-extraction` 和 Hybrid；前两者共享由 `slotrag` 生成的计划，Hybrid 仍按原协议端到端运行，只作质量与整体成本参考。该门是对已拒绝 schema14 候选的因果复核，不因一次通过而自动恢复默认开关。
+
+```text
+H35（计划同一性）：10 个有效快照、20 个 SlotRAG 重放记录；两方每题 plan_sha256 相同，mismatch/inconsistent/missing provenance 全为 0，每条 frozen_plan_replays=1。
+H36（成本隔离与可恢复性）：每题共享编译成本只记一次，执行期 compilation calls/tokens/latency=0；共享和加回后口径均完整，失败 plan attempts 不被覆盖。
+H37（消融隔离）：typed 方法 contract=4、默认方法=0，另 6 题均为 0；两方全 10 题 EM/F1 逐题一致，不再出现 v12 非目标编译差异。
+H38（候选保留门）：30/30 final ok，SlotRAG/typed/Hybrid 均 EM=F1=1；4 个目标题 typed answers+abstentions=4、非弃权值均为 canonical yes/no；typed 目标题 generation calls 不高于默认方法，且执行期 LLM calls 和 total tokens 均不高于默认方法。
+```
+
+H35/H36 是协议验收，H37/H38 才是候选因果判定。任一哈希审计失败时 H37/H38 不予解释；H38 任一成本或覆盖条件失败时继续拒绝类型契约，不通过修改阈值追认。时延受共享服务时段影响，完整报告但不设跨时段硬门；calls/tokens 为主成本判定。
+
+离线 TDD 验证已完成：覆盖编译兼容配置拒绝、重放路径不构造编译器、单次共享编译、同哈希续跑、失败 attempt 恢复、过期输入拒绝、schema15 向后兼容和汇总审计。全仓为 `123 passed, 1 skipped`，Python `compileall`、pilot YAML 解析和 `git diff --check` 通过；冻结源码/配置/测试指纹为 `1ef387ec7d9d3836cbf6606bf094ff6abae752d9c52284a71034e0f8516d2044`。机器离线记录为 `runs/vldb2027-diagnostic-v13/offline-validation.json`；只有样本与数据审计哈希复现、三项服务 doctor 通过后才创建 v13 manifest。
+
 ---
 
 # 11. 关键消融
@@ -944,6 +1279,15 @@ vs. 禁用类型化算子（依赖算子的计划显式记为 unsupported，不�
 
 单文档退化计划
 vs. 禁用拓扑感知退化并强制结构编译
+
+字段极值类型化入口
+vs. 仅关闭该确定性入口并保留原 LLM 编译与安全事后改写
+
+极性比较拓扑路由
+vs. 仅关闭该路由并保留原 LLM 编译与 fallback
+
+行级极性共识投影
+vs. 禁用共识并保留最终生成器
 ```
 
 ---

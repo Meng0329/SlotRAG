@@ -5,9 +5,14 @@ import pytest
 
 from slotrag.benchmarking.config import BenchmarkSuite, StageConfig
 from slotrag.benchmarking.datasets import DatasetSpec
-from slotrag.benchmarking.runner import BenchmarkBudgetExceeded, BenchmarkRunner, _BudgetedRetriever
+from slotrag.benchmarking.runner import (
+    BenchmarkBudgetExceeded,
+    BenchmarkRunner,
+    FrozenPlanPreparationError,
+    _BudgetedRetriever,
+)
 from slotrag.config import AppConfig
-from slotrag.models import ExecutionResult, Passage
+from slotrag.models import ExecutionResult, Passage, QuestionRecord, RunMetrics, SlotPlan
 from slotrag.providers import ChatResult, ProviderStats, Usage
 
 
@@ -171,6 +176,157 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
     final_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
     record = json.loads(final_path.read_text(encoding="utf-8"))
     metrics = record["result"]["metrics"]
-    assert record["schema_version"] == 11
+    assert record["schema_version"] == 15
     assert metrics["index_build_latency_ms"] >= 20
     assert metrics["wall_latency_ms"] < metrics["index_build_latency_ms"]
+
+
+def test_frozen_plan_stage_rejects_compile_incompatible_methods():
+    with pytest.raises(ValueError, match="compiler-compatible"):
+        StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag", "slotrag-no-direct"],
+            frozen_plan_source="slotrag",
+        )
+
+
+def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeypatch):
+    benchmark_root = tmp_path / "benchmark"
+    benchmark_root.mkdir()
+    (benchmark_root / "toy.jsonl").write_text(json.dumps({
+        "id": "q1",
+        "question": "What is named Alpha?",
+        "answers": ["Alpha"],
+        "passages": [{"id": "p1", "doc_id": "d1", "text": "Alpha is the answer."}],
+        "type": "bridge",
+    }) + "\n", encoding="utf-8")
+    spec = DatasetSpec("hotpotqa", "toy.jsonl", "toy.jsonl", "f1", lambda record: record["type"])
+    monkeypatch.setitem(__import__("slotrag.benchmarking.runner", fromlist=["DATASETS"]).DATASETS, "hotpotqa", spec)
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    compiled = []
+
+    def compile_plan(method_spec, dataset, question, client):
+        compiled.append((method_spec.key, dataset, question.id, client))
+        return plan, RunMetrics(
+            llm_calls=1,
+            prompt_tokens=11,
+            completion_tokens=3,
+            compilation_llm_calls=1,
+            compilation_prompt_tokens=11,
+            compilation_completion_tokens=3,
+            compilation_latency_ms=12.5,
+        )
+
+    replayed = []
+
+    def run_replay(method, **kwargs):
+        replayed.append((method, kwargs["frozen_plan"]))
+        return ExecutionResult(
+            answer="Alpha",
+            plan=kwargs["frozen_plan"],
+            metrics=RunMetrics(frozen_plan_replays=1),
+        )
+
+    class Retriever:
+        passages = [Passage(id="p1", doc_id="d1", text="Alpha is the answer.")]
+
+        def build_index(self):
+            pass
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.compile_slotrag_plan", compile_plan, raising=False)
+    monkeypatch.setattr("slotrag.benchmarking.runner.run_method", run_replay)
+    suite = BenchmarkSuite(
+        benchmark_root=benchmark_root,
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag", "slotrag-typed-extraction"],
+            frozen_plan_source="slotrag",
+        )},
+    )
+    runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
+    monkeypatch.setattr(runner, "_retriever", lambda _question: Retriever())
+
+    assert runner.run("test")["completed"] == 2
+    assert len(compiled) == 1
+    assert [method for method, _plan in replayed] == ["slotrag", "slotrag-typed-extraction"]
+    assert replayed[0][1] == replayed[1][1] == plan
+
+    snapshots = list((tmp_path / "run" / "plans" / "test").rglob("*.json"))
+    assert len(snapshots) == 1
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "run" / "items" / "test").rglob("*.json")]
+    assert {record["schema_version"] for record in records} == {15}
+    assert len({record["plan_provenance"]["plan_sha256"] for record in records}) == 1
+    assert {record["plan_provenance"]["source_method"] for record in records} == {"slotrag"}
+    assert {record["plan_provenance"]["compiler_metrics"]["compilation_llm_calls"] for record in records} == {1}
+    assert {record["result"]["metrics"]["llm_calls"] for record in records} == {0}
+
+    assert runner.run("test")["skipped"] == 2
+    assert len(compiled) == 1
+
+
+def test_frozen_plan_attempts_are_immutable_and_stale_inputs_are_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag", "slotrag-typed-extraction"],
+            frozen_plan_source="slotrag",
+        )},
+    )
+    runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
+    question = QuestionRecord(
+        id="q1",
+        question="What is named Alpha?",
+        passages=[Passage(id="p1", doc_id="d1", text="Alpha is the answer.")],
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    outcomes = [RuntimeError("transient compiler failure"), (plan, RunMetrics(compilation_llm_calls=1))]
+    compile_calls = []
+
+    def compile_plan(*_args):
+        compile_calls.append(1)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.compile_slotrag_plan", compile_plan)
+
+    with pytest.raises(FrozenPlanPreparationError) as failed:
+        runner._load_or_create_frozen_plan("test", "hotpotqa", question, "slotrag")
+    assert failed.value.provenance["status"] == "failed"
+
+    replayed, provenance = runner._load_or_create_frozen_plan("test", "hotpotqa", question, "slotrag")
+    assert replayed == plan
+    assert provenance["status"] == "ok"
+    attempts = sorted((tmp_path / "run" / "plan_attempts" / "test").rglob("attempt-*.json"))
+    assert [json.loads(path.read_text(encoding="utf-8"))["status"] for path in attempts] == ["failed", "ok"]
+    assert len(list((tmp_path / "run" / "plans" / "test").rglob("*.json"))) == 1
+
+    loaded, _ = runner._load_or_create_frozen_plan("test", "hotpotqa", question, "slotrag")
+    assert loaded == plan
+    assert len(compile_calls) == 2
+
+    changed = question.model_copy(update={"question": "What is named Beta?"})
+    with pytest.raises(ValueError, match="input hash"):
+        runner._load_or_create_frozen_plan("test", "hotpotqa", changed, "slotrag")
+    assert len(compile_calls) == 2

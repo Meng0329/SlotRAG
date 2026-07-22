@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..config import AppConfig
 from ..generation import generate_answer_response
-from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics
+from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
 from ..planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer
 from ..providers import AgnesClient, ChatResult
 from ..retrieval import HybridRetriever, tokenize
@@ -27,6 +27,9 @@ class MethodSpec:
     options: ExecutionOptions = field(default_factory=ExecutionOptions)
     direct_single_document: bool = True
     field_extremum_templates: bool = True
+    polar_comparison_templates: bool = True
+    polar_row_consensus: bool = True
+    typed_extraction_contracts: bool = False
     description: str = ""
 
 
@@ -43,6 +46,9 @@ ABLATION_METHODS = [
     "slotrag-no-operators",
     "slotrag-no-direct",
     "slotrag-no-extremum-template",
+    "slotrag-no-polar-template",
+    "slotrag-no-polar-consensus",
+    "slotrag-typed-extraction",
 ]
 
 
@@ -75,6 +81,26 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag-no-extremum-template",
         "slotrag",
         field_extremum_templates=False,
+    ),
+    "slotrag-no-polar-template": MethodSpec(
+        "slotrag-no-polar-template",
+        "slotrag",
+        polar_comparison_templates=False,
+    ),
+    "slotrag-no-polar-consensus": MethodSpec(
+        "slotrag-no-polar-consensus",
+        "slotrag",
+        polar_row_consensus=False,
+    ),
+    "slotrag-no-typed-extraction": MethodSpec(
+        "slotrag-no-typed-extraction",
+        "slotrag",
+        typed_extraction_contracts=False,
+    ),
+    "slotrag-typed-extraction": MethodSpec(
+        "slotrag-typed-extraction",
+        "slotrag",
+        typed_extraction_contracts=True,
     ),
 }
 
@@ -270,16 +296,16 @@ def _normalize_direct_answer_rows(result: ExecutionResult) -> ExecutionResult:
     return result.model_copy(update={"rows": normalized_rows, "metrics": metrics})
 
 
-def _normalize_polar_answer(question: str, result: ExecutionResult) -> ExecutionResult:
-    if result.status != "ok" or not result.answer:
-        return result
-    if not question.rstrip().endswith("?"):
-        return result
-    if not re.match(
+def _is_polar_question(question: str) -> bool:
+    return question.rstrip().endswith("?") and re.match(
         r"^\s*(?:do|does|did|is|are|was|were|can|could|would|will|has|have|had)\b",
         question,
         flags=re.IGNORECASE,
-    ):
+    ) is not None
+
+
+def _normalize_polar_answer(question: str, result: ExecutionResult) -> ExecutionResult:
+    if result.status != "ok" or not result.answer or not _is_polar_question(question):
         return result
     match = re.match(r"^\s*(yes|no|true|false)\b", result.answer, flags=re.IGNORECASE)
     if not match:
@@ -291,6 +317,28 @@ def _normalize_polar_answer(question: str, result: ExecutionResult) -> Execution
         "polar_answer_normalizations": result.metrics.polar_answer_normalizations + 1,
     })
     return result.model_copy(update={"answer": answer, "metrics": metrics})
+
+
+def _polar_row_consensus(question: str, plan: Any, result: ExecutionResult) -> str | None:
+    if result.status != "ok" or not _is_polar_question(question) or len(plan.outputs) != 1:
+        return None
+    output = plan.outputs[0].lstrip("?")
+    values = [
+        row.get(output, "").strip()
+        for row in result.rows
+        if row.get(output, "").strip()
+    ]
+    if len(set(values)) <= 1:
+        return None
+    polarities: list[str] = []
+    for value in values:
+        match = re.match(r"^\s*(yes|no|true|false)\b", value, flags=re.IGNORECASE)
+        if match is None:
+            return None
+        polarities.append("yes" if match.group(1).casefold() in {"yes", "true"} else "no")
+    if len(set(polarities)) != 1:
+        return None
+    return "Yes" if polarities[0] == "yes" else "No"
 
 
 def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> str | None:
@@ -486,6 +534,72 @@ def _run_graphrag(dataset: str, question: QuestionRecord, client: AgnesClient) -
     return _finalize(client, dataset, question, result)
 
 
+def slotrag_compiler_signature(spec: MethodSpec) -> dict[str, bool]:
+    """Return only method switches that can change the compiled SlotPlan."""
+    return {
+        "direct_single_document": spec.direct_single_document,
+        "field_extremum_templates": spec.field_extremum_templates,
+        "polar_comparison_templates": spec.polar_comparison_templates,
+    }
+
+
+def slotrag_compile_options(
+    spec: MethodSpec,
+    dataset: str,
+    question: QuestionRecord,
+) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "answer_kind": _answer_kind(dataset),
+        "field_extremum_templates": spec.field_extremum_templates,
+        "polar_comparison_templates": spec.polar_comparison_templates,
+    }
+    if spec.direct_single_document and question.passages:
+        options["document_count"] = len({
+            passage.doc_id or passage.id
+            for passage in question.passages
+        })
+    return options
+
+
+def _slot_plan_metrics(
+    plan: SlotPlan,
+    *,
+    compilation_latency_ms: float = 0.0,
+    frozen_plan_replays: int = 0,
+) -> RunMetrics:
+    plan_variables = set().union(*(slot.variables for slot in plan.slots))
+    return RunMetrics(
+        compilation_latency_ms=compilation_latency_ms,
+        frozen_plan_replays=frozen_plan_replays,
+        plan_slot_count=len(plan.slots),
+        plan_join_count=len(plan.joins),
+        plan_variable_count=len(plan_variables),
+        plan_output_count=len(plan.outputs),
+        plan_operator_count=len(plan.operators),
+        plan_complexity=len(plan.slots) + len(plan.joins) + len(plan_variables) + len(plan.outputs) + len(plan.operators),
+    )
+
+
+def compile_slotrag_plan(
+    spec: MethodSpec,
+    dataset: str,
+    question: QuestionRecord,
+    client: AgnesClient,
+) -> tuple[SlotPlan, RunMetrics]:
+    compile_started = time.perf_counter()
+    plan, compiler_metrics = SlotCompiler(client).compile(
+        question.question,
+        **slotrag_compile_options(spec, dataset, question),
+    )
+    return plan, merge_metrics(
+        compiler_metrics,
+        _slot_plan_metrics(
+            plan,
+            compilation_latency_ms=(time.perf_counter() - compile_started) * 1000,
+        ),
+    )
+
+
 def _run_slotrag(
     spec: MethodSpec,
     dataset: str,
@@ -496,32 +610,13 @@ def _run_slotrag(
     seed: int,
     max_steps: int,
     max_retrieval_calls: int,
+    frozen_plan: SlotPlan | None = None,
 ) -> ExecutionResult:
-    compile_started = time.perf_counter()
-    compile_kwargs: dict[str, Any] = {
-        "field_extremum_templates": spec.field_extremum_templates,
-    }
-    if spec.direct_single_document and question.passages:
-        compile_kwargs["document_count"] = len({
-            passage.doc_id or passage.id
-            for passage in question.passages
-        })
-    plan, compiler_metrics = SlotCompiler(client).compile(
-        question.question,
-        answer_kind=_answer_kind(dataset),
-        **compile_kwargs,
-    )
-    plan_variables = set().union(*(slot.variables for slot in plan.slots))
-    plan_metrics = RunMetrics(
-        compilation_latency_ms=(time.perf_counter() - compile_started) * 1000,
-        plan_slot_count=len(plan.slots),
-        plan_join_count=len(plan.joins),
-        plan_variable_count=len(plan_variables),
-        plan_output_count=len(plan.outputs),
-        plan_operator_count=len(plan.operators),
-        plan_complexity=len(plan.slots) + len(plan.joins) + len(plan_variables) + len(plan.outputs) + len(plan.operators),
-    )
-    compiler_metrics = merge_metrics(compiler_metrics, plan_metrics)
+    if frozen_plan is None:
+        plan, compiler_metrics = compile_slotrag_plan(spec, dataset, question, client)
+    else:
+        plan = frozen_plan
+        compiler_metrics = _slot_plan_metrics(plan, frozen_plan_replays=1)
     if len(plan.slots) > max_steps:
         return ExecutionResult(
             status="budget_exceeded",
@@ -529,7 +624,12 @@ def _run_slotrag(
             plan=plan,
             metrics=compiler_metrics,
         )
-    materializer = SlotMaterializer(client, retriever, max_passages=config.execution.materialization_top_k)
+    materializer = SlotMaterializer(
+        client,
+        retriever,
+        max_passages=config.execution.materialization_top_k,
+        typed_extraction_contracts=spec.typed_extraction_contracts,
+    )
     executor = AdaptiveExecutor(
         materializer,
         default_slot_cost=config.execution.default_slot_cost,
@@ -556,10 +656,16 @@ def _run_slotrag(
             "status": "unsupported_operation",
             "error": "typed operators disabled for an operator-dependent plan",
         })
-    deterministic_answer = _deterministic_output(dataset, plan, result)
+    consensus_answer = (
+        _polar_row_consensus(question.question, plan, result)
+        if spec.polar_row_consensus
+        else None
+    )
+    deterministic_answer = consensus_answer or _deterministic_output(dataset, plan, result)
     if deterministic_answer is not None:
         metrics = result.metrics.model_copy(update={
             "deterministic_answers": result.metrics.deterministic_answers + 1,
+            "polar_row_consensus": result.metrics.polar_row_consensus + int(consensus_answer is not None),
         })
         return result.model_copy(update={"answer": deterministic_answer, "metrics": metrics})
     return _finalize(client, dataset, question, result)
@@ -576,17 +682,31 @@ def run_method(
     seed: int,
     max_steps: int = 4,
     max_retrieval_calls: int = 4,
+    frozen_plan: SlotPlan | None = None,
 ) -> ExecutionResult:
     try:
         spec = METHODS[method]
     except KeyError as exc:
         raise ValueError(f"unknown benchmark method: {method}") from exc
+    if frozen_plan is not None and spec.family != "slotrag":
+        raise ValueError(f"frozen plans are only supported by SlotRAG-family methods: {method}")
     runners: dict[str, Callable[[], ExecutionResult]] = {
         "hybrid": lambda: _run_hybrid(dataset, question, retriever, client),
         "planrag": lambda: _run_planrag(dataset, question, retriever, client),
         "ircot": lambda: _run_ircot(dataset, question, retriever, client),
         "react": lambda: _run_react(dataset, question, retriever, client),
         "graphrag": lambda: _run_graphrag(dataset, question, client),
-        "slotrag": lambda: _run_slotrag(spec, dataset, question, retriever, client, config, seed, max_steps, max_retrieval_calls),
+        "slotrag": lambda: _run_slotrag(
+            spec,
+            dataset,
+            question,
+            retriever,
+            client,
+            config,
+            seed,
+            max_steps,
+            max_retrieval_calls,
+            frozen_plan=frozen_plan,
+        ),
     }
     return _normalize_polar_answer(question.question, runners[spec.family]())

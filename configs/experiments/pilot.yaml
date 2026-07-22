@@ -38,6 +38,9 @@ stages:
       - slotrag-no-operators
       - slotrag-no-direct
       - slotrag-no-extremum-template
+      - slotrag-no-polar-template
+      - slotrag-no-polar-consensus
+      - slotrag-typed-extraction
   smoke:
     split: train
     sample_size: 2
@@ -60,10 +63,22 @@ stages:
       - slotrag-no-operators
       - slotrag-no-direct
       - slotrag-no-extremum-template
+      - slotrag-no-polar-template
+      - slotrag-no-polar-consensus
+      - slotrag-typed-extraction
   diagnostic:
     split: train
     sample_size: 10
     methods: [slotrag, hybrid]
+  polar_contract_gate:
+    split: train
+    sample_size: 10
+    methods: [slotrag-typed-extraction, hybrid, slotrag]
+  frozen_polar_contract_gate:
+    split: train
+    sample_size: 10
+    methods: [slotrag, slotrag-typed-extraction, hybrid]
+    frozen_plan_source: slotrag
   tune:
     split: train
     sample_size: 50
@@ -84,6 +99,9 @@ stages:
       - slotrag-no-operators
       - slotrag-no-direct
       - slotrag-no-extremum-template
+      - slotrag-no-polar-template
+      - slotrag-no-polar-consensus
+      - slotrag-typed-extraction
   validation:
     split: train
     sample_size: 200

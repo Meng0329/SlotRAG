@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..errors import ConfigurationError
 from .datasets import DATASETS
-from .methods import METHODS
+from .methods import METHODS, slotrag_compiler_signature
 
 
 class StageConfig(BaseModel):
@@ -17,12 +17,34 @@ class StageConfig(BaseModel):
     split: Literal["train", "evaluation"]
     sample_size: int = Field(gt=0)
     methods: list[str] = Field(min_length=1)
+    frozen_plan_source: str | None = None
 
     @model_validator(mode="after")
     def validate_methods(self) -> "StageConfig":
         unknown = sorted(set(self.methods) - set(METHODS))
         if unknown:
             raise ValueError(f"unknown methods: {', '.join(unknown)}")
+        if self.frozen_plan_source is None:
+            return self
+        if self.frozen_plan_source not in METHODS:
+            raise ValueError(f"unknown frozen plan source: {self.frozen_plan_source}")
+        if self.frozen_plan_source not in self.methods:
+            raise ValueError("frozen_plan_source must also be listed in stage methods")
+        source = METHODS[self.frozen_plan_source]
+        if source.family != "slotrag":
+            raise ValueError("frozen_plan_source must be a SlotRAG-family method")
+        signature = slotrag_compiler_signature(source)
+        incompatible = [
+            method
+            for method in self.methods
+            if METHODS[method].family == "slotrag"
+            and slotrag_compiler_signature(METHODS[method]) != signature
+        ]
+        if incompatible:
+            raise ValueError(
+                "frozen-plan SlotRAG methods must be compiler-compatible with "
+                f"{self.frozen_plan_source}: {', '.join(incompatible)}"
+            )
         return self
 
 

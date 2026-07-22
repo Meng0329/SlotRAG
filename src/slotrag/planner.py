@@ -43,6 +43,14 @@ def slot_plan_tool() -> dict[str, Any]:
                                     "description": "Constants or variables prefixed with ?. Every slot must contain at least one variable.",
                                 },
                                 "constraints": {"type": "object"},
+                                "variable_types": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string",
+                                        "enum": ["string", "boolean", "number", "date"],
+                                    },
+                                    "description": "Optional domains keyed by variable name without ?.",
+                                },
                                 "importance": {"type": "number"},
                                 "estimated_cardinality": {"type": "number", "exclusiveMinimum": 0},
                                 "estimated_cost": {"type": "number", "exclusiveMinimum": 0},
@@ -106,9 +114,21 @@ def slot_plan_tool() -> dict[str, Any]:
     }
 
 
-def extraction_tool(slot: Slot, source_ids: list[str] | None = None) -> dict[str, Any]:
+def extraction_tool(
+    slot: Slot,
+    source_ids: list[str] | None = None,
+    *,
+    typed_extraction_contracts: bool = False,
+) -> dict[str, Any]:
     fields = sorted(slot.variables)
-    properties = {field: {"type": "string"} for field in fields}
+    properties = {
+        field: (
+            {"type": "string", "enum": ["yes", "no", "unknown"]}
+            if typed_extraction_contracts and slot.variable_types.get(field) == "boolean"
+            else {"type": "string"}
+        )
+        for field in fields
+    }
     required = list(fields)
     if source_ids:
         properties["source_id"] = {"type": "string", "enum": source_ids}
@@ -530,6 +550,33 @@ class SlotCompiler:
             outputs=["?answer"],
         )
 
+    @staticmethod
+    def _polar_comparison_template(question: str) -> SlotPlan | None:
+        auxiliary = r"(?:do|does|did|is|are|was|were|has|have|had|can|could|would|will)"
+        if re.fullmatch(rf"\s*{auxiliary}\b.+\?\s*", question, flags=re.IGNORECASE) is None:
+            return None
+        if re.match(r"\s*(?:can|could|would|will)\s+you\b", question, flags=re.IGNORECASE):
+            return None
+        if re.search(
+            r"\b(?:what|which|who|whom|whose|where|when|why|how)\b",
+            question,
+            flags=re.IGNORECASE,
+        ):
+            return None
+        if re.search(r"\b(?:same|both)\b", question, flags=re.IGNORECASE) is None:
+            return None
+        return SlotPlan(
+            slots=[Slot(
+                id="S1",
+                predicate="EvidenceAnsweringQuestion",
+                arguments=["?answer"],
+                constraints={"question": question},
+                variable_types={"answer": "boolean"},
+                estimated_cardinality=5,
+            )],
+            outputs=["?answer"],
+        )
+
     def compile(
         self,
         question: str,
@@ -537,6 +584,7 @@ class SlotCompiler:
         answer_kind: str = "short",
         document_count: int | None = None,
         field_extremum_templates: bool = True,
+        polar_comparison_templates: bool = True,
     ) -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
@@ -568,6 +616,13 @@ class SlotCompiler:
                     heuristic_plans=1,
                     typed_plan_templates=1,
                     field_extremum_templates=1,
+                )
+        if answer_kind == "short" and polar_comparison_templates:
+            polar_comparison_plan = self._polar_comparison_template(question)
+            if polar_comparison_plan is not None:
+                return polar_comparison_plan, RunMetrics(
+                    heuristic_plans=1,
+                    polar_comparison_templates=1,
                 )
         if answer_kind == "boolean":
             return SlotPlan(
@@ -695,10 +750,18 @@ class SlotCompiler:
 
 
 class SlotMaterializer:
-    def __init__(self, client: AgnesClient, retriever: HybridRetriever, *, max_passages: int = 5) -> None:
+    def __init__(
+        self,
+        client: AgnesClient,
+        retriever: HybridRetriever,
+        *,
+        max_passages: int = 5,
+        typed_extraction_contracts: bool = False,
+    ) -> None:
         self.client = client
         self.retriever = retriever
         self.max_passages = max_passages
+        self.typed_extraction_contracts = typed_extraction_contracts
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -729,10 +792,16 @@ class SlotMaterializer:
             if key.lstrip("?") in slot.variables
         }
         effective_bindings = {**constraint_bindings, **bindings}
+        boolean_fields = {
+            field
+            for field, value_type in slot.variable_types.items()
+            if self.typed_extraction_contracts and value_type == "boolean"
+        }
         metrics = RunMetrics(
             retrieval_calls=1,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
+            typed_extraction_contracts=int(bool(boolean_fields and passages)),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -748,7 +817,11 @@ class SlotMaterializer:
                 "content": (
                     "Extract only facts explicitly supported by the supplied passages. "
                     "Every row must use one listed source_id and exactly the requested relation fields. "
-                    "Return an empty rows list when no passage supports the relation."
+                    + (
+                        "Boolean fields must be exactly yes, no, or unknown. Use unknown when the passages are insufficient or conflicting. "
+                        if boolean_fields else ""
+                    )
+                    + "Return an empty rows list when no passage supports the relation."
                 ),
             },
             {
@@ -764,7 +837,11 @@ class SlotMaterializer:
             try:
                 response = self.client.complete(
                     messages,
-                    tools=[extraction_tool(slot, list(by_source))],
+                    tools=[extraction_tool(
+                        slot,
+                        list(by_source),
+                        typed_extraction_contracts=bool(boolean_fields),
+                    )],
                     tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
                     temperature=0.0,
                 )
@@ -772,6 +849,24 @@ class SlotMaterializer:
                 args = self.client.require_tool(response, "emit_evidence_rows")
                 extracted = ExtractionRow.model_validate(args)
                 expected = slot.variables
+                if boolean_fields:
+                    verdicts: dict[str, set[str]] = {field: set() for field in boolean_fields}
+                    for row in extracted.rows:
+                        for field in boolean_fields:
+                            value = row.get(field, "").strip().casefold()
+                            if value not in {"yes", "no", "unknown"}:
+                                raise SchemaError(f"boolean field {field} must be yes, no, or unknown")
+                            row[field] = value
+                            verdicts[field].add(value)
+                    should_abstain = (
+                        not extracted.rows
+                        or any("unknown" in values or len(values) != 1 for values in verdicts.values())
+                    )
+                    if should_abstain:
+                        metrics = metrics.model_copy(update={
+                            "typed_extraction_abstentions": metrics.typed_extraction_abstentions + 1,
+                        })
+                        break
                 if not extracted.rows and attempt == 0:
                     raise SchemaError(f"empty extraction for {slot.id}; review the retrieved passages once")
                 rejection_reasons: list[str] = []
@@ -810,6 +905,10 @@ class SlotMaterializer:
                     raise SchemaError(
                         f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs{detail}"
                     )
+                if boolean_fields:
+                    metrics = metrics.model_copy(update={
+                        "typed_extraction_answers": metrics.typed_extraction_answers + 1,
+                    })
                 break
             except (SchemaError, ValidationError, ValueError) as exc:
                 metrics = metrics.model_copy(update={
@@ -856,6 +955,9 @@ class SlotMaterializer:
                 "structured_output_failures": metrics.structured_output_failures + current_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + current_metrics.structured_output_repairs,
                 "grounding_rejections": metrics.grounding_rejections + current_metrics.grounding_rejections,
+                "typed_extraction_contracts": metrics.typed_extraction_contracts + current_metrics.typed_extraction_contracts,
+                "typed_extraction_answers": metrics.typed_extraction_answers + current_metrics.typed_extraction_answers,
+                "typed_extraction_abstentions": metrics.typed_extraction_abstentions + current_metrics.typed_extraction_abstentions,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
             })
             for row in rows:
@@ -1250,6 +1352,9 @@ class AdaptiveExecutor:
                 "structured_output_failures": metrics.structured_output_failures + slot_metrics.structured_output_failures,
                 "structured_output_repairs": metrics.structured_output_repairs + slot_metrics.structured_output_repairs,
                 "grounding_rejections": metrics.grounding_rejections + slot_metrics.grounding_rejections,
+                "typed_extraction_contracts": metrics.typed_extraction_contracts + slot_metrics.typed_extraction_contracts,
+                "typed_extraction_answers": metrics.typed_extraction_answers + slot_metrics.typed_extraction_answers,
+                "typed_extraction_abstentions": metrics.typed_extraction_abstentions + slot_metrics.typed_extraction_abstentions,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

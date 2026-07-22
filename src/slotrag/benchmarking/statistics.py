@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from ..models import RunMetrics
+from ..models import RunMetrics, SlotPlan
 
 
 METRICS = [
@@ -59,6 +60,10 @@ METRICS = [
     "generation_prompt_tokens",
     "generation_completion_tokens",
     "total_tokens",
+    "llm_calls_with_shared_compile",
+    "total_tokens_with_shared_compile",
+    "provider_calls_with_shared_compile",
+    "wall_latency_with_shared_compile_ms",
     "latency_ms",
     "wall_latency_ms",
     "provider_latency_ms",
@@ -76,6 +81,11 @@ METRICS = [
     "answer_reconciliations",
     "answer_span_normalizations",
     "polar_answer_normalizations",
+    "polar_row_consensus",
+    "typed_extraction_contracts",
+    "typed_extraction_answers",
+    "typed_extraction_abstentions",
+    "frozen_plan_replays",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -89,6 +99,7 @@ METRICS = [
     "heuristic_plans",
     "typed_plan_templates",
     "field_extremum_templates",
+    "polar_comparison_templates",
     "direct_plan_templates",
     "operators_executed",
     "plan_slot_count",
@@ -130,6 +141,7 @@ LATENCY_METRICS = {
     "execution_latency_ms",
     "materialization_latency_ms",
     "generation_latency_ms",
+    "wall_latency_with_shared_compile_ms",
 }
 
 
@@ -151,6 +163,157 @@ def load_attempt_records(output_dir: Path, stage: str) -> list[dict[str, Any]]:
     for path in sorted(root.rglob("attempt-*.json")):
         records.append(json.loads(path.read_text(encoding="utf-8")))
     return records
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _frozen_plan_audit(
+    output_dir: Path,
+    stage: str,
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    snapshot_paths = sorted((output_dir / "plans" / stage).rglob("*.json")) if (output_dir / "plans" / stage).exists() else []
+    snapshots: list[dict[str, Any]] = []
+    invalid_snapshot_count = 0
+    for path in snapshot_paths:
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+            plan = SlotPlan.model_validate(snapshot["plan"])
+            plan_payload = plan.model_dump(mode="json")
+            if snapshot.get("status") != "ok" or snapshot.get("plan_sha256") != _canonical_sha256(plan_payload):
+                raise ValueError("invalid status or plan hash")
+            snapshots.append(snapshot)
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            invalid_snapshot_count += 1
+
+    replay_records: list[dict[str, Any]] = []
+    missing_provenance_count = 0
+    missing_result_plan_count = 0
+    plan_hash_mismatch_count = 0
+    pair_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
+    snapshot_hashes = {str(snapshot["plan_sha256"]) for snapshot in snapshots}
+    unknown_snapshot_hash_count = 0
+    for record in records:
+        raw_metrics = record.get("result", {}).get("metrics", {})
+        if record.get("schema_version", 1) < 15 or not raw_metrics.get("frozen_plan_replays"):
+            continue
+        replay_records.append(record)
+        provenance = record.get("plan_provenance")
+        if not isinstance(provenance, dict) or provenance.get("status") != "ok" or not provenance.get("plan_sha256"):
+            missing_provenance_count += 1
+            continue
+        provenance_hash = str(provenance["plan_sha256"])
+        pair_hashes[(str(record.get("dataset")), str(record.get("question_id")))].add(provenance_hash)
+        if snapshot_hashes and provenance_hash not in snapshot_hashes:
+            unknown_snapshot_hash_count += 1
+        result_plan = record.get("result", {}).get("plan")
+        if result_plan is None:
+            missing_result_plan_count += 1
+            continue
+        try:
+            normalized_plan = SlotPlan.model_validate(result_plan).model_dump(mode="json")
+        except ValueError:
+            plan_hash_mismatch_count += 1
+            continue
+        if _canonical_sha256(normalized_plan) != provenance_hash:
+            plan_hash_mismatch_count += 1
+
+    compiler_metrics = [
+        RunMetrics.model_validate(snapshot.get("compiler_metrics", {}))
+        for snapshot in snapshots
+    ]
+    provider_attempts = [int(snapshot.get("provider_delta", {}).get("attempts", 0)) for snapshot in snapshots]
+    provider_retries = [
+        sum(
+            int(value.get("retries", 0))
+            for value in snapshot.get("provider_delta", {}).values()
+            if isinstance(value, dict)
+        )
+        for snapshot in snapshots
+    ]
+    provider_latencies = [
+        sum(
+            float(value.get("latency_ms", 0.0))
+            for value in snapshot.get("provider_delta", {}).values()
+            if isinstance(value, dict)
+        )
+        for snapshot in snapshots
+    ]
+    wall_latencies = [float(snapshot.get("wall_latency_ms", 0.0)) for snapshot in snapshots]
+    total_tokens = [metrics.prompt_tokens + metrics.completion_tokens for metrics in compiler_metrics]
+
+    attempt_paths = sorted((output_dir / "plan_attempts" / stage).rglob("attempt-*.json")) if (output_dir / "plan_attempts" / stage).exists() else []
+    failed_plan_attempts = 0
+    for path in attempt_paths:
+        try:
+            failed_plan_attempts += json.loads(path.read_text(encoding="utf-8")).get("status") != "ok"
+        except (OSError, json.JSONDecodeError):
+            failed_plan_attempts += 1
+
+    def total(values: list[int | float]) -> int | float:
+        return sum(values)
+
+    def mean(values: list[int | float]) -> float | None:
+        return float(np.mean(values)) if values else None
+
+    def percentile(values: list[int | float], q: float) -> float | None:
+        return float(np.percentile(values, q)) if values else None
+
+    shared_compiler = {
+        "llm_calls_total": int(total([metrics.llm_calls for metrics in compiler_metrics])),
+        "llm_calls_mean": mean([metrics.llm_calls for metrics in compiler_metrics]),
+        "prompt_tokens_total": int(total([metrics.prompt_tokens for metrics in compiler_metrics])),
+        "completion_tokens_total": int(total([metrics.completion_tokens for metrics in compiler_metrics])),
+        "total_tokens_total": int(total(total_tokens)),
+        "total_tokens_mean": mean(total_tokens),
+        "total_tokens_p95": percentile(total_tokens, 95),
+        "compilation_latency_ms_total": float(total([metrics.compilation_latency_ms for metrics in compiler_metrics])),
+        "compilation_latency_ms_mean": mean([metrics.compilation_latency_ms for metrics in compiler_metrics]),
+        "compilation_latency_ms_p50": percentile([metrics.compilation_latency_ms for metrics in compiler_metrics], 50),
+        "compilation_latency_ms_p95": percentile([metrics.compilation_latency_ms for metrics in compiler_metrics], 95),
+        "compilation_latency_ms_p99": percentile([metrics.compilation_latency_ms for metrics in compiler_metrics], 99),
+        "wall_latency_ms_total": float(total(wall_latencies)),
+        "wall_latency_ms_mean": mean(wall_latencies),
+        "wall_latency_ms_p50": percentile(wall_latencies, 50),
+        "wall_latency_ms_p95": percentile(wall_latencies, 95),
+        "wall_latency_ms_p99": percentile(wall_latencies, 99),
+        "provider_attempts_total": int(total(provider_attempts)),
+        "provider_attempts_mean": mean(provider_attempts),
+        "provider_retries_total": int(total(provider_retries)),
+        "provider_latency_ms_total": float(total(provider_latencies)),
+        "provider_latency_ms_p95": percentile(provider_latencies, 95),
+        "structured_output_failures_total": int(total([metrics.structured_output_failures for metrics in compiler_metrics])),
+        "structured_output_repairs_total": int(total([metrics.structured_output_repairs for metrics in compiler_metrics])),
+        "plan_fallbacks_total": int(total([metrics.plan_fallbacks for metrics in compiler_metrics])),
+        "heuristic_plans_total": int(total([metrics.heuristic_plans for metrics in compiler_metrics])),
+        "typed_plan_templates_total": int(total([metrics.typed_plan_templates for metrics in compiler_metrics])),
+        "field_extremum_templates_total": int(total([metrics.field_extremum_templates for metrics in compiler_metrics])),
+        "polar_comparison_templates_total": int(total([metrics.polar_comparison_templates for metrics in compiler_metrics])),
+        "direct_plan_templates_total": int(total([metrics.direct_plan_templates for metrics in compiler_metrics])),
+        "plan_slot_count_mean": mean([metrics.plan_slot_count for metrics in compiler_metrics]),
+        "plan_join_count_mean": mean([metrics.plan_join_count for metrics in compiler_metrics]),
+        "plan_complexity_mean": mean([metrics.plan_complexity for metrics in compiler_metrics]),
+    }
+    return {
+        "enabled": bool(snapshot_paths or replay_records or attempt_paths),
+        "snapshot_count": len(snapshot_paths),
+        "valid_snapshot_count": len(snapshots),
+        "invalid_snapshot_count": invalid_snapshot_count,
+        "source_methods": sorted({str(snapshot.get("source_method")) for snapshot in snapshots}),
+        "plan_attempt_count": len(attempt_paths),
+        "failed_plan_attempt_count": failed_plan_attempts,
+        "replay_record_count": len(replay_records),
+        "replay_question_count": len(pair_hashes),
+        "missing_provenance_count": missing_provenance_count,
+        "missing_result_plan_count": missing_result_plan_count,
+        "plan_hash_mismatch_count": plan_hash_mismatch_count,
+        "unknown_snapshot_hash_count": unknown_snapshot_hash_count,
+        "inconsistent_pair_count": sum(len(hashes) != 1 for hashes in pair_hashes.values()),
+        "shared_compiler": shared_compiler,
+    }
 
 
 def _fallback_failure_category(record: dict[str, Any]) -> str:
@@ -198,12 +361,54 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
     schema11_metrics = {
         "field_extremum_templates": metrics["field_extremum_templates"] if schema_version >= 11 else None,
     }
+    schema12_metrics = {
+        "polar_comparison_templates": metrics["polar_comparison_templates"] if schema_version >= 12 else None,
+    }
+    schema13_metrics = {
+        "polar_row_consensus": metrics["polar_row_consensus"] if schema_version >= 13 else None,
+    }
+    schema14_metrics = {
+        name: metrics[name] if schema_version >= 14 else None
+        for name in (
+            "typed_extraction_contracts",
+            "typed_extraction_answers",
+            "typed_extraction_abstentions",
+        )
+    }
+    schema15_metrics = {
+        "frozen_plan_replays": metrics["frozen_plan_replays"] if schema_version >= 15 else None,
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
         for token_type in ("prompt", "completion")
     )
     total_tokens = metrics["prompt_tokens"] + metrics["completion_tokens"]
+    plan_provenance = record.get("plan_provenance") or {}
+    shared_compiler_metrics: RunMetrics | None = None
+    if metrics["frozen_plan_replays"] and isinstance(plan_provenance, dict):
+        try:
+            shared_compiler_metrics = RunMetrics.model_validate(plan_provenance.get("compiler_metrics", {}))
+        except ValueError:
+            shared_compiler_metrics = None
+    shared_agnes_attempts = 0
+    shared_wall_latency_ms = 0.0
+    if shared_compiler_metrics is not None:
+        provider_delta = plan_provenance.get("provider_delta", {})
+        agnes_delta = provider_delta.get("agnes", {}) if isinstance(provider_delta, dict) else {}
+        shared_agnes_attempts = int(
+            agnes_delta.get("attempts", shared_compiler_metrics.llm_calls)
+            if isinstance(agnes_delta, dict)
+            else shared_compiler_metrics.llm_calls
+        )
+        shared_wall_latency_ms = float(
+            plan_provenance.get("wall_latency_ms", shared_compiler_metrics.compilation_latency_ms)
+        )
+    shared_total_tokens = (
+        shared_compiler_metrics.prompt_tokens + shared_compiler_metrics.completion_tokens
+        if shared_compiler_metrics is not None
+        else None
+    )
     return {
         "dataset": record["dataset"],
         "method": record["method_label"],
@@ -214,6 +419,9 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         "status": result["status"],
         "failure_category": _fallback_failure_category(record),
         "attempt_index": record.get("attempt_index", 1),
+        "plan_sha256": plan_provenance.get("plan_sha256"),
+        "frozen_plan_source": plan_provenance.get("source_method"),
+        "cost_scope": "execution_only_shared_plan_excluded" if metrics["frozen_plan_replays"] else "end_to_end",
         "latency_scope": "online_only" if shared_index_excluded else "includes_index",
         "evidence_metric_status": scores.get(
             "evidence_metric_status",
@@ -228,9 +436,29 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema8_metrics,
         **schema10_metrics,
         **schema11_metrics,
+        **schema12_metrics,
+        **schema13_metrics,
+        **schema14_metrics,
+        **schema15_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
+        "llm_calls_with_shared_compile": (
+            metrics["llm_calls"] + shared_agnes_attempts
+            if shared_compiler_metrics is not None else None
+        ),
+        "total_tokens_with_shared_compile": (
+            total_tokens + shared_total_tokens
+            if shared_total_tokens is not None else None
+        ),
+        "provider_calls_with_shared_compile": (
+            metrics["llm_calls"] + metrics["embedding_calls"] + metrics["reranker_calls"] + shared_agnes_attempts
+            if shared_compiler_metrics is not None else None
+        ),
+        "wall_latency_with_shared_compile_ms": (
+            metrics["wall_latency_ms"] + shared_wall_latency_ms
+            if shared_compiler_metrics is not None else None
+        ),
         "max_intermediate_binding_size": max(metrics["intermediate_binding_sizes"], default=0),
         "mean_selectivity_error": _mean(metrics["slot_selectivity_errors"]),
         "materialization_reuse_rate": (
@@ -472,14 +700,18 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "retrieved_document_count",
         "retrieval_calls",
         "llm_calls",
+        "llm_calls_with_shared_compile",
         "provider_calls",
+        "provider_calls_with_shared_compile",
         "total_tokens",
+        "total_tokens_with_shared_compile",
         "compilation_llm_calls",
         "extraction_llm_calls",
         "planning_llm_calls",
         "reasoning_llm_calls",
         "generation_llm_calls",
         "wall_latency_ms",
+        "wall_latency_with_shared_compile_ms",
         "wall_latency_ms_p95",
         "index_build_latency_ms",
         "index_provider_latency_ms",
@@ -492,8 +724,14 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "operator_rewrites",
         "typed_plan_templates",
         "field_extremum_templates",
+        "polar_comparison_templates",
         "direct_plan_templates",
         "answer_span_normalizations",
+        "polar_row_consensus",
+        "typed_extraction_contracts",
+        "typed_extraction_answers",
+        "typed_extraction_abstentions",
+        "frozen_plan_replays",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
@@ -567,6 +805,7 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
     failures = failure_report(attempt_records)
     retrieval = _retrieval_report(summaries)
     validity = _validity_report(output_dir, stage, records, len(attempts))
+    frozen_plan_audit = _frozen_plan_audit(output_dir, stage, records)
     report = {
         "stage": stage,
         "record_count": len(records),
@@ -579,6 +818,7 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
         "failure_report": failures,
         "seed_variance": variance,
         "paired_bootstrap": comparisons,
+        "frozen_plan_audit": frozen_plan_audit,
     }
     summary_dir = output_dir / "summaries" / stage
     summary_dir.mkdir(parents=True, exist_ok=True)
@@ -591,6 +831,20 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
     _write_csv(summary_dir / "failure_report.csv", failures)
     _write_csv(summary_dir / "seed_variance.csv", variance)
     _write_csv(summary_dir / "paired_bootstrap.csv", comparisons)
+    frozen_plan_row = {
+        key: value
+        for key, value in frozen_plan_audit.items()
+        if key != "shared_compiler"
+    }
+    frozen_plan_row.update({
+        f"shared_compiler_{key}": value
+        for key, value in frozen_plan_audit["shared_compiler"].items()
+    })
+    _write_csv(summary_dir / "frozen_plan_metrics.csv", [frozen_plan_row])
+    (summary_dir / "frozen_plan_audit.json").write_text(
+        json.dumps(frozen_plan_audit, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     lines = [
         "# SlotRAG Experiment Report",
         "",
@@ -600,6 +854,8 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
         f"- Failure report source: {'immutable attempts' if attempts else 'legacy final-record fallback'}",
         f"- Expected records: {validity['expected_record_count'] if validity['expected_record_count'] is not None else 'N/A'}",
         f"- Completion rate: {validity['completion_rate'] if validity['completion_rate'] is not None else 'N/A'}",
+        f"- Frozen plan snapshots/replays: {frozen_plan_audit['snapshot_count']}/{frozen_plan_audit['replay_record_count']}",
+        f"- Frozen plan hash mismatches/inconsistent pairs: {frozen_plan_audit['plan_hash_mismatch_count']}/{frozen_plan_audit['inconsistent_pair_count']}",
         "- Evidence quality metrics are N/A for datasets without gold evidence labels.",
         "",
         "## Method Summary",
