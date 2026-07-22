@@ -2067,6 +2067,27 @@ v27 使用 `runs/vldb2027-training-v27` 和阶段 `mechanism_stratified_repair_g
 
 只有 H102-H107 全部通过，才授权另建一组自然分布、无历史交集的随机 100 题训练泛化门；v27 本身不直接授权 held-out-200。若观察 v27 后修改方法或阈值，必须换新样本，不能在这 50 题上重新宣称通过。
 
+#### v27 source 提前停止：极性模板与新谓词别名
+
+source 最终为 50/50 schema26 final `ok`、50/50 frozen plans、50 execution attempts，benchmark retry=0；frozen-plan 审计中的 invalid/missing/hash mismatch/unknown/inconsistent/effective variant 全为 0。Agnes 有 2 次 provider 内部 retry，但同一 final attempt 内恢复，完整 provider attempts（编译、索引、执行合计）为 Agnes/embedding/reranker=`139/133/83`，平均 RPM=`6.80/6.50/4.06`，仍低于 20 RPM 硬限。
+
+| source SlotRAG 指标（n=50，机制分层集） | 数值 |
+|---|---:|
+| EM / F1 | 0.7600 / 0.7893 |
+| Evidence Recall / MRR / nDCG@10 | 0.7150 / 0.8767 / 0.7441 |
+| R@1 / R@5 / R@10 | 0.3300 / 0.7150 / 0.7150 |
+| P@1 / P@5 / P@10 | 0.8600 / 0.3760 / 0.1880 |
+| LLM / provider calls（共享编译排除） | 2.08 / 5.40 |
+| shared-compile-inclusive LLM / provider calls | 2.78 / 6.10 |
+| execution / shared-compile-inclusive tokens | 2870.18 / 4060.74 |
+| wall mean / p50 / p95 / p99（s） | 18.57 / 14.62 / 40.74 / 43.85 |
+| structured failure / repair / grounding rejection | 0.3400 / 0.3200 / 0.0200 |
+| deterministic answer rate | 0.9400 |
+
+H100 **通过**，H101 **失败**。30 个 title-root 题中 9 个可前瞻触发 query-root repair（阈值 4），10 个非目标控制的 country/nationality 谓词污染为 0（阈值至多 1），source success rate=1.0；但 40 个 relation-target 中只有 10 个计划进入现有闭合谓词族（阈值 30）。互斥分解为：10 个 closed-family、4 个新出现的 `NationalityOf`、26 个单槽 `EvidenceAnsweringQuestion`。后 26 个主要是包含 `same/both` 的 yes/no 比较题，被既有 polar template 有意折叠成证据问答槽；source 在 bridge-comparison/comparison 上 F1=`0.85/1.00`，没有证据支持把局部 surface repair 强行扩到该通用槽。
+
+因此按预注册不启动 250 条 replay，H102-H107 记为未评估，随机 100 与 held-out-200 均未授权。下一架构只作一个闭合词表修正：把语义精确的 `NationalityOf` 加入 normalized country/nationality family；不改变 polar template。随后使用新的无重叠短答案 compositional relation 样本重做机制门，排除 yes/no 极性题造成的不可应用覆盖。机器判定见 v27 `source-plan-audit.json`、`early-stop-validation.json` 和更新后的 `offline-validation.json`。
+
 ---
 
 # 11. 关键消融
