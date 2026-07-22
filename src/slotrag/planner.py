@@ -269,6 +269,38 @@ def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan
     return plan, 0
 
 
+def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
+    """Fold a safe anchor, then replace its known consumer variable with a constant."""
+    folded, count = fold_grounded_entity_anchor(plan, question)
+    if not count:
+        return plan, 0
+
+    source_slots = {slot.id: slot for slot in plan.slots}
+    payload = folded.model_dump(mode="python")
+    for slot in payload["slots"]:
+        source = source_slots.get(slot["id"])
+        if source is None:
+            continue
+        introduced = [
+            field
+            for field in slot.get("constraints", {})
+            if field not in source.constraints and f"?{field}" in source.arguments
+        ]
+        if len(introduced) != 1:
+            continue
+        variable = introduced[0]
+        constant = slot["constraints"].pop(variable)
+        if not isinstance(constant, str) or not constant:
+            return plan, 0
+        slot["arguments"] = [constant if argument == f"?{variable}" else argument for argument in slot["arguments"]]
+        slot.get("variable_types", {}).pop(variable, None)
+        try:
+            return SlotPlan.model_validate(payload), 1
+        except ValidationError:
+            return plan, 0
+    return plan, 0
+
+
 class SlotCompiler:
     def __init__(self, client: AgnesClient) -> None:
         self.client = client
@@ -357,6 +389,10 @@ class SlotCompiler:
     @staticmethod
     def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
         return fold_grounded_entity_anchor(plan, question)
+
+    @staticmethod
+    def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
+        return substitute_grounded_entity_anchor(plan, question)
 
     @staticmethod
     def _repair_join_keys(payload: dict[str, Any]) -> dict[str, Any] | None:

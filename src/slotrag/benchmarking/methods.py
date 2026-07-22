@@ -14,7 +14,14 @@ from pydantic import BaseModel, Field
 from ..config import AppConfig
 from ..generation import generate_answer_response
 from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
-from ..planner import AdaptiveExecutor, ExecutionOptions, SlotCompiler, SlotMaterializer, fold_grounded_entity_anchor
+from ..planner import (
+    AdaptiveExecutor,
+    ExecutionOptions,
+    SlotCompiler,
+    SlotMaterializer,
+    fold_grounded_entity_anchor,
+    substitute_grounded_entity_anchor,
+)
 from ..providers import AgnesClient, ChatResult
 from ..retrieval import HybridRetriever, tokenize
 
@@ -31,6 +38,7 @@ class MethodSpec:
     polar_row_consensus: bool = True
     typed_extraction_contracts: bool = False
     grounded_entity_anchor_folding: bool = False
+    grounded_entity_anchor_substitution: bool = False
     description: str = ""
 
 
@@ -51,6 +59,7 @@ ABLATION_METHODS = [
     "slotrag-no-polar-consensus",
     "slotrag-typed-extraction",
     "slotrag-anchor-folding",
+    "slotrag-anchor-substitution",
 ]
 
 
@@ -108,6 +117,11 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag-anchor-folding",
         "slotrag",
         grounded_entity_anchor_folding=True,
+    ),
+    "slotrag-anchor-substitution": MethodSpec(
+        "slotrag-anchor-substitution",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
     ),
 }
 
@@ -629,6 +643,18 @@ def _run_slotrag(
         effective_metrics = _slot_plan_metrics(plan)
         compiler_metrics = compiler_metrics.model_copy(update={
             "grounded_entity_anchor_folds": anchor_folds,
+            "plan_slot_count": effective_metrics.plan_slot_count,
+            "plan_join_count": effective_metrics.plan_join_count,
+            "plan_variable_count": effective_metrics.plan_variable_count,
+            "plan_output_count": effective_metrics.plan_output_count,
+            "plan_operator_count": effective_metrics.plan_operator_count,
+            "plan_complexity": effective_metrics.plan_complexity,
+        })
+    if spec.grounded_entity_anchor_substitution:
+        plan, anchor_substitutions = substitute_grounded_entity_anchor(plan, question.question)
+        effective_metrics = _slot_plan_metrics(plan)
+        compiler_metrics = compiler_metrics.model_copy(update={
+            "grounded_entity_anchor_substitutions": anchor_substitutions,
             "plan_slot_count": effective_metrics.plan_slot_count,
             "plan_join_count": effective_metrics.plan_join_count,
             "plan_variable_count": effective_metrics.plan_variable_count,

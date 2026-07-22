@@ -333,15 +333,36 @@ def test_anchor_folding_candidate_derives_effective_plan_from_same_frozen_source
         max_retrieval_calls=4,
         frozen_plan=raw_plan,
     )
+    substitution = methods._run_slotrag(
+        methods.METHODS["slotrag-anchor-substitution"],
+        "2wikimultihop",
+        question,
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=raw_plan,
+    )
 
     assert executed_plans[0] == raw_plan
     assert [slot.id for slot in executed_plans[1].slots] == ["S2", "S3"]
+    assert executed_plans[2].slots[0].arguments == [
+        "?mother",
+        "Baldwin De Redvers, 7Th Earl Of Devon",
+    ]
     assert base.metrics.grounded_entity_anchor_folds == 0
     assert candidate.metrics.grounded_entity_anchor_folds == 1
+    assert substitution.metrics.grounded_entity_anchor_substitutions == 1
     assert base.metrics.plan_slot_count == 3
     assert candidate.metrics.plan_slot_count == 2
     assert candidate.metrics.plan_join_count == 1
+    assert substitution.metrics.plan_slot_count == 2
+    assert substitution.metrics.plan_join_count == 1
+    assert substitution.metrics.plan_variable_count == 2
     assert candidate.answer == "Isabel Marshal"
+    assert substitution.answer == "Isabel Marshal"
 
 
 def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it(monkeypatch):

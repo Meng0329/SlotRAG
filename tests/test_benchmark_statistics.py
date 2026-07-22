@@ -289,6 +289,23 @@ def test_schema16_reports_grounded_anchor_folds_without_backfilling_schema15():
     assert legacy_summary["grounded_entity_anchor_folds"] is None
 
 
+def test_schema17_reports_anchor_substitutions_without_backfilling_schema16():
+    current = _record("slotrag-anchor-substitution", "q1", 1.0)
+    current["schema_version"] = 17
+    current["result"]["metrics"] = RunMetrics(
+        grounded_entity_anchor_substitutions=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-anchor-folding", "q1", 1.0)
+    legacy["schema_version"] = 16
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag-anchor-substitution")
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag-anchor-folding")
+
+    assert current_summary["grounded_entity_anchor_substitutions"] == 1
+    assert legacy_summary["grounded_entity_anchor_substitutions"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
@@ -429,6 +446,8 @@ def test_frozen_plan_audit_distinguishes_shared_source_from_effective_variants(t
     assert audit["plan_hash_mismatch_count"] == 0
     assert audit["inconsistent_pair_count"] == 0
     assert audit["effective_plan_variant_question_count"] == 1
+    assert audit["effective_plan_variant_count"] == 1
+    assert audit["max_effective_plan_variants_per_question"] == 2
     assert audit["imported_snapshot_count"] == 1
 
 

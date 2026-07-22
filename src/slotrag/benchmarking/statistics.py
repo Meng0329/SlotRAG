@@ -87,6 +87,7 @@ METRICS = [
     "typed_extraction_abstentions",
     "frozen_plan_replays",
     "grounded_entity_anchor_folds",
+    "grounded_entity_anchor_substitutions",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -326,6 +327,11 @@ def _frozen_plan_audit(
         "unknown_snapshot_hash_count": unknown_snapshot_hash_count,
         "inconsistent_pair_count": sum(len(hashes) != 1 for hashes in pair_hashes.values()),
         "effective_plan_variant_question_count": sum(len(hashes) > 1 for hashes in effective_pair_hashes.values()),
+        "effective_plan_variant_count": sum(max(len(hashes) - 1, 0) for hashes in effective_pair_hashes.values()),
+        "max_effective_plan_variants_per_question": max(
+            (len(hashes) for hashes in effective_pair_hashes.values()),
+            default=0,
+        ),
         "shared_compiler": shared_compiler,
     }
 
@@ -395,6 +401,11 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
     schema16_metrics = {
         "grounded_entity_anchor_folds": metrics["grounded_entity_anchor_folds"] if schema_version >= 16 else None,
     }
+    schema17_metrics = {
+        "grounded_entity_anchor_substitutions": (
+            metrics["grounded_entity_anchor_substitutions"] if schema_version >= 17 else None
+        ),
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -460,6 +471,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema14_metrics,
         **schema15_metrics,
         **schema16_metrics,
+        **schema17_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -753,6 +765,7 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "typed_extraction_abstentions",
         "frozen_plan_replays",
         "grounded_entity_anchor_folds",
+        "grounded_entity_anchor_substitutions",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
@@ -876,7 +889,7 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
         f"- Expected records: {validity['expected_record_count'] if validity['expected_record_count'] is not None else 'N/A'}",
         f"- Completion rate: {validity['completion_rate'] if validity['completion_rate'] is not None else 'N/A'}",
         f"- Frozen plan snapshots/replays: {frozen_plan_audit['snapshot_count']}/{frozen_plan_audit['replay_record_count']}",
-        f"- Imported snapshots/effective-plan variant questions: {frozen_plan_audit['imported_snapshot_count']}/{frozen_plan_audit['effective_plan_variant_question_count']}",
+        f"- Imported snapshots/effective-plan variant questions/extra variants: {frozen_plan_audit['imported_snapshot_count']}/{frozen_plan_audit['effective_plan_variant_question_count']}/{frozen_plan_audit['effective_plan_variant_count']}",
         f"- Frozen plan hash mismatches/inconsistent pairs: {frozen_plan_audit['plan_hash_mismatch_count']}/{frozen_plan_audit['inconsistent_pair_count']}",
         "- Evidence quality metrics are N/A for datasets without gold evidence labels.",
         "",

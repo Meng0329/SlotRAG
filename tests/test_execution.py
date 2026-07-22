@@ -345,6 +345,39 @@ def test_grounded_entity_anchor_fold_propagates_question_constant_to_single_cons
     ]
 
 
+def test_grounded_entity_anchor_substitution_replaces_known_variable_argument():
+    raw = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "Person",
+                "arguments": ["Baldwin De Redvers", "7Th Earl Of Devon", "?baldwin"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?baldwin"]},
+            {"id": "S3", "predicate": "MotherOf", "arguments": ["?grandmother", "?mother"]},
+        ],
+        "joins": [
+            ["S1.baldwin", "S2.baldwin"],
+            ["S2.mother", "S3.mother"],
+        ],
+        "outputs": ["?grandmother"],
+    })
+
+    substituted, count = SlotCompiler.substitute_grounded_entity_anchor(
+        raw,
+        "Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+    )
+
+    assert count == 1
+    assert [slot.id for slot in substituted.slots] == ["S2", "S3"]
+    assert substituted.slots[0].arguments == [
+        "?mother",
+        "Baldwin De Redvers, 7Th Earl Of Devon",
+    ]
+    assert substituted.slots[0].constraints == {}
+    assert set().union(*(slot.variables for slot in substituted.slots)) == {"mother", "grandmother"}
+
+
 @pytest.mark.parametrize(
     ("predicate", "anchor_arguments", "outputs"),
     [
@@ -353,10 +386,19 @@ def test_grounded_entity_anchor_fold_propagates_question_constant_to_single_cons
         ("Person", ["American Daughter", "?director"], ["?director"]),
     ],
 )
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        SlotCompiler.fold_grounded_entity_anchor,
+        SlotCompiler.substitute_grounded_entity_anchor,
+    ],
+    ids=["constraint", "constant_argument"],
+)
 def test_grounded_entity_anchor_fold_rejects_relation_ungrounded_or_output_anchors(
     predicate,
     anchor_arguments,
     outputs,
+    rewrite,
 ):
     raw = SlotPlan.model_validate({
         "slots": [
@@ -367,7 +409,7 @@ def test_grounded_entity_anchor_fold_rejects_relation_ungrounded_or_output_ancho
         "outputs": outputs,
     })
 
-    folded, count = SlotCompiler.fold_grounded_entity_anchor(
+    folded, count = rewrite(
         raw,
         "Who is the father of the director of film American Daughter?",
     )
@@ -376,7 +418,15 @@ def test_grounded_entity_anchor_fold_rejects_relation_ungrounded_or_output_ancho
     assert count == 0
 
 
-def test_grounded_entity_anchor_fold_rejects_multiple_consumers():
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        SlotCompiler.fold_grounded_entity_anchor,
+        SlotCompiler.substitute_grounded_entity_anchor,
+    ],
+    ids=["constraint", "constant_argument"],
+)
+def test_grounded_entity_anchor_fold_rejects_multiple_consumers(rewrite):
     raw = SlotPlan.model_validate({
         "slots": [
             {"id": "S0", "predicate": "Person", "arguments": ["Michael Jordan", "?player"]},
@@ -390,7 +440,7 @@ def test_grounded_entity_anchor_fold_rejects_multiple_consumers():
         "outputs": ["?rebounds", "?assists"],
     })
 
-    folded, count = SlotCompiler.fold_grounded_entity_anchor(
+    folded, count = rewrite(
         raw,
         "How many rebounds and assists did Michael Jordan average?",
     )

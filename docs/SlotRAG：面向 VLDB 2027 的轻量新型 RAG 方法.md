@@ -1373,6 +1373,84 @@ H42（候选保留门）：30/30 final ok；574... 候选 slots/joins/steps/retr
 
 H39/H40 是协议与安全验收，H41/H42 是候选因果验收。任何哈希错误都使效果结果不可解释；目标质量通过但成本不降，或成本下降但答案仍错，都必须拒绝候选。时延完整报告但不作为单次小样本硬门。GEAF 在全部条件通过前维持显式实验方法、默认关闭，且不得追溯修改门槛。
 
+#### schema v16 在线结果（v14）
+
+`2026-07-22T16:00:22+08:00` 首次 doctor 三项均为 HTTP 200。运行中 embedding 出现“无可用上游实例/满载”HTTP 503，随后 Agnes 一次 `ConnectError`；进程被主动中止，失败 attempts 原样保留。`16:14:57` 和 `16:24:28` 两次三项 doctor 恢复后按同目录续跑，最终为 30/30 schema16 final `ok`、38 个 immutable attempts、8 个 benchmark retry。历史失败分母为候选 6 次 HTTP 5xx + 1 次 connect、Hybrid 1 次 HTTP 5xx；默认 SlotRAG 10/10 首次成功。服务历史见 `service-doctor-history.json`，不能只报告恢复后的最终状态。
+
+双哈希协议完整通过：10/10 snapshots 均从 v13 导入且有效，10 个 plan attempts、0 plan preparation failure、20 条 SlotRAG replay；missing provenance/result/effective hash、payload mismatch、unknown snapshot hash、source inconsistent pair 均为 0，恰好 1 个问题具有不同 effective plan。共享编译指标与 v13 原快照一致：7 calls、10,037 prompt + 11,843 completion = 21,880 tokens、0 provider retry、2 次结构失败/修复、0 fallback。
+
+下表主 calls/tokens/wall 均为执行期口径；两个 SlotRAG 方法的 `+共享编译` 指标按独立部署口径加回同一份原始编译成本。最终结果和历史 attempt 失败分别报告，避免把恢复能力混入方法质量。
+
+| v14 2Wiki entity-anchor gate（10 题/方法） | SlotRAG | GEAF constraint | Hybrid |
+| --- | ---: | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 1.000 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall / MRR | 0.875 / 1.000 | 0.925 / 1.000 | 1.000 / 1.000 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.875 / 0.875 | 0.450 / 0.875 / 0.925 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.400 / 0.200 | 1.000 / 0.400 / 0.210 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence NDCG@10 | 0.900 | 0.922 | 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 2.2 / 2.1 / 1,031 | 3.2 / 2.9 / 1,938 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 9.2 / 6.1 / 9.5 / 6.2 | 8.7 / 6.1 / 9.0 / 6.2 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 2.0 / 1.9 / 1.9 / 1.9 | 2.5 / 1.8 / 1.8 / 1.8 | 1.0 / 1.0 / 1.2 / 1.0 |
+| Prompt / completion / total tokens | 2,786 / 2,318 / 5,104 | 3,329 / 2,688 / 6,017 | 1,549 / 901 / 2,450 |
+| 编译 / 抽取 / 生成 LLM calls | 0 / 2.0 / 0 | 0 / 2.1 / 0.2 | 0 / 0 / 1.0 |
+| 抽取 prompt / completion tokens | 2,786 / 2,318 | 2,917 / 2,489 | 0 / 0 |
+| 生成 prompt / completion tokens | 0 / 0 | 412 / 200 | 1,549 / 901 |
+| 执行期 provider calls | 5.8 | 6.1 | 3.2 |
+| +共享编译 LLM calls / tokens / provider calls | 2.7 / 7,292 / 6.5 | 3.2 / 8,205 / 6.8 | N/A |
+| 执行期 wall mean / P50 / P95 / P99 | 46.19 / 39.55 / 94.68 / 107.34 s | 43.31 / 38.55 / 80.91 / 93.26 s | 18.66 / 19.00 / 27.38 / 31.45 s |
+| +共享编译 wall mean / P95 | 66.57 / 112.29 s | 63.70 / 115.33 s | N/A |
+| Provider latency mean / P95 | 46.18 / 94.66 s | 43.25 / 80.75 s | 18.58 / 27.37 s |
+| 执行 / 物化 / 生成时延 | 46.18 / 46.18 / 0 s | 38.55 / 38.55 / 4.75 s | 0 / 0 / 17.38 s |
+| 内部 provider retry mean / benchmark retry count | 0 / 0 | 0.2 / 7 | 0.2 / 1 |
+| 结构失败 / 修复 / grounding / local repair | 0.1 / 0.1 / 0 / 0 | 0.5 / 0.3 / 0 / 0 | 0 / 0 / 0 / 0 |
+| plan fallback / evidence fallback / deterministic | 0 / 0 / 1.0 | 0 / 0.2 / 0.8 | 0 / 0 / 0 |
+| polar / span normalization / reconciliation / row consensus | 0.4 / 0 / 0 / 0 | 0.4 / 0 / 0 / 0 | 0.4 / 0 / 0 / 0 |
+| typed contract / answer / abstention / frozen replay / GEAF fold | 0 / 0 / 0 / 1.0 / 0 | 0 / 0 / 0 / 1.0 / 0.1 | 0 / 0 / 0 / 0 / 0 |
+| operators executed / rewrite | 0.1 / 0 | 0.1 / 0 | 0 / 0 |
+| join input / output rows | 1.8 / 0.9 | 1.4 / 0.7 | 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.9 / 0.8 / 1.9 / 1.0 / 0.1 / 5.7 | 1.8 / 0.7 / 1.9 / 1.0 / 0.1 / 5.5 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.9 / 0.0313 / 0.475 / 0.475 | 1.8 / 0.0391 / 0.450 / 0.450 | 0 / 0.0156 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 0.993 MB / 1.3 / 0.9 | 3.443 MB / 1.1 / 0.8 | 0.200 MB / 0 / 0 |
+| 平均 selectivity error / planner regret | 2.279 / 0 | 2.423 / 0 | N/A / N/A |
+| 物化请求 / 物化 cache hit / reuse rate | 1.9 / 0 / 0 | 1.8 / 0 / 0 | 0 / 0 / N/A |
+| 运行时 cache hit/miss / binding prune / early stop | 0/0 / 0 / 0 | 0/0 / 0 / 0 | 0/0 / 0 / 0 |
+| 索引构建 / provider 时延 / embedding calls | 485.58 / 437.43 ms / 1.0 | 0.90 / 0 ms / 0 | 1.34 / 0 ms / 0 |
+| 索引 cache hit/miss/rate | 11.2 / 9.0 / 0.555 | 20.2 / 0 / 1.000 | 20.2 / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+`accuracy` 和 DROP 指标在 2Wiki 上为 N/A。冷索引仍由第一个 SlotRAG 方法承担，在线 wall 排除索引；候选与 Hybrid 的 embedding calls 均包含最终成功记录中的 query 请求，历史失败请求另见 failure report。
+
+唯一作用题给出清晰但不充分的收益：默认方法仍答错 `Baldwin de Redvers, 6th Earl of Devon`，候选答对 `Isabel Marshal`，EM/F1 从 0 升至 1，Evidence Recall 从 0.5 升至 1，NDCG 从 0.613 升至 0.832；slots/joins/steps/retrieval calls 从 `3/2/3/3` 降至 `2/1/2/2`。但是 constraint 版本仍要求抽取器输出已经绑定的 `baldwin` 字段，两次结构失败后 S2/S3 仅保留空 bindings，最终走 evidence-only fallback 和一次生成：目标 LLM calls 从 3 升至 5，tokens 从 10,558 升至 15,958，wall 从 75.35 升至 96.35 秒，provider calls 持平为 9。
+
+另外 9 题 fold 全为 0，F1 与答案文本均 9/9 相同，说明语义作用域隔离成立；但随机结构失败使候选非目标题 calls `17→20`、tokens `40,479→44,212`、provider calls `49→52`，同样未满足“不恶化”门。全 10 题候选相对默认方法 retrieval calls `19→18`，但 LLM calls `20→25`、tokens `51,037→60,170`、provider calls `58→61`。成对 bootstrap 为默认对候选 0 胜/9 平/1 负，均值差与 Cliff's delta 均 -0.1，CI `[-0.3,0]`，`p=0.7108, p_holm=1`；小样本仅支持诊断，不支持显著性主张。
+
+| 预注册假设 | 在线判定 | 依据 |
+| --- | --- | --- |
+| H39 导入与双哈希完整性 | 通过 | 10 imported snapshots、20 replay，所有 source/effective/provenance 审计为 0 错误。 |
+| H40 保守作用域 | 通过 | 仅 `574...` fold=1，另外 9 题为 0；effective variant question 恰为 1。 |
+| H41 语义修复 | 通过 | 目标题 F1 0→1，总体 F1 0.9→1.0，非目标题质量不变。 |
+| H42 候选保留门 | 失败 | slots/joins/steps/retrieval 降低，但目标和非目标 calls/tokens 均增加，且目标触发 fallback + generation。 |
+
+因此拒绝 schema16 的 **constraint-propagation** 实现，`slotrag-anchor-folding` 保持默认关闭，不把这次 0.1 F1 提升包装成已完成贡献。保留的是两点：同源计划下冗余实体锚确实是可修复的质量瓶颈；安全作用域和双哈希协议有效。下一候选必须把已知实体直接替换进消费者实参，使抽取 schema 不再要求返回该已知变量，而不是继续在 `constraints` 中保留它。完整机器判定见 `runs/vldb2027-diagnostic-v14/online-validation.json`。
+
+#### schema v17：grounded entity constant substitution 与 v15 预注册
+
+schema17 将表示从 `S2 MotherOf(?mother, ?baldwin), constraint baldwin=...` 改为 `S2 MotherOf(?mother, "Baldwin ...")`。新候选 `slotrag-anchor-substitution` 先复用 schema16 的全部安全判定，再把唯一消费者中的已知变量替换为问题原文常量，同时删除该变量的 constraint/type；若消费者因此没有任何未知变量或完整计划校验失败，则原样返回。该操作暂称 **Grounded Entity Constant Substitution (GECS)**，与已拒绝的 constraint GEAF 使用不同方法名和指标 `grounded_entity_anchor_substitutions`。
+
+真实 v13 快照离线扫描仍只命中 `574...` 一题。source hash 为 `7a7816...efe8`，constraint effective hash 为 `2066a0...85d5`，constant-argument effective hash 为 `96c5b9...e5a`；后者把 slots/joins/variables/complexity 从 `3/2/3/9` 降为 `2/1/2/6`。另外 9 题 substitution=0 且 effective hash 与 source 完全相同。schema17 审计进一步报告 extra effective variants 与单题最大 variant 数；四路运行预期在目标上得到 2 个额外变体、最大 3 个有效计划。
+
+v15 固定为 `runs/vldb2027-diagnostic-v15`、阶段 `entity_anchor_substitution_gate`，运行默认 SlotRAG、constraint GEAF、constant-argument GECS 和 Hybrid，各 10 题。三种 SlotRAG 方法共享导入的 v13 计划，因而能在同一服务时段直接比较“无变换 / 保留已知变量约束 / 删除已知变量并常量化”。样本与数据审计 SHA-256 分别仍为 `5bcc22...1a4` 和 `a24ad3...67e`；全仓 `138 passed, 1 skipped`，指纹 `cff52d76...ac20f`。机器离线记录见 v15 `offline-validation.json` 与 `anchor-substitution-scope-audit.json`。
+
+```text
+H43（四路同源完整性）：10 imported snapshots、30 SlotRAG replay；source hash 每题一致，所有 provenance/result/effective hash 错误为 0；目标恰有 2 个 extra effective variants、单题最大 3 variants。
+H44（表示隔离）：constraint 与 substitution 都只在 574... 各触发 1 次，其余 9 题两项均为 0；substitution 目标 profile 必须为 2 slots、1 join、2 variables、complexity 6。
+H45（无 fallback 的语义修复）：substitution 在 574... 答 Isabel Marshal、F1=1，产生非空 joined rows，deterministic_answers=1，evidence_only_fallbacks=0、generation calls=0；总体 F1 不低于默认方法。
+H46（目标因果效率）：substitution 目标 steps/retrieval/extraction/total LLM calls 均为 2，结构失败/修复为 0，tokens 严格低于默认 SlotRAG 与 constraint GEAF；40/40 final ok。非目标题以 hash/触发隔离为硬门，随机 calls/tokens 完整报告但不再作为方法无作用时的硬门。
+```
+
+H46 对非目标题的处理在看结果前已明确：当 effective plan 完全相同时，在线 LLM 抽取的随机结构失败不是变换因果效应，不能用一次波动否定表示变换；但不得隐藏，仍需逐题和历史 attempt 报告。相反，目标题三种有效计划不同，必须以严格 calls/tokens、fallback 和 deterministic 条件判定。即使 H43-H46 全过，也只说明下一步值得扩展到 50 题调优与 200 题验证，不等于达到 VLDB 证据标准。
+
 ---
 
 # 11. 关键消融
