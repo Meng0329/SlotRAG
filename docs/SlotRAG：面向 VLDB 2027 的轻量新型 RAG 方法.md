@@ -2088,6 +2088,28 @@ H100 **通过**，H101 **失败**。30 个 title-root 题中 9 个可前瞻触�
 
 因此按预注册不启动 250 条 replay，H102-H107 记为未评估，随机 100 与 held-out-200 均未授权。下一架构只作一个闭合词表修正：把语义精确的 `NationalityOf` 加入 normalized country/nationality family；不改变 polar template。随后使用新的无重叠短答案 compositional relation 样本重做机制门，排除 yes/no 极性题造成的不可应用覆盖。机器判定见 v27 `source-plan-audit.json`、`early-stop-validation.json` 和更新后的 `offline-validation.json`。
 
+#### schema27 与 v28：Compositional-only 2×2 机制门预注册
+
+schema27 只做 v27 直接观察支持的最小修正：将语义精确的 `NationalityOf` 加入 normalized country/nationality 闭合谓词族，从而允许该谓词使用查询锚点窗口与证据原词表面修复。它不加入 exact ACEW 谓词集，不修改 `EvidenceAnsweringQuestion` 极性模板，不放宽前缀距离、查询落地或唯一原词约束。实现提交为 `c6a1a12`，runner final schema 升为 27；全仓回归为 `196 passed, 1 skipped`。
+
+v28 固定为 `runs/vldb2027-training-v28`、阶段 `compositional_repair_gate`，配置提交为 `0297ce4`，source fingerprint 为 `c81f6ab2...9e4ab4`。样本仅从 2Wiki train 中 `type=compositional` 的短答案问题选取，不读取 gold answer：`country of citizenship + title-root` 25 题、`country of citizenship + non-title` 15 题、无 country/nationality/citizenship 关系的 title-root 控制 10 题。种子 2032 在每层保留最小 `SHA256(seed:dataset:stratum:id)`，并排除 38 份历史 sample artifact 的 200 个唯一 ID。最终 50/50 唯一、50/50 compositional、历史交集 0，sample SHA-256=`51410fc5...1c295`；三个排除历史后的候选池为 `11748/1834/49968`。控制组的关系标签污染、目标组缺失目标关系、title-root 分层错配均为 0。样本、机制审计、dataset audit 哈希分别为 `51410fc5...1c295`、`efd8f2b6...d63188`、`f3fb2252...bfdb60`。
+
+本轮仍是**机制分层训练诊断**，不估计自然分布总体 F1。六路方法为 source SlotRAG、GRPE、CQAC、CQAC+root、CQAC+surface、CQAC+root+surface，共预期 300 条 schema27 final。先只运行 50 条 source；只有 H108-H110 全部通过，才能以最多两个互斥 worker 运行 250 条同计划 replay。provider 许可/运行硬限/同 provider attempt 最小间隔固定为 `30 RPM / 20 RPM / 3s`，retry 重新取 permit 并保留为不可变 attempt，最大并发为 2。
+
+| 门 | 预注册通过条件 |
+|---|---|
+| H108 材料完整性 | 三个 compositional mechanism strata 精确为 25/15/10；50 个唯一 ID；与全部 200 个历史 2Wiki ID 交集为 0；控制关系无 country-family 污染；dataset/config/sample/source fingerprint 全部冻结 |
+| H109 source 完整性 | 50 个有效 frozen plans 与 50 个 schema27 source final，至少 49/50 final ok；attempt、provider retry、provenance 和 hash 全保留 |
+| H110 机制覆盖 | 40 个 target 中至少 35 个唯一计划出现 schema27 闭合 country/nationality 谓词；10 个控制中至多 1 个误入该谓词族；35 个 title-root 题中至少 4 个可前瞻触发 query-root repair；source success rate ≥0.98，否则立即停止 |
+| H111 replay 完整性 | 总计 300 final、至少 294 ok；250 replay 同源；missing/unknown/hash mismatch/inconsistent pair/effective variant 全为 0，全部 retry 留存 |
+| H112 回答质量 | 完整候选总体 F1 ≥`max(GRPE,CQAC)-0.02`；40 个 target 及 root/surface 各自真实激活子集上 F1 均不低于 CQAC 且 paired wins≥losses；完整候选 success rate ≥0.98 |
+| H113 2×2 作用域 | 四格只改变 root/surface 开关；root 与 surface 各在至少 4 个唯一题真实激活；surface 在 10 个控制上为 0；所有修复满足 query-grounded/exact-source/closed-predicate 边界；窗口累计字符削减 ≥30% 且非 fallback 窗不扩张 |
+| H114 成本与可靠性 | 完整候选 calls/provider attempts/tokens 各 ≤`1.10×CQAC`；structured failure/repair/ground reject/fallback/generation/length finish 各 ≤`CQAC+0.02/题`；deterministic rate ≥`CQAC-0.02` |
+| H115 检索保持 | 完整候选 Evidence Recall、MRR、R@1/5/10、P@1/5/10、nDCG@10 每项均 ≥`CQAC-0.02` |
+| H116 完整统计 | aggregate、三层分层、逐题、检索、失败、计划、时延分位数、provider/RPM、激活、paired bootstrap 10,000 次 95% CI、精确 McNemar/配对符号检验、Holm 校正和配对效应量全部落盘；显著性只作描述 |
+
+只有 H111-H116 全部通过，才授权另建自然分布、无历史交集的随机 100 题训练泛化门；v28 本身不直接授权 held-out-200。观察 v28 后若修改架构、谓词集或阈值，必须更换新的无重叠样本。机器预注册为 v28 `offline-validation.json`，source 完成后以 `source-plan-audit.json` 和 `early-stop-validation.json` 作不可变判定。
+
 ---
 
 # 11. 关键消融
