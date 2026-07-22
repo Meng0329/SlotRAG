@@ -121,13 +121,21 @@ def extraction_tool(
     typed_extraction_contracts: bool = False,
     requested_fields: set[str] | None = None,
     role_projected: bool = False,
+    known_bindings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     selected = slot.variables if requested_fields is None else requested_fields
     if not selected.issubset(slot.variables):
         unknown = ", ".join(sorted(selected - slot.variables))
         raise ValueError(f"requested extraction fields are not slot variables: {unknown}")
     fields = sorted(selected)
-    signature = f"{slot.predicate}({', '.join(slot.arguments)})"
+    bindings = known_bindings or {}
+    rendered_arguments = [
+        json.dumps(bindings[argument[1:]], ensure_ascii=False)
+        if argument.startswith("?") and argument[1:] in bindings
+        else argument
+        for argument in slot.arguments
+    ]
+    signature = f"{slot.predicate}({', '.join(rendered_arguments)})"
     properties: dict[str, dict[str, Any]] = {}
     for field in fields:
         schema: dict[str, Any] = (
@@ -143,7 +151,12 @@ def extraction_tool(
             )
             schema["description"] = (
                 f"Value for ?{field}, ordered argument {position} of {signature}. "
-                "Extract only the entity that fills this exact relation role."
+                + "".join(
+                    f"The known argument {index} is fixed as {json.dumps(bindings[argument[1:]], ensure_ascii=False)}. "
+                    for index, argument in enumerate(slot.arguments, start=1)
+                    if argument.startswith("?") and argument[1:] in bindings
+                )
+                + "Extract only the entity that fills this exact relation role."
             )
         properties[field] = schema
     required = list(fields)
@@ -996,6 +1009,8 @@ class SlotMaterializer:
         typed_extraction_contracts: bool = False,
         role_projected_extraction: bool = False,
         protected_anchor_values: set[str] | None = None,
+        extraction_enable_thinking: bool | None = None,
+        bound_role_signatures: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1003,6 +1018,8 @@ class SlotMaterializer:
         self.typed_extraction_contracts = typed_extraction_contracts
         self.role_projected_extraction = role_projected_extraction
         self.protected_anchor_values = set(protected_anchor_values or ())
+        self.extraction_enable_thinking = extraction_enable_thinking
+        self.bound_role_signatures = bound_role_signatures
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1054,6 +1071,10 @@ class SlotMaterializer:
                 if self.role_projected_extraction and passages
                 else 0
             ),
+            extraction_thinking_disabled=int(
+                self.extraction_enable_thinking is False and bool(passages)
+            ),
+            bound_role_signatures=int(self.bound_role_signatures and bool(passages)),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -1097,19 +1118,29 @@ class SlotMaterializer:
         extracted_rows: list[tuple[dict[str, str], str]] = []
         for attempt in range(2):
             try:
-                response = self.client.complete(
-                    messages,
-                    tools=[extraction_tool(
+                completion_options: dict[str, Any] = {
+                    "tools": [extraction_tool(
                         slot,
                         list(by_source),
                         typed_extraction_contracts=bool(boolean_fields),
                         requested_fields=set(requested_fields),
                         role_projected=self.role_projected_extraction,
+                        known_bindings=(effective_bindings if self.bound_role_signatures else None),
                     )],
-                    tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
-                    temperature=0.0,
-                )
+                    "tool_choice": {"type": "function", "function": {"name": "emit_evidence_rows"}},
+                    "temperature": 0.0,
+                }
+                if self.extraction_enable_thinking is not None:
+                    completion_options["enable_thinking"] = self.extraction_enable_thinking
+                response = self.client.complete(messages, **completion_options)
                 metrics = SlotCompiler._record_response(metrics, response, phase="extraction")
+                finish_reason = response.finish_reason or "unknown"
+                metrics = metrics.model_copy(update={
+                    "extraction_finish_reasons": metrics.extraction_finish_reasons + [finish_reason],
+                    "extraction_length_finishes": (
+                        metrics.extraction_length_finishes + int(finish_reason == "length")
+                    ),
+                })
                 args = self.client.require_tool(response, "emit_evidence_rows")
                 extracted = ExtractionRow.model_validate(args)
                 expected = slot.variables
@@ -1201,6 +1232,9 @@ class SlotMaterializer:
                 metrics = metrics.model_copy(update={
                     "structured_output_failures": metrics.structured_output_failures + 1,
                     "structured_output_repairs": metrics.structured_output_repairs + (1 if attempt == 0 else 0),
+                    "extraction_validation_errors": metrics.extraction_validation_errors + [
+                        f"{exc.__class__.__name__}: {exc}"[:2000]
+                    ],
                 })
                 if attempt == 0:
                     role_context = (
@@ -1257,7 +1291,12 @@ class SlotMaterializer:
                 "role_projected_extraction_contracts": metrics.role_projected_extraction_contracts + current_metrics.role_projected_extraction_contracts,
                 "known_binding_fields_projected": metrics.known_binding_fields_projected + current_metrics.known_binding_fields_projected,
                 "protected_anchor_rejections": metrics.protected_anchor_rejections + current_metrics.protected_anchor_rejections,
+                "extraction_thinking_disabled": metrics.extraction_thinking_disabled + current_metrics.extraction_thinking_disabled,
+                "bound_role_signatures": metrics.bound_role_signatures + current_metrics.bound_role_signatures,
+                "extraction_length_finishes": metrics.extraction_length_finishes + current_metrics.extraction_length_finishes,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
+                "extraction_finish_reasons": metrics.extraction_finish_reasons + current_metrics.extraction_finish_reasons,
+                "extraction_validation_errors": metrics.extraction_validation_errors + current_metrics.extraction_validation_errors,
             })
             for row in rows:
                 key = (row.source_id, tuple(sorted(row.bindings.items())))
@@ -1657,11 +1696,16 @@ class AdaptiveExecutor:
                 "role_projected_extraction_contracts": metrics.role_projected_extraction_contracts + slot_metrics.role_projected_extraction_contracts,
                 "known_binding_fields_projected": metrics.known_binding_fields_projected + slot_metrics.known_binding_fields_projected,
                 "protected_anchor_rejections": metrics.protected_anchor_rejections + slot_metrics.protected_anchor_rejections,
+                "extraction_thinking_disabled": metrics.extraction_thinking_disabled + slot_metrics.extraction_thinking_disabled,
+                "bound_role_signatures": metrics.bound_role_signatures + slot_metrics.bound_role_signatures,
+                "extraction_length_finishes": metrics.extraction_length_finishes + slot_metrics.extraction_length_finishes,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],
                 "reoptimizations": metrics.reoptimizations + (1 if step and self.options.runtime_replan else 0),
                 "slot_selectivity_errors": metrics.slot_selectivity_errors + [selectivity_error],
+                "extraction_finish_reasons": metrics.extraction_finish_reasons + slot_metrics.extraction_finish_reasons,
+                "extraction_validation_errors": metrics.extraction_validation_errors + slot_metrics.extraction_validation_errors,
             })
             if not rows:
                 return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")

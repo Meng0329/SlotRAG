@@ -22,6 +22,46 @@ def test_agnes_parses_tool_call(monkeypatch):
     assert result.usage.total_tokens == 5
 
 
+def test_agnes_can_disable_thinking_for_constrained_tool_calls(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "secret")
+
+    def handler(request):
+        payload = __import__("json").loads(request.content)
+        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        return httpx.Response(200, json={
+            "id": "x",
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call",
+                        "function": {"name": "emit", "arguments": '{"rows": []}'},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+        })
+
+    client = AgnesClient(
+        AgnesConfig(
+            base_url="http://test/v1",
+            model="m",
+            api_key_env="TEST_KEY",
+            timeout_seconds=1,
+        ),
+        _transport(handler),
+    )
+
+    result = client.complete(
+        [{"role": "user", "content": "x"}],
+        tools=[{"type": "function"}],
+        enable_thinking=False,
+    )
+
+    assert result.finish_reason == "tool_calls"
+
+
 def test_embedding_reorders_and_validates_dimension(monkeypatch):
     monkeypatch.setenv("TEST_KEY", "secret")
     def handler(request):

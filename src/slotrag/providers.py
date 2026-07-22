@@ -124,6 +124,7 @@ class AgnesClient(_HTTPProvider):
         tool_choice: str | dict[str, Any] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        enable_thinking: bool | None = None,
     ) -> ChatResult:
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -136,6 +137,8 @@ class AgnesClient(_HTTPProvider):
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+        if enable_thinking is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
         body, elapsed = self._post(
             self.config.url("chat/completions"),
             self.config.api_key,

@@ -45,6 +45,9 @@ stages:
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
       - slotrag-grounded-role-projection
+      - slotrag-grounded-role-no-thinking
+      - slotrag-grounded-role-bound-signature
+      - slotrag-lean-grounded-role-projection
   smoke:
     split: train
     sample_size: 2
@@ -74,6 +77,9 @@ stages:
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
       - slotrag-grounded-role-projection
+      - slotrag-grounded-role-no-thinking
+      - slotrag-grounded-role-bound-signature
+      - slotrag-lean-grounded-role-projection
   diagnostic:
     split: train
     sample_size: 10
@@ -122,6 +128,18 @@ stages:
     methods: [slotrag, slotrag-anchor-substitution, slotrag-grounded-role-projection]
     frozen_plan_source: slotrag
     frozen_plan_import_dir: runs/vldb2027-diagnostic-v18/plans/entity_anchor_role_tune
+  lean_grounded_role_diagnostic:
+    split: train
+    sample_size: 6
+    methods:
+      - slotrag
+      - slotrag-anchor-substitution
+      - slotrag-grounded-role-projection
+      - slotrag-grounded-role-no-thinking
+      - slotrag-grounded-role-bound-signature
+      - slotrag-lean-grounded-role-projection
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/vldb2027-diagnostic-v19/plans/grounded_role_projection_gate
   tune:
     split: train
     sample_size: 50
@@ -149,6 +167,9 @@ stages:
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
       - slotrag-grounded-role-projection
+      - slotrag-grounded-role-no-thinking
+      - slotrag-grounded-role-bound-signature
+      - slotrag-lean-grounded-role-projection
   validation:
     split: train
     sample_size: 200

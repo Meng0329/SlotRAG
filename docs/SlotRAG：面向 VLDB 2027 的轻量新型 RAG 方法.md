@@ -1720,6 +1720,43 @@ H61（触发子集效率）：在 24 个触发题上，GRPE 的平均 extraction
 
 在线先以两个互斥 worker 运行：A 为默认 50 条，B 为 GECS+GRPE 100 条；最大并发 2、服务许可 30 RPM、运行硬上限 20 RPM。若有失败，保留 attempt、doctor 后以并发 1 续跑。H58-H61 全过才进入独立 200 题验证；v19 仍是已观察调优集，不能用于最终显著性主张。机器预注册见 v19 `offline-validation.json` 与 `grounded-role-projection-scope-audit.json`。
 
+#### v19 在线结果：作用域成立，但当前执行策略不进入 200 题验证
+
+v19 最终得到 150/150 条 schema20 final `ok`，三种方法各 50 条。首轮共 150 个 attempts，其中默认 SlotRAG 30 条、GECS 22 条在同一 embedding 容量窗口收到“无健康或可用上游实例”HTTP 503；GRPE 在服务恢复后运行，50 条首轮均成功。失败 attempt 完整保留；`2026-07-22T19:54:06+08:00` 三项 doctor 均为 HTTP 200 后，以单 worker 续跑 52 条失败项并全部生成成功的 `attempt-0002`。最终共有 202 个不可变 attempts，历史失败类别只有 `provider_http_5xx=52`，不能用最终 150/150 成功掩盖该故障。
+
+运行控制遵守许可 30 RPM、运行硬上限 20 RPM。首轮并发 2、恢复并发 1；以每个 provider 的 attempts 除以首末落盘记录间隔计算，首轮 Agnes/embedding/reranker 分别为 4.93/9.41/3.98 RPM，恢复段为 5.17/4.44/4.44 RPM。该值是阶段平均而非一分钟瞬时峰值，但结合最大 worker 并发可确认本轮没有主动提高到 20 RPM 以上。
+
+冻结计划审计通过：50 个 imported snapshots、50 个 plan attempts、150 个 replay，缺 provenance/result plan/effective hash、source hash 不一致、未知 snapshot、跨方法 plan 不一致和 effective variant 均为 0。GRPE 的在线作用域也精确复现离线预注册：24 个触发题、26 个直接保护锚；逐题 `direct_grounded_anchor_projections` 与预期完全一致，总和 26。其余 26 个候选记录和全部 100 个控制记录的 direct 指标为 0；触发题 role contracts/projected fields 全为正，惰性题与控制题的三项 role telemetry 全为 0。因此 H58、H59 通过。
+
+总体质量与证据指标如下；数值均为 50 题最终成功记录的均值。
+
+| 方法 | EM | F1 | Evidence Recall | R@1 | R@5 | R@10 | P@1 | P@5 | P@10 | nDCG@10 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SlotRAG | 0.8600 | 0.8848 | 0.8500 | 0.4450 | 0.8400 | 0.8500 | 1.0000 | 0.3840 | 0.1940 | 0.8785 |
+| GECS | 0.8600 | 0.8848 | 0.8850 | 0.4450 | 0.8750 | 0.8850 | 1.0000 | 0.4040 | 0.2040 | 0.9062 |
+| GRPE | 0.8800 | 0.9048 | 0.8300 | 0.4450 | 0.8200 | 0.8300 | 1.0000 | 0.3760 | 0.1900 | 0.8631 |
+
+| 方法 | LLM calls | Extraction calls | Retrieval calls | Tokens | Wall mean / p50 / p95 (s) | Structured fail / repair | Deterministic | Evidence fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SlotRAG | 2.000 | 1.840 | 1.600 | 4608.18 | 28.42 / 22.03 / 70.87 | 0.340 / 0.240 | 0.860 | 0.120 |
+| GECS | 1.880 | 1.740 | 1.600 | 3880.84 | 24.32 / 20.51 / 55.73 | 0.240 / 0.140 | 0.880 | 0.100 |
+| GRPE | 1.980 | 1.840 | 1.620 | 4970.94 | 31.05 / 28.28 / 57.27 | 0.320 / 0.220 | 0.880 | 0.120 |
+
+GRPE 的总体 F1 比 GECS 高 0.02，但这个均值不能支持方法收益：以 GECS 为 reference 的 50 题 paired bootstrap 差值为 `GECS-GRPE=-0.0200`，95% CI `[-0.1000, 0.0600]`，`p=0.8224`、Holm `p=1.0`。两者仅 5 题答案得分不同；24 个预注册触发题中 GRPE 为 1 win/21 ties/2 losses，而 26 个惰性题贡献 2 个随机 win、0 loss。换言之，总体表面提升来自方法按设计不应改变的惰性区，不是直接投影的可信因果收益。
+
+触发子集直接否定质量和效率门：GRPE/GECS 的 F1 为 0.8433/0.8849；`GECS-GRPE=0.0417`，95% CI `[-0.0833, 0.1667]`，`p=0.7784`。GRPE/GECS 的 extraction calls 为 2.375/2.292、total calls 为 2.542/2.417、tokens 为 6246.13/5378.96、structured failures 为 0.250/0.250、repairs 为 0.167/0.125、wall mean 为 38.03/31.47 秒。只有 structured failures 持平，其余预注册效率条件均未满足；总体 tokens 也高出 28.1%。
+
+目标题 `574...` 回答 `Isabel Marshal`、F1=1，证据包含 `Amice de Clare`，并且 direct/role/projected=`1/2/1`，说明范围检测与契约入口实际生效。然而两步抽取产生 2 次 structured failure、1 次 repair，最终 `join_output_rows=0`、`deterministic_answers=0`，依赖 1 次 evidence fallback 与 1 次 generation；共 4 次 LLM 调用、16296 tokens。它通过了答案与证据条件，却明确失败于本方法最关键的确定性 join 条件。
+
+| 预注册假设 | 判定 | 依据 |
+| --- | --- | --- |
+| H58 三路同源完整性 | **通过** | 50 snapshots、150 replay，全部 plan/provenance/hash 检查为 0 error。 |
+| H59 作用域与遥测 | **通过** | 24 个触发、26 个直接投影逐题精确匹配；惰性与控制无泄漏。 |
+| H60 质量与语义安全 | **失败** | 总体 F1 条件通过，但触发集 F1 低于 GECS；目标题仍走 fallback/generation 而非确定性 join。 |
+| H61 触发子集效率 | **失败** | calls、tokens、repairs 和总体 tokens 均高于 GECS，仅 structured failures 持平。 |
+
+结论不是放弃直接锚检测器：H58/H59 证明它是稳定、保守且不改计划的有效框架组件；被否定的是“只靠 prompt/schema role projection 就能让执行更准更省”的当前策略。GRPE 不提升为默认方法，也不进入独立 200 题验证。下一轮保留已验证的作用域检测器，先增加抽取失败原因的可审计遥测，并针对 relation-role validation/确定性 join 做更窄的执行修复；新门槛必须在再次联网前预注册，不能据 v19 结果放宽 H60/H61。完整机器记录为 v19 `online-validation.json`，全部指标、分层、bootstrap、逐题和不可变失败分别见 `summary.json`、`metrics.csv`、`stratified_metrics.csv`、`paired_bootstrap.csv`、`per_question.csv` 与 `failure_report.csv`。
+
 ---
 
 # 11. 关键消融

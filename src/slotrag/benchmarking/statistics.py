@@ -92,6 +92,9 @@ METRICS = [
     "role_projected_extraction_contracts",
     "known_binding_fields_projected",
     "protected_anchor_rejections",
+    "extraction_thinking_disabled",
+    "bound_role_signatures",
+    "extraction_length_finishes",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -423,6 +426,14 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             metrics["direct_grounded_anchor_projections"] if schema_version >= 20 else None
         ),
     }
+    schema21_metrics = {
+        name: metrics[name] if schema_version >= 21 else None
+        for name in (
+            "extraction_thinking_disabled",
+            "bound_role_signatures",
+            "extraction_length_finishes",
+        )
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -491,6 +502,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema17_metrics,
         **schema18_metrics,
         **schema20_metrics,
+        **schema21_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,

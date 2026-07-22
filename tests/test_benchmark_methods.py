@@ -581,6 +581,76 @@ def test_grounded_role_projection_routes_direct_anchor_without_changing_plan(mon
     assert result.answer == "Isabel Marshal"
 
 
+def test_lean_grounded_role_projection_routes_phase_controls_only_when_triggered(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "MotherOf",
+                "arguments": ["Baldwin De Redvers, 7Th Earl Of Devon", "?mother"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?grandmother"]},
+        ],
+        "joins": [["S1.mother", "S2.mother"]],
+        "outputs": ["?grandmother"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, effective, *, strategy):
+            assert effective == plan
+            return ExecutionResult(
+                rows=[{"grandmother": "Isabel Marshal"}],
+                order=["S1", "S2"],
+            )
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-lean-grounded-role-projection"],
+        "2wikimultihop",
+        QuestionRecord(
+            id="q",
+            question="Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+        ),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=plan,
+    )
+
+    assert materializer_options == [{
+        "max_passages": 5,
+        "typed_extraction_contracts": False,
+        "role_projected_extraction": True,
+        "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
+        "extraction_enable_thinking": False,
+        "bound_role_signatures": True,
+    }]
+    assert result.metrics.direct_grounded_anchor_projections == 1
+
+
 def test_grounded_role_projection_prefers_substitution_activation(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [

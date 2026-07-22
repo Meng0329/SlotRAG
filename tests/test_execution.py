@@ -157,6 +157,27 @@ def test_role_projected_tool_requests_only_unknown_fields_and_describes_argument
     assert "MotherOf(?grandmother, ?mother)" in description
 
 
+def test_role_projected_tool_can_render_known_bindings_in_ordered_signature():
+    slot = Slot(
+        id="S2",
+        predicate="MotherOf",
+        arguments=["?mother", "?grandmother"],
+    )
+
+    tool = extraction_tool(
+        slot,
+        ["Amice de Clare#0"],
+        requested_fields={"grandmother"},
+        role_projected=True,
+        known_bindings={"mother": "Amice de Clare"},
+    )
+
+    row_schema = tool["function"]["parameters"]["properties"]["rows"]["items"]
+    description = row_schema["properties"]["grandmother"]["description"]
+    assert 'MotherOf("Amice de Clare", ?grandmother)' in description
+    assert 'known argument 1 is fixed as "Amice de Clare"' in description
+
+
 def test_anchor_substitution_exposes_exact_grounded_value_for_downstream_role_protection():
     source = SlotPlan.model_validate({
         "slots": [
@@ -390,6 +411,11 @@ def test_adaptive_executor_propagates_role_projection_metrics():
                 role_projected_extraction_contracts=2,
                 known_binding_fields_projected=1,
                 protected_anchor_rejections=1,
+                extraction_thinking_disabled=1,
+                bound_role_signatures=1,
+                extraction_length_finishes=1,
+                extraction_finish_reasons=["length"],
+                extraction_validation_errors=["SchemaError: truncated tool call"],
             )
 
     plan = SlotPlan.model_validate({
@@ -403,6 +429,11 @@ def test_adaptive_executor_propagates_role_projection_metrics():
     assert result.metrics.role_projected_extraction_contracts == 2
     assert result.metrics.known_binding_fields_projected == 1
     assert result.metrics.protected_anchor_rejections == 1
+    assert result.metrics.extraction_thinking_disabled == 1
+    assert result.metrics.bound_role_signatures == 1
+    assert result.metrics.extraction_length_finishes == 1
+    assert result.metrics.extraction_finish_reasons == ["length"]
+    assert result.metrics.extraction_validation_errors == ["SchemaError: truncated tool call"]
 
 
 def test_executor_materializes_each_distinct_binding_context():
@@ -1441,5 +1472,64 @@ def test_materializer_counts_and_skips_repeated_invalid_extractions():
     assert metrics.extraction_llm_calls == 2
     assert metrics.structured_output_failures == 2
     assert metrics.structured_output_repairs == 1
+    assert metrics.extraction_finish_reasons == ["unknown", "unknown"]
+    assert len(metrics.extraction_validation_errors) == 2
+    assert all("do not match fields" in error for error in metrics.extraction_validation_errors)
     assert materializer.accessed_passage_ids == {"p"}
     assert [item.source_id for item in materializer.last_evidence] == ["p"]
+
+
+def test_materializer_disables_thinking_and_counts_bound_role_signatures():
+    calls = []
+
+    class Client:
+        def complete(self, *_args, **kwargs):
+            calls.append(kwargs)
+            return ChatResult(
+                finish_reason="tool_calls",
+                tool_calls=[ToolCall(
+                    name="emit_evidence_rows",
+                    arguments={
+                        "rows": [{
+                            "grandmother": "Isabel Marshal",
+                            "source_id": "Amice de Clare#0",
+                        }],
+                    },
+                )],
+            )
+
+        @staticmethod
+        def require_tool(result, name):
+            return next(call.arguments for call in result.tool_calls if call.name == name)
+
+    materializer = SlotMaterializer(
+        Client(),
+        StaticRetriever(Passage(
+            id="Amice de Clare#0",
+            doc_id="Amice de Clare",
+            text="Amice de Clare was the daughter of Isabel Marshal.",
+        )),
+        role_projected_extraction=True,
+        protected_anchor_values={"Baldwin De Redvers, 7Th Earl Of Devon"},
+        extraction_enable_thinking=False,
+        bound_role_signatures=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="MotherOf", arguments=["?mother", "?grandmother"]),
+        {"mother": "Amice de Clare"},
+    )
+
+    assert calls[0]["enable_thinking"] is False
+    tool = calls[0]["tools"][0]
+    description = tool["function"]["parameters"]["properties"]["rows"]["items"]["properties"]["grandmother"]["description"]
+    assert 'MotherOf("Amice de Clare", ?grandmother)' in description
+    assert [row.bindings for row in rows] == [{
+        "mother": "Amice de Clare",
+        "grandmother": "Isabel Marshal",
+    }]
+    assert metrics.extraction_thinking_disabled == 1
+    assert metrics.bound_role_signatures == 1
+    assert metrics.extraction_length_finishes == 0
+    assert metrics.extraction_finish_reasons == ["tool_calls"]
+    assert metrics.extraction_validation_errors == []

@@ -43,6 +43,8 @@ class MethodSpec:
     grounded_entity_anchor_substitution: bool = False
     role_projected_extraction: bool = False
     direct_grounded_anchor_projection: bool = False
+    extraction_enable_thinking: bool | None = None
+    bound_role_signatures: bool = False
     description: str = ""
 
 
@@ -66,6 +68,9 @@ ABLATION_METHODS = [
     "slotrag-anchor-substitution",
     "slotrag-role-projected-substitution",
     "slotrag-grounded-role-projection",
+    "slotrag-grounded-role-no-thinking",
+    "slotrag-grounded-role-bound-signature",
+    "slotrag-lean-grounded-role-projection",
 ]
 
 
@@ -142,6 +147,31 @@ METHODS: dict[str, MethodSpec] = {
         role_projected_extraction=True,
         direct_grounded_anchor_projection=True,
     ),
+    "slotrag-grounded-role-no-thinking": MethodSpec(
+        "slotrag-grounded-role-no-thinking",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        extraction_enable_thinking=False,
+    ),
+    "slotrag-grounded-role-bound-signature": MethodSpec(
+        "slotrag-grounded-role-bound-signature",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        bound_role_signatures=True,
+    ),
+    "slotrag-lean-grounded-role-projection": MethodSpec(
+        "slotrag-lean-grounded-role-projection",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        extraction_enable_thinking=False,
+        bound_role_signatures=True,
+    ),
 }
 
 
@@ -206,7 +236,14 @@ def _react_tool() -> dict[str, Any]:
 
 def merge_metrics(*values: RunMetrics) -> RunMetrics:
     result = RunMetrics()
-    additive_lists = {"intermediate_binding_sizes", "slot_selectivity_errors", "provider_request_ids", "plan_validation_errors"}
+    additive_lists = {
+        "intermediate_binding_sizes",
+        "slot_selectivity_errors",
+        "provider_request_ids",
+        "plan_validation_errors",
+        "extraction_finish_reasons",
+        "extraction_validation_errors",
+    }
     max_fields = {
         "peak_rss_mb",
         "index_bytes",
@@ -709,6 +746,10 @@ def _run_slotrag(
             "role_projected_extraction": True,
             "protected_anchor_values": protected_anchor_values,
         })
+        if spec.extraction_enable_thinking is not None:
+            materializer_options["extraction_enable_thinking"] = spec.extraction_enable_thinking
+        if spec.bound_role_signatures:
+            materializer_options["bound_role_signatures"] = True
     materializer = SlotMaterializer(client, retriever, **materializer_options)
     executor = AdaptiveExecutor(
         materializer,

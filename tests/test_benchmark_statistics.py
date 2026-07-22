@@ -352,6 +352,33 @@ def test_schema20_reports_direct_anchor_projection_without_backfilling_schema19(
     assert legacy_summary["direct_grounded_anchor_projections"] is None
 
 
+def test_schema21_reports_extraction_phase_controls_without_backfilling_schema20():
+    current = _record("slotrag-lean-grounded-role-projection", "q1", 1.0)
+    current["schema_version"] = 21
+    current["result"]["metrics"] = RunMetrics(
+        extraction_thinking_disabled=2,
+        bound_role_signatures=2,
+        extraction_length_finishes=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-grounded-role-projection", "q1", 1.0)
+    legacy["schema_version"] = 20
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-lean-grounded-role-projection"
+    )
+    legacy_summary = next(
+        row for row in rows if row["method"] == "slotrag-grounded-role-projection"
+    )
+
+    assert current_summary["extraction_thinking_disabled"] == 2
+    assert current_summary["bound_role_signatures"] == 2
+    assert current_summary["extraction_length_finishes"] == 1
+    assert legacy_summary["extraction_thinking_disabled"] is None
+    assert legacy_summary["bound_role_signatures"] is None
+    assert legacy_summary["extraction_length_finishes"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

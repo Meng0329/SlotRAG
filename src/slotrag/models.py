@@ -302,6 +302,9 @@ class RunMetrics(StrictModel):
     role_projected_extraction_contracts: int = 0
     known_binding_fields_projected: int = 0
     protected_anchor_rejections: int = 0
+    extraction_thinking_disabled: int = 0
+    bound_role_signatures: int = 0
+    extraction_length_finishes: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
@@ -336,6 +339,8 @@ class RunMetrics(StrictModel):
     planner_regret: float | None = None
     provider_request_ids: list[str] = Field(default_factory=list)
     plan_validation_errors: list[str] = Field(default_factory=list)
+    extraction_finish_reasons: list[str] = Field(default_factory=list)
+    extraction_validation_errors: list[str] = Field(default_factory=list)
 
 
 class ExecutionResult(StrictModel):
