@@ -981,6 +981,18 @@ def test_repaired_context_anchor_window_routes_plan_and_surface_repairs(monkeypa
     }]
 
 
+def test_repaired_context_anchor_window_ablation_matrix():
+    base = methods.METHODS["slotrag-context-normalized-anchor-window-projection"]
+    plan_only = methods.METHODS["slotrag-plan-repaired-context-anchor-window-projection"]
+    surface_only = methods.METHODS["slotrag-surface-repaired-context-anchor-window-projection"]
+    combined = methods.METHODS["slotrag-repaired-context-anchor-window-projection"]
+
+    assert (base.query_anchor_plan_repair, base.evidence_surface_grounding_repair) == (False, False)
+    assert (plan_only.query_anchor_plan_repair, plan_only.evidence_surface_grounding_repair) == (True, False)
+    assert (surface_only.query_anchor_plan_repair, surface_only.evidence_surface_grounding_repair) == (False, True)
+    assert (combined.query_anchor_plan_repair, combined.evidence_surface_grounding_repair) == (True, True)
+
+
 def test_grounded_role_projection_prefers_substitution_activation(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [

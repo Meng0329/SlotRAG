@@ -1,0 +1,23 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - 2wikimultihop
+seed: 2030
+random_seeds: [2030, 2031, 2032, 2033, 2034]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  repaired_anchor_training_gate:
+    split: train
+    sample_size: 50
+    methods:
+      - slotrag
+      - slotrag-grounded-role-projection
+      - slotrag-context-normalized-anchor-window-projection
+      - slotrag-plan-repaired-context-anchor-window-projection
+      - slotrag-surface-repaired-context-anchor-window-projection
+      - slotrag-repaired-context-anchor-window-projection
+    frozen_plan_source: slotrag
