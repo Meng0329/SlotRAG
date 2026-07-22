@@ -1541,6 +1541,79 @@ def test_materializer_disables_thinking_and_counts_bound_role_signatures():
     assert metrics.extraction_validation_errors == []
 
 
+def test_anchor_window_uses_lead_entity_context_and_excludes_distant_mentions():
+    text = (
+        "Andy Warhol was an American artist and director. "
+        "He worked in several media. His studio was called The Factory. "
+        "His work became highly collectible. A museum in the United States preserves his archive."
+    )
+
+    focused = SlotMaterializer._anchor_centered_window(
+        text,
+        "Andy Warhol",
+        {"Andy Warhol"},
+        radius=2,
+    )
+
+    assert focused is not None
+    assert "American" in focused
+    assert "United States" not in focused
+
+
+def test_anchor_window_grounding_rejects_distant_country_then_repairs_surface_form():
+    text = (
+        "Andy Warhol was an American artist and director. "
+        "He worked in several media. His studio was called The Factory. "
+        "His work became highly collectible. A museum in the United States preserves his archive."
+    )
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"country": "United States", "source_id": "Andy Warhol#0"}],
+            [{"country": "American", "source_id": "Andy Warhol#0"}],
+        ]),
+        StaticRetriever(Passage(id="Andy Warhol#0", doc_id="Andy Warhol", text=text)),
+        role_projected_extraction=True,
+        protected_anchor_values={"More Milk, Yvette"},
+        anchor_centered_extraction=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="CountryOf", arguments=["?director", "?country"]),
+        {"director": "Andy Warhol"},
+    )
+
+    assert [row.bindings for row in rows] == [{"director": "Andy Warhol", "country": "American"}]
+    assert "United States" not in rows[0].source_span
+    assert metrics.anchor_window_contracts == 1
+    assert metrics.anchor_window_selected_passages == 1
+    assert metrics.anchor_window_dropped_passages == 0
+    assert metrics.anchor_window_input_chars == len(text)
+    assert metrics.anchor_window_output_chars < len(text)
+    assert metrics.anchor_window_fallbacks == 0
+    assert metrics.grounding_rejections == 1
+    assert metrics.structured_output_repairs == 1
+
+
+def test_anchor_window_is_inert_for_unregistered_predicates():
+    text = "Andy Warhol was an American artist. A museum in the United States preserves his archive."
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"place": "United States", "source_id": "Andy Warhol#0"}]]),
+        StaticRetriever(Passage(id="Andy Warhol#0", doc_id="Andy Warhol", text=text)),
+        role_projected_extraction=True,
+        anchor_centered_extraction=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="DiedIn", arguments=["?director", "?place"]),
+        {"director": "Andy Warhol"},
+    )
+
+    assert [row.bindings["place"] for row in rows] == ["United States"]
+    assert metrics.anchor_window_contracts == 0
+    assert metrics.anchor_window_input_chars == 0
+    assert metrics.anchor_window_output_chars == 0
+
+
 def test_role_type_filter_rejects_explicit_gender_contradiction_without_retry():
     materializer = SlotMaterializer(
         SequenceExtractionClient([[

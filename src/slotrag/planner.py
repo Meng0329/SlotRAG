@@ -15,7 +15,7 @@ import unicodedata
 from pydantic import BaseModel, Field, ValidationError
 
 from .errors import SchemaError
-from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RunMetrics, Slot, SlotPlan
+from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
 from .providers import AgnesClient, ChatResult
 from .retrieval import HybridRetriever
 
@@ -1012,6 +1012,7 @@ class SlotMaterializer:
         extraction_enable_thinking: bool | None = None,
         bound_role_signatures: bool = False,
         semantic_role_type_filter: bool = False,
+        anchor_centered_extraction: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1022,6 +1023,7 @@ class SlotMaterializer:
         self.extraction_enable_thinking = extraction_enable_thinking
         self.bound_role_signatures = bound_role_signatures
         self.semantic_role_type_filter = semantic_role_type_filter
+        self.anchor_centered_extraction = anchor_centered_extraction
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1036,6 +1038,56 @@ class SlotMaterializer:
         needle = cls._normalized_text(value)
         haystack = cls._normalized_text(" ".join(part for part in (source_id, doc_id or "", source_span) if part))
         return bool(needle and f" {needle} " in f" {haystack} ")
+
+    @classmethod
+    def _anchor_centered_window(
+        cls,
+        text: str,
+        doc_id: str,
+        anchor_values: set[str],
+        *,
+        radius: int = 2,
+    ) -> str | None:
+        sentences = [
+            part.strip()
+            for part in re.split(r"(?<=[.!?])\s+(?=[\"'A-Z0-9])", text)
+            if part.strip()
+        ]
+        if not sentences:
+            return None
+        anchors = [cls._normalized_text(value) for value in anchor_values]
+        anchors = [value for value in anchors if value]
+        if not anchors:
+            return None
+        normalized_doc = cls._normalized_text(doc_id.split("#chunk-", 1)[0])
+        title_match = any(
+            anchor == normalized_doc
+            or (len(anchor) >= 4 and anchor in normalized_doc)
+            or (len(normalized_doc) >= 4 and normalized_doc in anchor)
+            for anchor in anchors
+        )
+        center: int | None = 0 if title_match else None
+        if center is None:
+            for index, sentence in enumerate(sentences):
+                normalized_sentence = f" {cls._normalized_text(sentence)} "
+                if any(f" {anchor} " in normalized_sentence for anchor in anchors):
+                    center = index
+                    break
+        if center is None:
+            return None
+        start = max(0, center - radius)
+        end = min(len(sentences), center + radius + 1)
+        return " ".join(sentences[start:end])
+
+    @classmethod
+    def _uses_anchor_window(cls, slot: Slot) -> bool:
+        predicate = cls._normalized_text(slot.predicate).replace(" ", "")
+        return predicate in {
+            "countryof",
+            "countryoforigin",
+            "countryofcitizenship",
+            "nationality",
+        }
 
     @classmethod
     def _semantic_role_gender(cls, field: str) -> str | None:
@@ -1076,12 +1128,12 @@ class SlotMaterializer:
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
-        passages = self.retriever.search(query)[:self.max_passages]
-        self.accessed_passage_ids.update(result.passage.id for result in passages)
-        self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in passages)
+        retrieved_passages = self.retriever.search(query)[:self.max_passages]
+        self.accessed_passage_ids.update(result.passage.id for result in retrieved_passages)
+        self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in retrieved_passages)
         self.last_evidence = [
             EvidenceRecord(source_id=result.passage.id, source_span=result.passage.text, slot_id=slot.id, bindings={})
-            for result in passages
+            for result in retrieved_passages
         ]
         constraint_bindings = {
             key.lstrip("?"): str(value)
@@ -1089,6 +1141,39 @@ class SlotMaterializer:
             if key.lstrip("?") in slot.variables
         }
         effective_bindings = {**constraint_bindings, **bindings}
+        passages = retrieved_passages
+        anchor_window_contract = bool(
+            self.anchor_centered_extraction
+            and self._uses_anchor_window(slot)
+            and retrieved_passages
+            and (effective_bindings or self.protected_anchor_values)
+        )
+        anchor_window_fallback = False
+        anchor_window_input_chars = 0
+        anchor_window_output_chars = 0
+        anchor_window_dropped_passages = 0
+        if anchor_window_contract:
+            anchor_values = self.protected_anchor_values | set(effective_bindings.values())
+            anchor_window_input_chars = sum(len(result.passage.text) for result in retrieved_passages)
+            focused_passages: list[RetrievalResult] = []
+            for result in retrieved_passages:
+                focused_text = self._anchor_centered_window(
+                    result.passage.text,
+                    result.passage.doc_id or result.passage.id,
+                    anchor_values,
+                )
+                if focused_text is None:
+                    continue
+                focused_passages.append(result.model_copy(update={
+                    "passage": result.passage.model_copy(update={"text": focused_text}),
+                }))
+            if focused_passages:
+                passages = focused_passages
+                anchor_window_output_chars = sum(len(result.passage.text) for result in passages)
+                anchor_window_dropped_passages = len(retrieved_passages) - len(passages)
+            else:
+                anchor_window_fallback = True
+                anchor_window_output_chars = anchor_window_input_chars
         requested_fields = (
             slot.variables - effective_bindings.keys()
             if self.role_projected_extraction
@@ -1121,6 +1206,12 @@ class SlotMaterializer:
             semantic_role_type_contracts=int(
                 self.semantic_role_type_filter and bool(passages) and bool(semantic_role_fields)
             ),
+            anchor_window_contracts=int(anchor_window_contract),
+            anchor_window_selected_passages=(len(passages) if anchor_window_contract else 0),
+            anchor_window_dropped_passages=anchor_window_dropped_passages,
+            anchor_window_input_chars=anchor_window_input_chars,
+            anchor_window_output_chars=anchor_window_output_chars,
+            anchor_window_fallbacks=int(anchor_window_fallback),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -1366,6 +1457,12 @@ class SlotMaterializer:
                 "semantic_role_type_contracts": metrics.semantic_role_type_contracts + current_metrics.semantic_role_type_contracts,
                 "semantic_role_type_rejections": metrics.semantic_role_type_rejections + current_metrics.semantic_role_type_rejections,
                 "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + current_metrics.semantic_role_type_abstentions,
+                "anchor_window_contracts": metrics.anchor_window_contracts + current_metrics.anchor_window_contracts,
+                "anchor_window_selected_passages": metrics.anchor_window_selected_passages + current_metrics.anchor_window_selected_passages,
+                "anchor_window_dropped_passages": metrics.anchor_window_dropped_passages + current_metrics.anchor_window_dropped_passages,
+                "anchor_window_input_chars": metrics.anchor_window_input_chars + current_metrics.anchor_window_input_chars,
+                "anchor_window_output_chars": metrics.anchor_window_output_chars + current_metrics.anchor_window_output_chars,
+                "anchor_window_fallbacks": metrics.anchor_window_fallbacks + current_metrics.anchor_window_fallbacks,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + current_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + current_metrics.extraction_validation_errors,
@@ -1774,6 +1871,12 @@ class AdaptiveExecutor:
                 "semantic_role_type_contracts": metrics.semantic_role_type_contracts + slot_metrics.semantic_role_type_contracts,
                 "semantic_role_type_rejections": metrics.semantic_role_type_rejections + slot_metrics.semantic_role_type_rejections,
                 "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + slot_metrics.semantic_role_type_abstentions,
+                "anchor_window_contracts": metrics.anchor_window_contracts + slot_metrics.anchor_window_contracts,
+                "anchor_window_selected_passages": metrics.anchor_window_selected_passages + slot_metrics.anchor_window_selected_passages,
+                "anchor_window_dropped_passages": metrics.anchor_window_dropped_passages + slot_metrics.anchor_window_dropped_passages,
+                "anchor_window_input_chars": metrics.anchor_window_input_chars + slot_metrics.anchor_window_input_chars,
+                "anchor_window_output_chars": metrics.anchor_window_output_chars + slot_metrics.anchor_window_output_chars,
+                "anchor_window_fallbacks": metrics.anchor_window_fallbacks + slot_metrics.anchor_window_fallbacks,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

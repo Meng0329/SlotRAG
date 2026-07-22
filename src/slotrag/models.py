@@ -308,6 +308,12 @@ class RunMetrics(StrictModel):
     semantic_role_type_contracts: int = 0
     semantic_role_type_rejections: int = 0
     semantic_role_type_abstentions: int = 0
+    anchor_window_contracts: int = 0
+    anchor_window_selected_passages: int = 0
+    anchor_window_dropped_passages: int = 0
+    anchor_window_input_chars: int = 0
+    anchor_window_output_chars: int = 0
+    anchor_window_fallbacks: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0

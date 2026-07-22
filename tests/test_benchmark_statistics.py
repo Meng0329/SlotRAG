@@ -406,6 +406,35 @@ def test_schema22_reports_role_type_filter_without_backfilling_schema21():
     assert legacy_summary["semantic_role_type_abstentions"] is None
 
 
+def test_schema23_reports_anchor_windows_without_backfilling_schema22():
+    current = _record("slotrag-anchor-window-projection", "q1", 1.0)
+    current["schema_version"] = 23
+    current["result"]["metrics"] = RunMetrics(
+        anchor_window_contracts=2,
+        anchor_window_selected_passages=2,
+        anchor_window_dropped_passages=6,
+        anchor_window_input_chars=1000,
+        anchor_window_output_chars=250,
+        anchor_window_fallbacks=0,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-grounded-role-projection", "q1", 1.0)
+    legacy["schema_version"] = 22
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag-anchor-window-projection")
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag-grounded-role-projection")
+
+    assert current_summary["anchor_window_contracts"] == 2
+    assert current_summary["anchor_window_selected_passages"] == 2
+    assert current_summary["anchor_window_dropped_passages"] == 6
+    assert current_summary["anchor_window_input_chars"] == 1000
+    assert current_summary["anchor_window_output_chars"] == 250
+    assert current_summary["anchor_window_char_reduction_rate"] == 0.75
+    assert current_summary["anchor_window_fallbacks"] == 0
+    assert legacy_summary["anchor_window_contracts"] is None
+    assert legacy_summary["anchor_window_char_reduction_rate"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

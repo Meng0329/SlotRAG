@@ -1879,6 +1879,30 @@ v20、v21 的两个 worker 虽然阶段平均 RPM 均低于 20，但执行器此
 
 本地真实时钟烟雾测试让 4 个线程同时竞争 Agnes 的 20 RPM 配额，实际取得时刻为 `0.0043/3.0053/6.0059/9.0066s`，相邻最小间隔 `3.0006s`。并发 manifest、全局 progress、cache merge、每次 retry 取配额及在途槽上限均有回归测试；全仓 `174 passed, 1 skipped`，`compileall`、YAML 解析与 `git diff --check` 通过，源码指纹为 `761b5d9a...ae5f`。机器记录见 `runs/vldb2027-infrastructure-v22/concurrency-validation.json`。下一方法实验只能在该控制层上新建 run，既有 v21 frozen artifacts 保持不变。
 
+#### schema v23：锚点中心属性抽取窗与 v22 诊断预注册
+
+v21 的两个 nationality/country 错误不能只解释为评分别名。`254...` 的 Andy Warhol 文档首句明确写 `American`，但第 13 句另有与国籍关系无关的 `United States`；原 GRPE 只要候选值在整篇任意位置出现就视为 grounded，因此错误接纳远处词。`c520...` 的 Marshall Neilan 文档只写 `American`，GRPE 两次拒绝 `United States` 后没有结构行，最终生成器再次输出 `United States`。这说明错误同时来自整篇 grounding 过宽和抽取失败后的生成式表面改写，不应通过改 gold、放宽 F1 或手工 country/demonym alias 掩盖。
+
+schema23 新增 **Anchor-Centered Extraction Window（ACEW）**。它只在已验证 direct-anchor + role-projection 作用域内、且 predicate 为 `CountryOf/CountryOfOrigin/CountryOfCitizenship/Nationality` 时激活；用当前 binding entity 的文档标题匹配或最早正文提及作为中心，只把前后两句交给结构化抽取器，并在同一局部窗内验证 unresolved value。找不到锚点时保守回退完整 passages。原始检索 top-k 仍写入 evidence ranking，窗口只改变 extraction payload 与局部 grounding；不增加检索、LLM 调用、外部知识、gold 或题目 ID 分支。
+
+新增遥测为 `anchor_window_contracts`、selected/dropped passages、input/output chars、char reduction rate 与 fallbacks，runner record 升为 schema23，旧记录不回填。全仓 `179 passed, 1 skipped`，`compileall`、YAML 与 `git diff --check` 通过；源码指纹为 `8593826c...f8b6`。并发基础设施测试仍包含在同一全仓分母内。
+
+离线审计覆盖 v19 的 250 个训练计划，只有 4 道 2Wiki 题、4 个属性槽触发，谓词分布为 CountryOf/Origin/Nationality=`1/2/1`，另外 246 题完全惰性。四个 gold 属性表面值均保留在两句半径窗中；已观察的两个 `United States` 均被排除。`583...` 的 `Hong Kong-Chinese` 同句同时包含错误输出 `Hong Kong` 与 gold `Chinese`，ACEW 明确不能解决这种同句语义歧义，本轮不得据此作扩张主张。
+
+v22 复用 v21 完全相同的六题，sample、warm cache、dataset audit SHA-256 仍为 `1c6c1b...ae38`、`314b8d...90cc`、`a24ad3...c67e`。6 个 v19 plan 已离线导入，6 plan attempts 均为 imported/ok，没有 provider 调用。在线只执行 GECS、GRPE、ACEW 三路共 18 条；`slotrag` 仅为 frozen plan source。三个互斥 method worker 同时运行，系统最大并发仍为 4，30 RPM 为服务许可、20 RPM/3 秒间隔为跨进程硬限制，失败恢复降为并发 1。
+
+```text
+H70（同源完整性）：6 imported snapshots、18 schema23 replay；逐题 source/effective plan hash 与 provenance 完整，未知或缺失计划为 0。
+
+H71（作用域/窗口门）：ACEW contracts 精确为 2，只落在 254... 与 c520...；fallback=0，总 output chars < input chars；控制与其余四题的 window telemetry 全为 0。
+
+H72（两个国籍目标题）：ACEW 两题都答 American、逐题 F1=1、join=1、deterministic=1；无 generation、evidence fallback、结构失败、repair、grounding rejection 或 length finish，逐题 calls/tokens 均不高于 GRPE。
+
+H73（六题联合门）：ACEW 6/6 final ok，F1 至少 0.8333 且比两个控制至少高 0.1666；平均 calls、tokens、结构失败、repairs、fallbacks、length finishes 均不高于 GRPE。
+```
+
+只有 H70-H73 全过才新建 50 题训练门；门槛不得在线后修改。该六题已经被多轮观察，只能作机制诊断，不能作显著性、held-out 或泛化证据。机器预注册与作用域审计见 v22 `offline-validation.json`、`anchor-window-scope-audit.json`。
+
 ---
 
 # 11. 关键消融
@@ -1921,6 +1945,9 @@ vs. 仅关闭该路由并保留原 LLM 编译与 fallback
 
 行级极性共识投影
 vs. 禁用共识并保留最终生成器
+
+锚点中心属性抽取窗
+vs. 在完整检索段落上抽取与 grounding
 ```
 
 ---

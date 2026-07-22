@@ -98,6 +98,13 @@ METRICS = [
     "semantic_role_type_contracts",
     "semantic_role_type_rejections",
     "semantic_role_type_abstentions",
+    "anchor_window_contracts",
+    "anchor_window_selected_passages",
+    "anchor_window_dropped_passages",
+    "anchor_window_input_chars",
+    "anchor_window_output_chars",
+    "anchor_window_char_reduction_rate",
+    "anchor_window_fallbacks",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -445,6 +452,22 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             "semantic_role_type_abstentions",
         )
     }
+    schema23_metrics = {
+        name: metrics[name] if schema_version >= 23 else None
+        for name in (
+            "anchor_window_contracts",
+            "anchor_window_selected_passages",
+            "anchor_window_dropped_passages",
+            "anchor_window_input_chars",
+            "anchor_window_output_chars",
+            "anchor_window_fallbacks",
+        )
+    }
+    schema23_metrics["anchor_window_char_reduction_rate"] = (
+        1.0 - metrics["anchor_window_output_chars"] / metrics["anchor_window_input_chars"]
+        if schema_version >= 23 and metrics["anchor_window_input_chars"]
+        else None
+    )
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -515,6 +538,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema20_metrics,
         **schema21_metrics,
         **schema22_metrics,
+        **schema23_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -816,6 +840,13 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "semantic_role_type_contracts",
         "semantic_role_type_rejections",
         "semantic_role_type_abstentions",
+        "anchor_window_contracts",
+        "anchor_window_selected_passages",
+        "anchor_window_dropped_passages",
+        "anchor_window_input_chars",
+        "anchor_window_output_chars",
+        "anchor_window_char_reduction_rate",
+        "anchor_window_fallbacks",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
