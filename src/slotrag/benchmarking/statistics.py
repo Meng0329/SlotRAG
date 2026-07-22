@@ -86,6 +86,7 @@ METRICS = [
     "typed_extraction_answers",
     "typed_extraction_abstentions",
     "frozen_plan_replays",
+    "grounded_entity_anchor_folds",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -194,8 +195,10 @@ def _frozen_plan_audit(
     missing_result_plan_count = 0
     plan_hash_mismatch_count = 0
     pair_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
+    effective_pair_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
     snapshot_hashes = {str(snapshot["plan_sha256"]) for snapshot in snapshots}
     unknown_snapshot_hash_count = 0
+    missing_effective_plan_hash_count = 0
     for record in records:
         raw_metrics = record.get("result", {}).get("metrics", {})
         if record.get("schema_version", 1) < 15 or not raw_metrics.get("frozen_plan_replays"):
@@ -206,7 +209,15 @@ def _frozen_plan_audit(
             missing_provenance_count += 1
             continue
         provenance_hash = str(provenance["plan_sha256"])
-        pair_hashes[(str(record.get("dataset")), str(record.get("question_id")))].add(provenance_hash)
+        pair_key = (str(record.get("dataset")), str(record.get("question_id")))
+        pair_hashes[pair_key].add(provenance_hash)
+        effective_hash = provenance.get("effective_plan_sha256")
+        if not effective_hash:
+            if record.get("schema_version", 1) >= 16:
+                missing_effective_plan_hash_count += 1
+            effective_hash = provenance_hash
+        effective_hash = str(effective_hash)
+        effective_pair_hashes[pair_key].add(effective_hash)
         if snapshot_hashes and provenance_hash not in snapshot_hashes:
             unknown_snapshot_hash_count += 1
         result_plan = record.get("result", {}).get("plan")
@@ -218,7 +229,7 @@ def _frozen_plan_audit(
         except ValueError:
             plan_hash_mismatch_count += 1
             continue
-        if _canonical_sha256(normalized_plan) != provenance_hash:
+        if _canonical_sha256(normalized_plan) != effective_hash:
             plan_hash_mismatch_count += 1
 
     compiler_metrics = [
@@ -302,6 +313,7 @@ def _frozen_plan_audit(
         "snapshot_count": len(snapshot_paths),
         "valid_snapshot_count": len(snapshots),
         "invalid_snapshot_count": invalid_snapshot_count,
+        "imported_snapshot_count": sum(snapshot.get("preparation_mode") == "imported" for snapshot in snapshots),
         "source_methods": sorted({str(snapshot.get("source_method")) for snapshot in snapshots}),
         "plan_attempt_count": len(attempt_paths),
         "failed_plan_attempt_count": failed_plan_attempts,
@@ -309,9 +321,11 @@ def _frozen_plan_audit(
         "replay_question_count": len(pair_hashes),
         "missing_provenance_count": missing_provenance_count,
         "missing_result_plan_count": missing_result_plan_count,
+        "missing_effective_plan_hash_count": missing_effective_plan_hash_count,
         "plan_hash_mismatch_count": plan_hash_mismatch_count,
         "unknown_snapshot_hash_count": unknown_snapshot_hash_count,
         "inconsistent_pair_count": sum(len(hashes) != 1 for hashes in pair_hashes.values()),
+        "effective_plan_variant_question_count": sum(len(hashes) > 1 for hashes in effective_pair_hashes.values()),
         "shared_compiler": shared_compiler,
     }
 
@@ -378,6 +392,9 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
     schema15_metrics = {
         "frozen_plan_replays": metrics["frozen_plan_replays"] if schema_version >= 15 else None,
     }
+    schema16_metrics = {
+        "grounded_entity_anchor_folds": metrics["grounded_entity_anchor_folds"] if schema_version >= 16 else None,
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -420,7 +437,9 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         "failure_category": _fallback_failure_category(record),
         "attempt_index": record.get("attempt_index", 1),
         "plan_sha256": plan_provenance.get("plan_sha256"),
+        "effective_plan_sha256": plan_provenance.get("effective_plan_sha256"),
         "frozen_plan_source": plan_provenance.get("source_method"),
+        "frozen_plan_preparation_mode": plan_provenance.get("preparation_mode"),
         "cost_scope": "execution_only_shared_plan_excluded" if metrics["frozen_plan_replays"] else "end_to_end",
         "latency_scope": "online_only" if shared_index_excluded else "includes_index",
         "evidence_metric_status": scores.get(
@@ -440,6 +459,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema13_metrics,
         **schema14_metrics,
         **schema15_metrics,
+        **schema16_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -732,6 +752,7 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "typed_extraction_answers",
         "typed_extraction_abstentions",
         "frozen_plan_replays",
+        "grounded_entity_anchor_folds",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
@@ -855,6 +876,7 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
         f"- Expected records: {validity['expected_record_count'] if validity['expected_record_count'] is not None else 'N/A'}",
         f"- Completion rate: {validity['completion_rate'] if validity['completion_rate'] is not None else 'N/A'}",
         f"- Frozen plan snapshots/replays: {frozen_plan_audit['snapshot_count']}/{frozen_plan_audit['replay_record_count']}",
+        f"- Imported snapshots/effective-plan variant questions: {frozen_plan_audit['imported_snapshot_count']}/{frozen_plan_audit['effective_plan_variant_question_count']}",
         f"- Frozen plan hash mismatches/inconsistent pairs: {frozen_plan_audit['plan_hash_mismatch_count']}/{frozen_plan_audit['inconsistent_pair_count']}",
         "- Evidence quality metrics are N/A for datasets without gold evidence labels.",
         "",

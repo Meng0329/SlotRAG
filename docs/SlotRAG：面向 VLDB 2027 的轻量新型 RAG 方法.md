@@ -1337,6 +1337,42 @@ H35/H36 是协议验收，H37/H38 才是候选因果判定。任一哈希审计�
 
 schema15 协议保留，后续所有执行型消融必须使用它或等价的同计划机制。schema14 类型契约则再次明确拒绝：保持 `slotrag-typed-extraction` 显式实验方法且默认关闭，不得纳入论文贡献。机器判定见 `runs/vldb2027-diagnostic-v13/online-validation.json`，完整逐题、分层、bootstrap、失败分母和 130+ 指标见 `runs/vldb2027-diagnostic-v13/summaries/frozen_polar_contract_gate/`。下一候选应针对 `574...` 暴露的通用冗余实体锚定槽做语义计划修复，而不是再增加极性短语规则。
 
+#### schema v16：grounded entity anchor folding 与 v14 预注册
+
+v13 唯一失败题揭示的是一个可泛化但必须保守处理的计划缺陷：编译器把问题已经给出的实体拆成身份槽，再让下游关系槽重新检索该身份。schema16 增加默认关闭的 `slotrag-anchor-folding` 候选，它不重新编译、不调用 LLM，也不改变原始快照；它只在执行前把安全的实体身份叶子折叠为唯一消费者的绑定约束。论文方法候选暂称 **Grounded Entity Anchor Folding (GEAF)**。
+
+安全契约同时要求：predicate 只能是 `Person/Entity/Item/Place`；锚槽恰有一个变量和至少一个常量；常量按槽内顺序在原问题中连续出现，中间只允许空白或标点；锚变量不是最终输出且不被 operator 引用；锚槽无额外 constraint/type；变量只有一个下游消费者；锚槽只有一条同字段叶子 join；消费者不存在冲突约束。变换后必须重新通过完整 `SlotPlan` 校验，否则返回原计划并记 0 次折叠。原有“单常量、多消费者”保守消除逻辑不变，GEAF 是独立开关。
+
+以 v13 原始计划为例：
+
+```text
+source:
+  S1 Person(Baldwin De Redvers, 7Th Earl Of Devon, ?baldwin)
+  S2 MotherOf(?mother, ?baldwin)
+  S3 MotherOf(?grandmother, ?mother)
+  joins: S1.baldwin=S2.baldwin, S2.mother=S3.mother
+
+effective candidate:
+  S2 MotherOf(?mother, ?baldwin), constraint baldwin="Baldwin De Redvers, 7Th Earl Of Devon"
+  S3 MotherOf(?grandmother, ?mother)
+  join: S2.mother=S3.mother
+```
+
+schema16 同时扩展冻结计划协议。`frozen_plan_import_dir` 允许新运行导入旧运行的不可变快照；runner 验证来源 stage 输入哈希、dataset、question ID/文本、source method、compiler options 和 plan hash，任一不一致直接拒绝，绝不静默重编译。新运行仍生成本地 immutable plan attempt 与原子 snapshot，并保留来源共享编译成本。每条记录同时保存 `plan_sha256`（共同 source plan）和 `effective_plan_sha256`（方法实际执行计划）；审计用前者判断配对同一性、用后者校验 result plan，并单列有效计划发生分歧的问题数。
+
+v14 固定为 `runs/vldb2027-diagnostic-v14`、阶段 `entity_anchor_gate`，仅运行 2Wiki train 同一批 10 题；样本 SHA-256 仍为 `5bcc2298686f2c3d1e0e570bcfa6197454f32660009d6cf3e9599dae63f1c1a4`。方法为默认 SlotRAG、`slotrag-anchor-folding` 和 Hybrid；两个 SlotRAG 方法导入 v13 的同一源计划，Hybrid 仅作端到端质量参照。
+
+在线前离线作用域审计已冻结：10 个来源快照全部有效，只有 `5741415a0bb011ebab90acde48001122` 触发 1 次折叠，source/effective 分别为 3/2 slots、2/1 joins，传播值严格为问题中的 `Baldwin De Redvers, 7Th Earl Of Devon`；其余 9 题 fold=0 且 source/effective hash 完全相同。五个公开数据集各 10 条样本已生成，数据审计哈希 `a24ad3...67e` 与 v13 一致。离线全仓为 `132 passed, 1 skipped`，`compileall`、pilot YAML、`git diff --check` 均通过；指纹为 `7053cdae...e3c0`。机器记录见 `runs/vldb2027-diagnostic-v14/offline-validation.json` 和 `anchor-folding-scope-audit.json`。
+
+```text
+H39（导入与双哈希完整性）：10 个 imported snapshots、20 个 SlotRAG replay；source hash 每题一致，effective/result hash 校验、未知快照、缺失 provenance 和 source inconsistent 均为 0。
+H40（保守作用域）：全 10 题恰好只在 574... 上 fold=1，其余 fold=0；审计报告恰好 1 个 effective-plan variant question。
+H41（语义修复）：574... 上候选答案为 Isabel Marshal 且 F1=1，候选总体 EM/F1 不低于默认 SlotRAG；不得用 Hybrid 的正确结果替代该判定。
+H42（候选保留门）：30/30 final ok；574... 候选 slots/joins/steps/retrieval calls 均低于默认方法，执行期 LLM calls 与 total tokens 也严格降低；非目标题无折叠且总体 calls/tokens 不恶化。
+```
+
+H39/H40 是协议与安全验收，H41/H42 是候选因果验收。任何哈希错误都使效果结果不可解释；目标质量通过但成本不降，或成本下降但答案仍错，都必须拒绝候选。时延完整报告但不作为单次小样本硬门。GEAF 在全部条件通过前维持显式实验方法、默认关闭，且不得追溯修改门槛。
+
 ---
 
 # 11. 关键消融

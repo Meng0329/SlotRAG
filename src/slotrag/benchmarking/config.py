@@ -18,6 +18,7 @@ class StageConfig(BaseModel):
     sample_size: int = Field(gt=0)
     methods: list[str] = Field(min_length=1)
     frozen_plan_source: str | None = None
+    frozen_plan_import_dir: Path | None = None
 
     @model_validator(mode="after")
     def validate_methods(self) -> "StageConfig":
@@ -25,6 +26,8 @@ class StageConfig(BaseModel):
         if unknown:
             raise ValueError(f"unknown methods: {', '.join(unknown)}")
         if self.frozen_plan_source is None:
+            if self.frozen_plan_import_dir is not None:
+                raise ValueError("frozen_plan_import_dir requires frozen_plan_source")
             return self
         if self.frozen_plan_source not in METHODS:
             raise ValueError(f"unknown frozen plan source: {self.frozen_plan_source}")

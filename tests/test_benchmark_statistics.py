@@ -371,6 +371,67 @@ def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     assert (summary_dir / "frozen_plan_metrics.csv").exists()
 
 
+def test_frozen_plan_audit_distinguishes_shared_source_from_effective_variants(tmp_path):
+    source_plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Person", "arguments": ["Alpha", "?entity"]},
+            {"id": "S2", "predicate": "Answer", "arguments": ["?entity", "?answer"]},
+        ],
+        "joins": [["S1.entity", "S2.entity"]],
+        "outputs": ["?answer"],
+    })
+    effective_plan = SlotPlan.model_validate({
+        "slots": [{
+            "id": "S2",
+            "predicate": "Answer",
+            "arguments": ["?entity", "?answer"],
+            "constraints": {"entity": "Alpha"},
+        }],
+        "outputs": ["?answer"],
+    })
+
+    def plan_hash(plan):
+        return hashlib.sha256(json.dumps(
+            plan.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+
+    source_hash = plan_hash(source_plan)
+    for method, result_plan in (("slotrag", source_plan), ("slotrag-anchor-folding", effective_plan)):
+        record = _record(method, "q1", 1.0)
+        record["schema_version"] = 16
+        record["result"]["plan"] = result_plan.model_dump(mode="json")
+        record["result"]["metrics"] = RunMetrics(frozen_plan_replays=1).model_dump(mode="json")
+        record["plan_provenance"] = {
+            "status": "ok",
+            "source_method": "slotrag",
+            "plan_sha256": source_hash,
+            "effective_plan_sha256": plan_hash(result_plan),
+        }
+        path = tmp_path / "items" / "test" / "hotpotqa" / method / "q1.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    snapshot_path = tmp_path / "plans" / "test" / "hotpotqa" / "q1.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(json.dumps({
+        "status": "ok",
+        "source_method": "slotrag",
+        "plan_sha256": source_hash,
+        "plan": source_plan.model_dump(mode="json"),
+        "preparation_mode": "imported",
+    }), encoding="utf-8")
+
+    audit = summarize_run(tmp_path, "test")["frozen_plan_audit"]
+
+    assert audit["plan_hash_mismatch_count"] == 0
+    assert audit["inconsistent_pair_count"] == 0
+    assert audit["effective_plan_variant_question_count"] == 1
+    assert audit["imported_snapshot_count"] == 1
+
+
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
     record = _record("slotrag", "q1", 1.0)
     record["scores"]["evidence_recall"] = 1.0

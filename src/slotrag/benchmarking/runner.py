@@ -315,6 +315,58 @@ class BenchmarkRunner:
             if path.stem.rsplit("-", 1)[-1].isdigit()
         ]
         attempt_index = max(attempt_indices, default=0) + 1
+        import_dir = self.suite.stage(stage_name).frozen_plan_import_dir
+        if import_dir is not None:
+            import_path = Path(import_dir) / dataset / f"{_safe_id(question.id)}.json"
+            try:
+                imported = json.loads(import_path.read_text(encoding="utf-8"))
+                if imported.get("status") != "ok":
+                    raise ValueError("snapshot status is not ok")
+                if imported.get("dataset") != dataset or imported.get("question_id") != question.id:
+                    raise ValueError("snapshot dataset or question id does not match")
+                if imported.get("source_method") != source_method:
+                    raise ValueError("snapshot source method does not match")
+                source_stage = imported.get("stage")
+                if not isinstance(source_stage, str) or not source_stage:
+                    raise ValueError("snapshot source stage is missing")
+                source_input = self._frozen_plan_input(source_stage, dataset, question, source_method)
+                if imported.get("input_sha256") != _canonical_sha256(source_input):
+                    raise ValueError("snapshot input hash does not match the current question and compiler options")
+                if imported.get("compiler_options") != compile_input["compiler_options"]:
+                    raise ValueError("snapshot compiler options do not match the current stage")
+                plan = SlotPlan.model_validate(imported["plan"])
+                if imported.get("plan_sha256") != _plan_sha256(plan):
+                    raise ValueError("snapshot plan hash does not match its plan payload")
+                compiler_metrics = RunMetrics.model_validate(imported.get("compiler_metrics", {}))
+            except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
+                raise ValueError(f"invalid frozen plan import {import_path}: {exc}") from exc
+
+            snapshot = {
+                "schema_version": 1,
+                "stage": stage_name,
+                "dataset": dataset,
+                "question_id": question.id,
+                "source_method": source_method,
+                "input_sha256": input_sha256,
+                "compiler_options": compile_input["compiler_options"],
+                "attempt_index": attempt_index,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "wall_latency_ms": float(imported.get("wall_latency_ms", 0.0)),
+                "provider_delta": imported.get("provider_delta", {}),
+                "preparation_mode": "imported",
+                "imported_from": str(import_path),
+                "status": "ok",
+                "error": None,
+                "failure_category": "ok",
+                "plan_sha256": _plan_sha256(plan),
+                "plan": plan.model_dump(mode="json"),
+                "compiler_metrics": compiler_metrics.model_dump(mode="json"),
+            }
+            attempt_path = attempt_dir / f"attempt-{attempt_index:04d}.json"
+            _atomic_json(attempt_path, snapshot)
+            _atomic_json(snapshot_path, snapshot)
+            return plan, self._plan_provenance(snapshot, relative_snapshot_path)
+
         before = self._provider_snapshot()
         started = time.perf_counter()
         plan: SlotPlan | None = None
@@ -348,6 +400,7 @@ class BenchmarkRunner:
             "recorded_at": datetime.now(timezone.utc).isoformat(),
             "wall_latency_ms": (time.perf_counter() - started) * 1000,
             "provider_delta": provider_delta,
+            "preparation_mode": "compiled",
         }
         attempt_path = attempt_dir / f"attempt-{attempt_index:04d}.json"
         if error is not None or plan is None or compiler_metrics is None:
@@ -569,8 +622,13 @@ class BenchmarkRunner:
                         })})
                         if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
                             result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
+                        if plan_provenance is not None and result.plan is not None:
+                            plan_provenance = {
+                                **plan_provenance,
+                                "effective_plan_sha256": _plan_sha256(result.plan),
+                            }
                         record = {
-                            "schema_version": 15,
+                            "schema_version": 16,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
