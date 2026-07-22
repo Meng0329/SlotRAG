@@ -44,6 +44,7 @@ stages:
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
+      - slotrag-grounded-role-projection
   smoke:
     split: train
     sample_size: 2
@@ -72,6 +73,7 @@ stages:
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
+      - slotrag-grounded-role-projection
   diagnostic:
     split: train
     sample_size: 10
@@ -114,6 +116,12 @@ stages:
     sample_size: 50
     methods: [slotrag, slotrag-anchor-substitution, slotrag-role-projected-substitution]
     frozen_plan_source: slotrag
+  grounded_role_projection_gate:
+    split: train
+    sample_size: 50
+    methods: [slotrag, slotrag-anchor-substitution, slotrag-grounded-role-projection]
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/vldb2027-diagnostic-v18/plans/entity_anchor_role_tune
   tune:
     split: train
     sample_size: 50
@@ -140,6 +148,7 @@ stages:
       - slotrag-anchor-folding
       - slotrag-anchor-substitution
       - slotrag-role-projected-substitution
+      - slotrag-grounded-role-projection
   validation:
     split: train
     sample_size: 200

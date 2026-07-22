@@ -19,6 +19,7 @@ from ..planner import (
     ExecutionOptions,
     SlotCompiler,
     SlotMaterializer,
+    direct_grounded_relation_anchor_values,
     fold_grounded_entity_anchor,
     substitute_grounded_entity_anchor,
     substitute_grounded_entity_anchor_with_values,
@@ -41,6 +42,7 @@ class MethodSpec:
     grounded_entity_anchor_folding: bool = False
     grounded_entity_anchor_substitution: bool = False
     role_projected_extraction: bool = False
+    direct_grounded_anchor_projection: bool = False
     description: str = ""
 
 
@@ -63,6 +65,7 @@ ABLATION_METHODS = [
     "slotrag-anchor-folding",
     "slotrag-anchor-substitution",
     "slotrag-role-projected-substitution",
+    "slotrag-grounded-role-projection",
 ]
 
 
@@ -131,6 +134,13 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag",
         grounded_entity_anchor_substitution=True,
         role_projected_extraction=True,
+    ),
+    "slotrag-grounded-role-projection": MethodSpec(
+        "slotrag-grounded-role-projection",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
     ),
 }
 
@@ -676,6 +686,12 @@ def _run_slotrag(
             "plan_output_count": effective_metrics.plan_output_count,
             "plan_operator_count": effective_metrics.plan_operator_count,
             "plan_complexity": effective_metrics.plan_complexity,
+        })
+    if spec.direct_grounded_anchor_projection and not protected_anchor_values:
+        direct_anchor_values = direct_grounded_relation_anchor_values(plan, question.question)
+        protected_anchor_values.update(direct_anchor_values)
+        compiler_metrics = compiler_metrics.model_copy(update={
+            "direct_grounded_anchor_projections": len(direct_anchor_values),
         })
     if len(plan.slots) > max_steps:
         return ExecutionResult(

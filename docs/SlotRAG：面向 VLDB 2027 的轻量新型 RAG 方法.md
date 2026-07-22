@@ -1679,6 +1679,47 @@ H57（条件效率门，仅 H55 通过后）：触发题 RPGE 平均 extraction/
 
 离线全仓为 `145 passed, 1 skipped`，`compileall`、pilot YAML、`git diff --check` 通过；源码指纹为 `d1fba3fa...f436`，数据审计仍为 `a24ad382...67e`。机器预注册见 v18 `offline-validation.json`。在 H55 判定前不得启动三路执行。
 
+#### schema v19 v18 计划结果：自然作用域门失败，停止执行
+
+两个 plan worker 分别完成 25/25，最终 50/50 snapshot `ok`、全部为 attempt 1，input/source method/compiler options/plan hash 验证错误为 0，H54 通过。计划获取只调用 Agnes，不调用 embedding/reranker：59 attempts / 57 successes / 2 internal retries，平均 attempt 时延 18.87 秒；观测 4.83 RPM，按并发 2 反推 6.36 RPM，均低于 20 RPM 硬上限。编译层同时暴露 33 次结构失败、26 次修复、7 个 fallback 和 19 个 heuristic plans，不能把 snapshot 完整性误写成编译无故障。
+
+离线作用域审计的结果为 RPGE 总触发 `0/50`、新增 40 题触发 `0/40`，低于预注册的总数 3、新增数 2；H55 失败。按照条件门，没有创建任何 execution item 或 attempt，H56/H57 标记 `not_run`，而不是事后放宽阈值运行 150 条惰性对照。
+
+已知 10 题的 source plan hash 有 8 个与 v13 相同、2 个变化。关键 `574...` 在 v13 为三槽 `Person(constants,?baldwin) → MotherOf(?mother,?baldwin) → MotherOf(?grandmother,?mother)`，RPGE 通过删除 Person anchor 槽而触发；v18 新编译计划则直接为两槽 `MotherOf("Baldwin...",?mother) → MotherOf(?mother,?grandmother)`，profile 已是 2 slots、1 join、2 variables、complexity 6。它没有多余 anchor 槽可替换，因此 GECS/RPGE 都保持 source hash `261c0f...d05`，protected values 为空，角色投影随之关闭。
+
+| 预注册假设 | 判定 | 依据 |
+| --- | --- | --- |
+| H54 计划获取完整性 | **通过** | 50 snapshots、50 attempt-1、0 validation error，未覆盖历史。 |
+| H55 自然作用域门 | **失败** | total/new trigger=`0/0`，低于 `3/2`。 |
+| H56 条件语义门 | 未运行 | H55 失败后协议禁止执行。 |
+| H57 条件效率门 | 未运行 | H55 失败后协议禁止执行。 |
+
+这个否定结果改变了架构判断：schema19 RPGE 修复了一个真实语义错误，但入口绑定在“编译器是否先生成身份 anchor 槽”这一偶然表示上，无法作为稳定框架组件。下一候选必须在不改计划的前提下，同时覆盖（1）安全 substitution 返回的精确锚和（2）已经直接出现在关系槽中的问题锚常量；两种入口都只启用 bound-field projection、ordered-role annotation 与 protected-anchor validation。直接常量入口必须有独立的保守范围规则和负例，不能把所有问题常量都设为保护锚。机器结果见 v18 `plan-acquisition-validation.json` 与 `anchor-role-tune-scope-audit.json`。
+
+#### schema v20：Grounded Role-Projected Extraction 与 v19 预注册
+
+schema20 新增默认关闭的 `slotrag-grounded-role-projection`，暂称 **Grounded Role-Projected Extraction (GRPE)**。它保留 schema19 RPGE 的全部语义：先尝试安全 anchor substitution；若 substitution 已返回保护值，直接沿用旧路径且 `direct_grounded_anchor_projections=0`。只有 substitution 未触发时，才在原计划上检测直接关系锚，并且不改任何 slot/join/operator/hash。
+
+直接锚必须同时满足：计划至少 2 slots 且有 join；join 图是森林而非环；候选槽是 join 图叶节点；槽中至少一个未知变量参与 join，但不直接包含最终输出变量；常量以词边界在问题中原样落地，并在问题 span 中含大写或数字实体信号；`Person/Entity/Item/Place/EvidenceAnsweringQuestion` 等身份或自由文本槽排除。单槽、答案槽、未落地常量、小写通用词和 join cycle 均由测试拒绝。该范围有意牺牲召回，避免把每个问题常量都变成全局禁值。
+
+触发后仍只做三件事：抽取 schema 删除已绑定字段、未知字段标注完整 predicate 签名和参数位置、保护锚不能被赋给抽取出的未知字段。保护仅约束抽取字段，不约束 typed operator 的最终标签，所以 comparison 题仍可合法输出某个受保护片名。新增计数 `direct_grounded_anchor_projections` 与原三项 role telemetry 分开；runner 升为 schema20，schema19 记录不回填。
+
+全仓为 `155 passed, 1 skipped`；`compileall`、pilot YAML、`git diff --check` 通过，冻结指纹 `d920f538...73b0`。v19 固定为 `runs/vldb2027-diagnostic-v19`、阶段 `grounded_role_projection_gate`，样本仍是 v18 的同一 50 题（哈希 `4f8f91f...d42c`），离线导入 50 个 v18 snapshot，不重新编译。
+
+离线范围为 GRPE 触发 24/50、新增触发 18/40、惰性 26/50；保护值共 26 个，因为两道 bridge-comparison 各有两个片名。触发分层为 compositional 20、bridge-comparison 2、inference 2；substitution route 为 0，direct route 为 24。所有 50 题上默认/GECS/GRPE effective plan hash 完全相同，因此线上差异只来自抽取契约，而非计划形状。目标题 `574...` 以直接锚 `Baldwin...` 触发，source/effective hash 均为 `261c0f...d05`。
+
+```text
+H58（三路同源完整性）：50 imported snapshots、150 replay、150 schema20 final；所有 source/effective/result/provenance 错误为 0，三路逐题 effective hash 完全相同。
+
+H59（GRPE 作用域与遥测）：24 个候选记录的 direct projection 逐题等于离线保护值数量，总和精确为 26；其余 26 个候选与全部 100 个控制记录该指标为 0。触发题 role contracts 与 projected fields 必须为正，惰性题三项 role telemetry 为 0。
+
+H60（质量与语义安全）：150/150 final ok；GRPE 总体 F1 不低于默认和 GECS，24 个触发题的 F1 不低于 GECS。目标题必须答 Isabel Marshal、F1=1、direct=1、role contracts≥2、projected≥1、joined/deterministic=1、无 fallback/generation，证据含 Amice de Clare。comparison 的最终片名不视为 protected-anchor 违规。
+
+H61（触发子集效率）：在 24 个触发题上，GRPE 的平均 extraction/total LLM calls、total tokens、结构失败与修复均不高于 GECS；总体 total tokens 也不高于 GECS。完整报告 provider calls、时延分位数、缓存、grounding/protected rejection、bootstrap、effect size 和全部 immutable failures。
+```
+
+在线先以两个互斥 worker 运行：A 为默认 50 条，B 为 GECS+GRPE 100 条；最大并发 2、服务许可 30 RPM、运行硬上限 20 RPM。若有失败，保留 attempt、doctor 后以并发 1 续跑。H58-H61 全过才进入独立 200 题验证；v19 仍是已观察调优集，不能用于最终显著性主张。机器预注册见 v19 `offline-validation.json` 与 `grounded-role-projection-scope-audit.json`。
+
 ---
 
 # 11. 关键消融

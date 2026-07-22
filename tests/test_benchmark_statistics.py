@@ -331,6 +331,27 @@ def test_schema18_reports_role_projection_without_backfilling_schema17():
     assert legacy_summary["protected_anchor_rejections"] is None
 
 
+def test_schema20_reports_direct_anchor_projection_without_backfilling_schema19():
+    current = _record("slotrag-grounded-role-projection", "q1", 1.0)
+    current["schema_version"] = 20
+    current["result"]["metrics"] = RunMetrics(
+        direct_grounded_anchor_projections=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-role-projected-substitution", "q1", 1.0)
+    legacy["schema_version"] = 19
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-grounded-role-projection"
+    )
+    legacy_summary = next(
+        row for row in rows if row["method"] == "slotrag-role-projected-substitution"
+    )
+
+    assert current_summary["direct_grounded_anchor_projections"] == 1
+    assert legacy_summary["direct_grounded_anchor_projections"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

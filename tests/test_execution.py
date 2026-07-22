@@ -8,6 +8,7 @@ from slotrag.planner import (
     SlotCompiler,
     SlotMaterializer,
     apply_operators,
+    direct_grounded_relation_anchor_values,
     extraction_tool,
     substitute_grounded_entity_anchor_with_values,
 )
@@ -184,6 +185,117 @@ def test_anchor_substitution_exposes_exact_grounded_value_for_downstream_role_pr
         "?mother",
         "Baldwin De Redvers, 7Th Earl Of Devon",
     ]
+
+
+def test_direct_grounded_relation_anchor_detects_compact_multihop_root():
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "MotherOf",
+                "arguments": ["Baldwin De Redvers, 7Th Earl Of Devon", "?mother"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?grandmother"]},
+        ],
+        "joins": [["S1.mother", "S2.mother"]],
+        "outputs": ["?grandmother"],
+    })
+
+    values = direct_grounded_relation_anchor_values(
+        plan,
+        "Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+    )
+
+    assert values == ("Baldwin De Redvers, 7Th Earl Of Devon",)
+
+
+def test_direct_grounded_relation_anchor_accepts_single_token_proper_name():
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "ComposerOf", "arguments": ["Ayya", "?composer"]},
+            {"id": "S2", "predicate": "FatherOf", "arguments": ["?composer", "?father"]},
+        ],
+        "joins": [["S1.composer", "S2.composer"]],
+        "outputs": ["?father"],
+    })
+
+    assert direct_grounded_relation_anchor_values(
+        plan,
+        "Who is the father of the composer of Ayya?",
+    ) == ("Ayya",)
+
+
+@pytest.mark.parametrize(
+    ("plan_payload", "question"),
+    [
+        (
+            {
+                "slots": [{"id": "S1", "predicate": "DirectorOf", "arguments": ["Film Alpha", "?director"]}],
+                "outputs": ["?director"],
+            },
+            "Who directed Film Alpha?",
+        ),
+        (
+            {
+                "slots": [
+                    {"id": "S1", "predicate": "DirectorOf", "arguments": ["Film Alpha", "?director"]},
+                    {"id": "S2", "predicate": "BornIn", "arguments": ["?director", "?place"]},
+                ],
+                "joins": [["S1.director", "S2.director"]],
+                "outputs": ["?director"],
+            },
+            "Who directed Film Alpha and where were they born?",
+        ),
+        (
+            {
+                "slots": [
+                    {"id": "S1", "predicate": "DirectorOf", "arguments": ["Film Beta", "?director"]},
+                    {"id": "S2", "predicate": "BornIn", "arguments": ["?director", "?place"]},
+                ],
+                "joins": [["S1.director", "S2.director"]],
+                "outputs": ["?place"],
+            },
+            "Where was the director of Film Alpha born?",
+        ),
+        (
+            {
+                "slots": [
+                    {"id": "S1", "predicate": "RelatedTo", "arguments": ["film", "?person"]},
+                    {"id": "S2", "predicate": "BornIn", "arguments": ["?person", "?place"]},
+                ],
+                "joins": [["S1.person", "S2.person"]],
+                "outputs": ["?place"],
+            },
+            "Where was the person related to the film born?",
+        ),
+    ],
+)
+def test_direct_grounded_relation_anchor_rejects_unsafe_scope(plan_payload, question):
+    assert direct_grounded_relation_anchor_values(
+        SlotPlan.model_validate(plan_payload),
+        question,
+    ) == ()
+
+
+def test_direct_grounded_relation_anchor_rejects_join_cycle():
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "StartsAt", "arguments": ["Alpha", "?x", "?z"]},
+            {"id": "S2", "predicate": "ContinuesTo", "arguments": ["?x", "?y"]},
+            {"id": "S3", "predicate": "ReturnsTo", "arguments": ["?y", "?z", "?answer"]},
+        ],
+        "joins": [
+            ["S1.x", "S2.x"],
+            ["S2.y", "S3.y"],
+            ["S3.z", "S1.z"],
+        ],
+        "outputs": ["?answer"],
+    })
+
+    assert direct_grounded_relation_anchor_values(
+        plan,
+        "What answer follows the cycle starting at Alpha?",
+    ) == ()
 
 
 class ComparisonMaterializer:

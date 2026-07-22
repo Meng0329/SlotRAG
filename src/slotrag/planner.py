@@ -327,6 +327,82 @@ def substitute_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[Sl
     return effective, len(values)
 
 
+def direct_grounded_relation_anchor_values(
+    plan: SlotPlan,
+    question: str,
+) -> tuple[str, ...]:
+    """Return conservative question-grounded constants at multi-hop relation roots."""
+    if len(plan.slots) < 2 or not plan.joins:
+        return ()
+
+    slot_ids = {slot.id for slot in plan.slots}
+    adjacency = {slot_id: set() for slot_id in slot_ids}
+    joined_fields = {slot_id: set() for slot_id in slot_ids}
+    parent = {slot_id: slot_id for slot_id in slot_ids}
+
+    def find(slot_id: str) -> str:
+        while parent[slot_id] != slot_id:
+            parent[slot_id] = parent[parent[slot_id]]
+            slot_id = parent[slot_id]
+        return slot_id
+
+    for join in plan.joins:
+        left_root = find(join.left_slot)
+        right_root = find(join.right_slot)
+        if left_root == right_root:
+            return ()
+        parent[left_root] = right_root
+        adjacency[join.left_slot].add(join.right_slot)
+        adjacency[join.right_slot].add(join.left_slot)
+        joined_fields[join.left_slot].add(join.left_field)
+        joined_fields[join.right_slot].add(join.right_field)
+
+    output_fields = {output.removeprefix("?") for output in plan.outputs}
+    anchor_predicates = {"person", "entity", "item", "place", "evidenceansweringquestion"}
+    generic_values = {
+        "answer",
+        "book",
+        "city",
+        "country",
+        "entity",
+        "film",
+        "item",
+        "movie",
+        "person",
+        "place",
+        "series",
+    }
+    values: list[str] = []
+    seen: set[str] = set()
+    for slot in plan.slots:
+        if (
+            len(adjacency[slot.id]) != 1
+            or slot.predicate.casefold() in anchor_predicates
+            or slot.variables & output_fields
+            or not (slot.variables & joined_fields[slot.id])
+        ):
+            continue
+        for argument in slot.arguments:
+            value = argument.strip()
+            if not value or value.startswith("?") or value.casefold() in generic_values:
+                continue
+            match = re.search(
+                rf"(?<!\w){re.escape(value)}(?!\w)",
+                question,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            grounded_span = question[match.start():match.end()]
+            if not any(character.isupper() or character.isdigit() for character in grounded_span):
+                continue
+            key = value.casefold()
+            if key not in seen:
+                seen.add(key)
+                values.append(value)
+    return tuple(values)
+
+
 class SlotCompiler:
     def __init__(self, client: AgnesClient) -> None:
         self.client = client

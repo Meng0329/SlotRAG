@@ -628,7 +628,7 @@ class BenchmarkRunner:
                                 "effective_plan_sha256": _plan_sha256(result.plan),
                             }
                         record = {
-                            "schema_version": 19,
+                            "schema_version": 20,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
