@@ -285,6 +285,7 @@ class RunMetrics(StrictModel):
     evidence_only_fallbacks: int = 0
     answer_reconciliations: int = 0
     answer_span_normalizations: int = 0
+    polar_answer_normalizations: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0
@@ -297,6 +298,7 @@ class RunMetrics(StrictModel):
     plan_fallbacks: int = 0
     heuristic_plans: int = 0
     typed_plan_templates: int = 0
+    field_extremum_templates: int = 0
     direct_plan_templates: int = 0
     operators_executed: int = 0
     plan_slot_count: int = 0

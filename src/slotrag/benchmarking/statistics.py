@@ -75,6 +75,7 @@ METRICS = [
     "evidence_only_fallbacks",
     "answer_reconciliations",
     "answer_span_normalizations",
+    "polar_answer_normalizations",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -87,6 +88,7 @@ METRICS = [
     "plan_fallbacks",
     "heuristic_plans",
     "typed_plan_templates",
+    "field_extremum_templates",
     "direct_plan_templates",
     "operators_executed",
     "plan_slot_count",
@@ -190,6 +192,12 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
     schema8_metrics = {
         "answer_span_normalizations": metrics["answer_span_normalizations"] if schema_version >= 8 else None,
     }
+    schema10_metrics = {
+        "polar_answer_normalizations": metrics["polar_answer_normalizations"] if schema_version >= 10 else None,
+    }
+    schema11_metrics = {
+        "field_extremum_templates": metrics["field_extremum_templates"] if schema_version >= 11 else None,
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -218,6 +226,8 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema6_metrics,
         **schema7_metrics,
         **schema8_metrics,
+        **schema10_metrics,
+        **schema11_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -481,6 +491,7 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "grounding_rejections",
         "operator_rewrites",
         "typed_plan_templates",
+        "field_extremum_templates",
         "direct_plan_templates",
         "answer_span_normalizations",
         "operators_executed",

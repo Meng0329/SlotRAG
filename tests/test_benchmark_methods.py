@@ -91,7 +91,8 @@ def test_no_operators_reports_unsupported_without_llm_calculation(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind):
+        def compile(self, _question, *, answer_kind, field_extremum_templates):
+            assert field_extremum_templates is True
             return plan, RunMetrics()
 
     class Executor:
@@ -148,7 +149,8 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind):
+        def compile(self, _question, *, answer_kind, field_extremum_templates):
+            assert field_extremum_templates is True
             return plan, RunMetrics()
 
     class Executor:
@@ -202,7 +204,8 @@ def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, document_count=None):
+        def compile(self, _question, *, answer_kind, field_extremum_templates, document_count=None):
+            assert field_extremum_templates is True
             observed_document_counts.append(document_count)
             return plan, RunMetrics()
 
@@ -297,3 +300,127 @@ def test_deterministic_output_rejects_serialized_structures():
     result = ExecutionResult(rows=[{"answer": "{'country': 'Canada', 'period': '1960s-1990s'}"}])
 
     assert methods._deterministic_output("hotpotqa", plan, result) is None
+
+
+def test_run_method_normalizes_answer_leading_polar_response_at_shared_outlet(monkeypatch):
+    original = ExecutionResult(
+        answer="No, the two directors have different nationalities.",
+        rows=[{"answer": "No, the two directors have different nationalities."}],
+        evidence=[EvidenceRecord(
+            source_id="p1",
+            source_span="The directors have different nationalities.",
+            slot_id="hybrid",
+            bindings={},
+        )],
+        metrics=RunMetrics(llm_calls=1, prompt_tokens=10, completion_tokens=5),
+    )
+    monkeypatch.setattr(methods, "_run_hybrid", lambda *_args: original)
+
+    result = methods.run_method(
+        "hybrid",
+        dataset="2wikimultihop",
+        question=QuestionRecord(id="q", question="Do the directors share the same nationality?"),
+        retriever=object(),
+        client=object(),
+        config=object(),
+        seed=2027,
+    )
+
+    assert result.answer == "no"
+    assert result.rows == original.rows
+    assert result.evidence == original.evidence
+    assert result.metrics.llm_calls == 1
+    assert result.metrics.prompt_tokens == 10
+    assert result.metrics.completion_tokens == 5
+    assert result.metrics.polar_answer_normalizations == 1
+
+
+def test_run_method_does_not_normalize_auxiliary_led_non_question(monkeypatch):
+    original = ExecutionResult(answer="No, this is explanatory prose.")
+    monkeypatch.setattr(methods, "_run_hybrid", lambda *_args: original)
+
+    result = methods.run_method(
+        "hybrid",
+        dataset="2wikimultihop",
+        question=QuestionRecord(id="q", question="Do not reduce this answer to one token."),
+        retriever=object(),
+        client=object(),
+        config=object(),
+        seed=2027,
+    )
+
+    assert result.answer == original.answer
+    assert result.metrics.polar_answer_normalizations == 0
+
+
+def test_run_method_does_not_count_already_canonical_polar_answer(monkeypatch):
+    original = ExecutionResult(answer="no")
+    monkeypatch.setattr(methods, "_run_hybrid", lambda *_args: original)
+
+    result = methods.run_method(
+        "hybrid",
+        dataset="2wikimultihop",
+        question=QuestionRecord(id="q", question="Do the directors share a nationality?"),
+        retriever=object(),
+        client=object(),
+        config=object(),
+        seed=2027,
+    )
+
+    assert result.answer == "no"
+    assert result.metrics.polar_answer_normalizations == 0
+
+
+def test_no_extremum_template_ablation_only_disables_compiler_entry(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    observed = []
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **kwargs):
+            observed.append(kwargs["field_extremum_templates"])
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy):
+            return ExecutionResult(
+                rows=[{"answer": "Alpha"}],
+                evidence=[EvidenceRecord(source_id="p", source_span="Alpha", slot_id="S1", bindings={"answer": "Alpha"})],
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    question = QuestionRecord(id="q", question="Which answer?")
+
+    for method in ("slotrag", "slotrag-no-extremum-template"):
+        result = methods._run_slotrag(
+            methods.METHODS[method],
+            "2wikimultihop",
+            question,
+            object(),
+            object(),
+            config,
+            seed=2027,
+            max_steps=4,
+            max_retrieval_calls=4,
+        )
+        assert result.answer == "Alpha"
+        assert methods.METHODS[method].options.typed_operators is True
+
+    assert observed == [True, False]

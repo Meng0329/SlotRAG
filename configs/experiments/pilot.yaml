@@ -37,6 +37,7 @@ stages:
       - slotrag-no-bindings
       - slotrag-no-operators
       - slotrag-no-direct
+      - slotrag-no-extremum-template
   smoke:
     split: train
     sample_size: 2
@@ -58,6 +59,7 @@ stages:
       - slotrag-no-bindings
       - slotrag-no-operators
       - slotrag-no-direct
+      - slotrag-no-extremum-template
   diagnostic:
     split: train
     sample_size: 10
@@ -81,6 +83,7 @@ stages:
       - slotrag-no-bindings
       - slotrag-no-operators
       - slotrag-no-direct
+      - slotrag-no-extremum-template
   validation:
     split: train
     sample_size: 200

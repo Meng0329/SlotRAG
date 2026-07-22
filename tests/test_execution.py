@@ -335,7 +335,10 @@ def test_slot_compiler_rewrites_grounded_birthdate_comparison_to_field_extremum(
     }
     question = "Which film has the director who was born first, Find Me Guilty or Tear Gas Squad?"
 
-    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(question)
+    plan, metrics = SlotCompiler(FakeStructuredClient([plan_payload])).compile(
+        question,
+        field_extremum_templates=False,
+    )
 
     assert [slot.id for slot in plan.slots] == ["S1", "S2", "S3", "S4"]
     assert [(join.left_slot, join.right_slot) for join in plan.joins] == [("S1", "S3"), ("S2", "S4")]
@@ -346,6 +349,197 @@ def test_slot_compiler_rewrites_grounded_birthdate_comparison_to_field_extremum(
     assert plan.operators[0].labels == ["Find Me Guilty", "Tear Gas Squad"]
     assert plan.operators[0].output == "answer"
     assert metrics.operator_rewrites == 1
+
+
+def test_typed_field_extremum_template_skips_llm_compilation():
+    question = "Which film has the director who was born first, Find Me Guilty or Tear Gas Squad?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(question)
+
+    assert metrics.llm_calls == 0
+    assert metrics.heuristic_plans == 1
+    assert metrics.typed_plan_templates == 1
+    assert metrics.field_extremum_templates == 1
+    assert metrics.operator_rewrites == 0
+    assert [slot.id for slot in plan.slots] == ["S1", "S2", "S3", "S4"]
+    assert [slot.predicate for slot in plan.slots] == ["DirectorOf", "BirthDate", "DirectorOf", "BirthDate"]
+    assert [slot.arguments for slot in plan.slots] == [
+        ["Find Me Guilty", "?director1"],
+        ["?director1", "?birthDate1"],
+        ["Tear Gas Squad", "?director2"],
+        ["?director2", "?birthDate2"],
+    ]
+    assert [
+        (join.left_slot, join.left_field, join.right_slot, join.right_field)
+        for join in plan.joins
+    ] == [
+        ("S1", "director1", "S2", "director1"),
+        ("S3", "director2", "S4", "director2"),
+    ]
+    assert plan.outputs == ["?answer"]
+    assert len(plan.operators) == 1
+    assert plan.operators[0].kind == "field_argmin"
+    assert plan.operators[0].fields == ["birthDate1", "birthDate2"]
+    assert plan.operators[0].labels == ["Find Me Guilty", "Tear Gas Squad"]
+    assert plan.operators[0].output == "answer"
+
+
+def test_typed_field_extremum_template_supports_later_as_argmax():
+    question = "Which film has the director who was born later, Alpha Film or Beta Film?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(question)
+
+    assert metrics.llm_calls == 0
+    assert metrics.field_extremum_templates == 1
+    assert plan.operators[0].kind == "field_argmax"
+    assert plan.operators[0].labels == ["Alpha Film", "Beta Film"]
+
+
+def test_field_extremum_template_compiles_and_executes_within_four_step_budget():
+    question = "Which film has the director who was born first, Find Me Guilty or Tear Gas Squad?"
+    plan, compiler_metrics = SlotCompiler(FakeStructuredClient([])).compile(question)
+
+    class TemplateMaterializer:
+        def __init__(self):
+            self.calls = []
+
+        def materialize(self, slot, bindings):
+            self.calls.append((slot.id, dict(bindings)))
+            rows = {
+                "S1": BindingRow(
+                    slot_id="S1",
+                    bindings={"director1": "Sidney Lumet"},
+                    source_id="Find Me Guilty#0",
+                    source_span="Find Me Guilty was directed by Sidney Lumet.",
+                    confidence=1,
+                ),
+                "S2": BindingRow(
+                    slot_id="S2",
+                    bindings={"director1": "Sidney Lumet", "birthDate1": "June 25, 1924"},
+                    source_id="Sidney Lumet#0",
+                    source_span="Sidney Lumet was born on June 25, 1924.",
+                    confidence=1,
+                ),
+                "S3": BindingRow(
+                    slot_id="S3",
+                    bindings={"director2": "Terry O. Morse"},
+                    source_id="Tear Gas Squad#0",
+                    source_span="Tear Gas Squad was directed by Terry O. Morse.",
+                    confidence=1,
+                ),
+                "S4": BindingRow(
+                    slot_id="S4",
+                    bindings={"director2": "Terry O. Morse", "birthDate2": "January 30, 1906"},
+                    source_id="Terry O. Morse#0",
+                    source_span="Terry O. Morse was born on January 30, 1906.",
+                    confidence=1,
+                ),
+            }
+            return [rows[slot.id]], RunMetrics(
+                retrieval_calls=1,
+                documents_accessed=1,
+                passages_processed=1,
+            )
+
+    materializer = TemplateMaterializer()
+    result = AdaptiveExecutor(
+        materializer,
+        max_replans=4,
+        max_retrieval_calls=4,
+    ).execute(plan)
+
+    assert compiler_metrics.llm_calls == 0
+    assert compiler_metrics.field_extremum_templates == 1
+    assert result.status == "ok"
+    assert result.rows == [{"answer": "Tear Gas Squad"}]
+    assert result.order == ["S1", "S2", "S3", "S4"]
+    assert materializer.calls == [
+        ("S1", {}),
+        ("S2", {"director1": "Sidney Lumet"}),
+        ("S3", {}),
+        ("S4", {"director2": "Terry O. Morse"}),
+    ]
+    assert result.metrics.retrieval_calls == 4
+    assert result.metrics.operators_executed == 1
+
+
+@pytest.mark.parametrize(
+    ("noun", "extremum", "expected_kind"),
+    [
+        ("film", "earlier", "field_argmin"),
+        ("film", "earliest", "field_argmin"),
+        ("film", "latest", "field_argmax"),
+        ("movie", "first", "field_argmin"),
+    ],
+)
+def test_typed_field_extremum_template_supports_whitelisted_synonyms(noun, extremum, expected_kind):
+    question = f"Which {noun} has the director who was born {extremum}, Alpha Film or Beta Film?"
+
+    plan, metrics = SlotCompiler(FakeStructuredClient([])).compile(question)
+
+    assert metrics.field_extremum_templates == 1
+    assert plan.operators[0].kind == expected_kind
+
+
+def test_typed_field_extremum_template_rejects_duplicate_candidates():
+    question = "Which film has the director who was born first, Alpha Film or Alpha Film?"
+    fallback_payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([fallback_payload])).compile(question)
+
+    assert metrics.llm_calls == 1
+    assert metrics.typed_plan_templates == 0
+    assert metrics.field_extremum_templates == 0
+
+
+def test_typed_field_extremum_template_rejects_more_than_two_candidates():
+    question = "Which film has the director who was born first, Alpha Film or Beta Film or Gamma Film?"
+    fallback_payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([fallback_payload])).compile(question)
+
+    assert metrics.llm_calls == 1
+    assert metrics.field_extremum_templates == 0
+
+
+def test_field_extremum_template_can_be_disabled_for_ablation():
+    question = "Which film has the director who was born first, Alpha Film or Beta Film?"
+    fallback_payload = {
+        "slots": [{
+            "id": "S1",
+            "predicate": "EvidenceAnsweringQuestion",
+            "arguments": ["?answer"],
+            "constraints": {"question": question},
+        }],
+        "joins": [],
+        "outputs": ["?answer"],
+    }
+
+    _, metrics = SlotCompiler(FakeStructuredClient([fallback_payload])).compile(
+        question,
+        field_extremum_templates=False,
+    )
+
+    assert metrics.llm_calls == 1
+    assert metrics.field_extremum_templates == 0
 
 
 def test_slot_compiler_does_not_rewrite_ambiguous_field_comparison():

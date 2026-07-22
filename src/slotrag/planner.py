@@ -15,7 +15,7 @@ import unicodedata
 from pydantic import BaseModel, Field, ValidationError
 
 from .errors import SchemaError
-from .models import BindingRow, EvidenceRecord, ExecutionResult, RelationalOperator, RunMetrics, Slot, SlotPlan
+from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RunMetrics, Slot, SlotPlan
 from .providers import AgnesClient, ChatResult
 from .retrieval import HybridRetriever
 
@@ -481,12 +481,62 @@ class SlotCompiler:
                 rewritten += 1
         return SlotPlan.model_validate(payload), rewritten
 
+    @staticmethod
+    def _field_extremum_template(question: str) -> SlotPlan | None:
+        match = re.fullmatch(
+            r"\s*which\s+(?:film|movie)\s+has\s+the\s+director\s+who\s+was\s+born\s+"
+            r"(?P<extremum>first|earlier|earliest|later|latest)\s*,\s*"
+            r"(?P<left>.+)\s+or\s+(?P<right>.+?)\s*\?\s*",
+            question,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        left_label = match.group("left").strip()
+        right_label = match.group("right").strip()
+        normalized_labels = [
+            " ".join(re.findall(r"\w+", label.casefold()))
+            for label in (left_label, right_label)
+        ]
+        if (
+            not all(normalized_labels)
+            or len(set(normalized_labels)) != 2
+            or any(re.search(r"\bor\b", label, flags=re.IGNORECASE) for label in (left_label, right_label))
+        ):
+            return None
+        operator_kind = (
+            "field_argmin"
+            if match.group("extremum").casefold() in {"first", "earlier", "earliest"}
+            else "field_argmax"
+        )
+        return SlotPlan(
+            slots=[
+                Slot(id="S1", predicate="DirectorOf", arguments=[left_label, "?director1"], estimated_cardinality=1),
+                Slot(id="S2", predicate="BirthDate", arguments=["?director1", "?birthDate1"], estimated_cardinality=1),
+                Slot(id="S3", predicate="DirectorOf", arguments=[right_label, "?director2"], estimated_cardinality=1),
+                Slot(id="S4", predicate="BirthDate", arguments=["?director2", "?birthDate2"], estimated_cardinality=1),
+            ],
+            joins=[
+                JoinSpec(left_slot="S1", left_field="director1", right_slot="S2", right_field="director1"),
+                JoinSpec(left_slot="S3", left_field="director2", right_slot="S4", right_field="director2"),
+            ],
+            operators=[RelationalOperator(
+                id="O1",
+                kind=operator_kind,
+                fields=["birthDate1", "birthDate2"],
+                labels=[left_label, right_label],
+                output="answer",
+            )],
+            outputs=["?answer"],
+        )
+
     def compile(
         self,
         question: str,
         *,
         answer_kind: str = "short",
         document_count: int | None = None,
+        field_extremum_templates: bool = True,
     ) -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
@@ -511,6 +561,14 @@ class SlotCompiler:
                 )],
                 outputs=["?months"],
             ), RunMetrics(heuristic_plans=1, typed_plan_templates=1)
+        if answer_kind == "short" and field_extremum_templates:
+            field_extremum_plan = self._field_extremum_template(question)
+            if field_extremum_plan is not None:
+                return field_extremum_plan, RunMetrics(
+                    heuristic_plans=1,
+                    typed_plan_templates=1,
+                    field_extremum_templates=1,
+                )
         if answer_kind == "boolean":
             return SlotPlan(
                 slots=[Slot(

@@ -167,6 +167,40 @@ def test_schema8_reports_answer_span_normalizations_without_backfilling_schema7(
     assert legacy_summary["answer_span_normalizations"] is None
 
 
+def test_schema10_reports_polar_answer_normalizations_without_backfilling_schema9():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 10
+    current["result"]["metrics"] = RunMetrics(
+        polar_answer_normalizations=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 9
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["polar_answer_normalizations"] == 1
+    assert legacy_summary["polar_answer_normalizations"] is None
+
+
+def test_schema11_reports_field_extremum_templates_without_backfilling_schema10():
+    current = _record("slotrag", "q1", 1.0)
+    current["schema_version"] = 11
+    current["result"]["metrics"] = RunMetrics(
+        field_extremum_templates=1,
+    ).model_dump(mode="json")
+    legacy = _record("hybrid", "q1", 1.0)
+    legacy["schema_version"] = 10
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag")
+    legacy_summary = next(row for row in rows if row["method"] == "hybrid")
+
+    assert current_summary["field_extremum_templates"] == 1
+    assert legacy_summary["field_extremum_templates"] is None
+
+
 def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
     record = _record("slotrag", "q1", 1.0)
     record["scores"]["evidence_recall"] = 1.0

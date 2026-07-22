@@ -26,6 +26,7 @@ class MethodSpec:
     strategy: str = "adaptive"
     options: ExecutionOptions = field(default_factory=ExecutionOptions)
     direct_single_document: bool = True
+    field_extremum_templates: bool = True
     description: str = ""
 
 
@@ -41,6 +42,7 @@ ABLATION_METHODS = [
     "slotrag-no-bindings",
     "slotrag-no-operators",
     "slotrag-no-direct",
+    "slotrag-no-extremum-template",
 ]
 
 
@@ -69,6 +71,11 @@ METHODS: dict[str, MethodSpec] = {
     "slotrag-no-bindings": MethodSpec("slotrag-no-bindings", "slotrag", options=ExecutionOptions(binding_propagation=False)),
     "slotrag-no-operators": MethodSpec("slotrag-no-operators", "slotrag", options=ExecutionOptions(typed_operators=False)),
     "slotrag-no-direct": MethodSpec("slotrag-no-direct", "slotrag", direct_single_document=False),
+    "slotrag-no-extremum-template": MethodSpec(
+        "slotrag-no-extremum-template",
+        "slotrag",
+        field_extremum_templates=False,
+    ),
 }
 
 
@@ -261,6 +268,29 @@ def _normalize_direct_answer_rows(result: ExecutionResult) -> ExecutionResult:
         ),
     })
     return result.model_copy(update={"rows": normalized_rows, "metrics": metrics})
+
+
+def _normalize_polar_answer(question: str, result: ExecutionResult) -> ExecutionResult:
+    if result.status != "ok" or not result.answer:
+        return result
+    if not question.rstrip().endswith("?"):
+        return result
+    if not re.match(
+        r"^\s*(?:do|does|did|is|are|was|were|can|could|would|will|has|have|had)\b",
+        question,
+        flags=re.IGNORECASE,
+    ):
+        return result
+    match = re.match(r"^\s*(yes|no|true|false)\b", result.answer, flags=re.IGNORECASE)
+    if not match:
+        return result
+    answer = "yes" if match.group(1).casefold() in {"yes", "true"} else "no"
+    if result.answer == answer:
+        return result
+    metrics = result.metrics.model_copy(update={
+        "polar_answer_normalizations": result.metrics.polar_answer_normalizations + 1,
+    })
+    return result.model_copy(update={"answer": answer, "metrics": metrics})
 
 
 def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> str | None:
@@ -468,7 +498,9 @@ def _run_slotrag(
     max_retrieval_calls: int,
 ) -> ExecutionResult:
     compile_started = time.perf_counter()
-    compile_kwargs: dict[str, Any] = {}
+    compile_kwargs: dict[str, Any] = {
+        "field_extremum_templates": spec.field_extremum_templates,
+    }
     if spec.direct_single_document and question.passages:
         compile_kwargs["document_count"] = len({
             passage.doc_id or passage.id
@@ -557,4 +589,4 @@ def run_method(
         "graphrag": lambda: _run_graphrag(dataset, question, client),
         "slotrag": lambda: _run_slotrag(spec, dataset, question, retriever, client, config, seed, max_steps, max_retrieval_calls),
     }
-    return runners[spec.family]()
+    return _normalize_polar_answer(question.question, runners[spec.family]())

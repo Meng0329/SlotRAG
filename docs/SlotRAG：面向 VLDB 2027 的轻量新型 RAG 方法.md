@@ -622,9 +622,9 @@ HotpotQA 两次相同样本运行间，SlotRAG F1 从 0.714 变为 0.450，Hybri
 | F2 | DROP `drop_train_11251`：问题要求计算 1906-09-18 到 1906-12-02 的月份差，金答案为 3。计划将 `DateDiffInMonths(?startDate, ?endDate, ?months)` 编译成普通 slot，`operators=[]`，LLM 抽取 `months=2`，最终 DROP EM/F1=0。 | 衍生数值被伪装成可检索语义关系，绕过了类型化算子和 `slotrag-no-operators` 的干净对照；结果依赖 LLM 心算，不具备数据库执行语义。 | v3 的事后安全改写依赖 LLM 先产生有效计划，在线三次编译失败后无法触发。schema v6 已对严格匹配的“How many months after ...”问题直接生成 `MonthDifferenceDates(?startDate, ?endDate)` 与 `date_diff_months` 算子，跳过 LLM 计划结构生成；其他月份、天数、年份和 `before` 问法仍走原编译路径。 | v4 目标题输出 3，`typed_plan_templates=1`、`compilation_llm_calls=0`、`operators_executed=1`、`plan_fallbacks=0`，DROP EM/F1=1.0；同批只有该题触发模板。 | schema v6 在线通过 |
 | F3 | DROP v4 虽升至 F1 0.834，但平均仍需 3.5 LLM calls、7,078 tokens 和 74.76 s；仅编译就占 1.9 calls、4,747 tokens 和 42.29 s，10 题中 4 题三次编译失败后退化为单槽证据回答。 | DROP 每题只有一个唯一文档，不存在跨文档连接顺序或绑定传播收益；仍调用结构 Slot Compiler 是与数据拓扑不匹配的固定成本。 | 在类型算子模板之后增加退化单文档计划：当可见语料拓扑只有一个唯一文档时，直接物化 `EvidenceAnsweringQuestion(?answer)`，跳过结构编译；多文档问题保持原路径。新增 `direct_plan_templates`，并加入禁用该路由的消融。 | v5 精确产生 1 个 typed + 9 个 direct 计划，编译调用和 fallback 均为 0；calls/tokens/延迟为 1.1/1,417/15.26 s，但 F1 0.796，较 v4 低 0.038。 | H7/H9 通过，H8 失败 |
 | F4 | v5 `drop_train_41439` 的直接槽位抽取为 `families (20,154 families compared to 74,563 people)`；它是唯一非空字符串，因而被确定性输出，DROP F1 从 1.0 降到 0.29。 | 直接计划把“答案 + 括号内证据说明”当作合法标量；结构类型正确，但答案投影不满足最短答案跨度契约。 | 只对 direct plan 的答案行做可审计规范化：若结尾括号体以数值开头且再次原样包含括号外答案，则去掉括号说明；`Mercury (planet)`、`Washington (Washington state)` 等消歧括号保持不变，EvidenceRecord 保留原始绑定。新增 `answer_span_normalizations`。 | v6 在线抽取自行返回 `families`，因此规范化计数为 0；冻结重放 v5 原始结果后输出 `families`、计数 1，且原始 EvidenceRecord 不变。总体 F1 0.867。 | 冻结重放通过，在线触发未观察 |
-| F5 | v6 2Wiki `55b23a90084c11ebbd56ac1f6bf848b6`：问题问 `Find Me Guilty` 与 `Tear Gas Squad` 哪部电影的导演出生更早。编译器生成四个事实抽取槽和第五个 `Compare(?bd1, ?bd2)` 槽；首次 attempt 因 `5 > max_steps=4` 返回 `budget_exceeded`，重试又在 embedding 端点超时。 | `Compare` 是对已抽取字段的确定性运算，却被错误物化为语义检索槽；两个独立事实分支也缺少由字段算子声明的关系连接，执行器只能处理等值 join。 | 将严格可证明的字段比较槽规范化为 `field_argmin`/`field_argmax` 类型算子；答案候选标签必须来自问题中已落地的计划常量，算子显式连接两个事实分支，执行器只对这些算子连接的分支做受控笛卡尔组合。保持 `max_steps=4`，不以放宽预算掩盖错误建模。 | v6 真实失败 plan 冻结重放已从 5 槽改写为 4 槽，`operator_rewrites=1`，冻结日期输出 `Tear Gas Squad`；在线同样本仍待验证。 | schema v9 冻结重放通过 |
-| F6 | v6 2Wiki 的三个 `comparison` 样本金答案均为 `no`；SlotRAG 分别输出语义正确的 `No, ...` 解释，单题 F1 仅 0.143/0.143/0.083。另一个 `bridge_comparison` 同样正确回答 `No. ...`，F1 为 0.095。Hybrid 也受同一评分契约影响。 | Hotpot/SQuAD token-F1 奖励最短答案，但生成器没有对一般数据集的极性问题强制 canonical `yes/no`；这会把正确解释误计为低质量，并混淆方法质量与输出格式。 | 后续 schema 单独增加无金标泄漏的统一极性规范化：仅当问题句法为 yes/no 问句且最终答案以 yes/no/true/false 开头时，映射为 `yes`/`no`；对所有方法在 `run_method` 出口一致应用，新增可审计计数。不得用 gold answer 决定是否触发。 | v6 冻结重评分仅改变双方相同的 4 个极性题：SlotRAG F1 0.546→0.900，Hybrid 0.648→1.000；检索、证据和成本不变，差距仍由 F5 失败造成。 | 冻结协议通过，待 schema v10 实现 |
-| F7 | v6 的 31 个 SlotRAG attempts 共记录 25 次计划校验错误：断图 7、比较符别名 4、缺工具调用 4、无变量槽 3、未知输出 2、错误 join field 2、其余 3。最终记录中，有校验错误的 11 题平均编译 2.64 calls/6,549 tokens/46.62 s；无校验错误的 19 题为 0.42/755/5.21 s。 | 大量成本来自可分类的结构协议不一致，而不是查询本身需要多轮规划；不过缺工具调用、未落地常量等错误不能安全本地猜测。两组还混有 direct 路由和 provider 失败，当前差值只作诊断。 | schema v9/F6 完成后，单独验证白名单本地规范化：`=`/`==`/`equal`→`eq`、`!=`→`ne`，缺失 operator id 用稳定哈希/序号补全；只有算子字段能证明连接时才补逻辑连通。其他错误继续重试或 fallback。 | 冻结重放必须逐类报告成功修复率、误修复率、编译 calls/tokens/延迟和最终答案；不得把所有 ValidationError 吞掉。 | 已定位，待后续预注册 |
+| F5 | v6 2Wiki `55b23a90084c11ebbd56ac1f6bf848b6`：问题问 `Find Me Guilty` 与 `Tear Gas Squad` 哪部电影的导演出生更早。编译器生成四个事实抽取槽和第五个 `Compare(?bd1, ?bd2)` 槽；首次 attempt 因 `5 > max_steps=4` 返回 `budget_exceeded`，重试又在 embedding 端点超时。 | `Compare` 是对已抽取字段的确定性运算，却被错误物化为语义检索槽；两个独立事实分支也缺少由字段算子声明的关系连接，执行器只能处理等值 join。 | 将严格可证明的字段比较槽规范化为 `field_argmin`/`field_argmax` 类型算子；答案候选标签必须来自问题中已落地的计划常量，算子显式连接两个事实分支，执行器只对这些算子连接的分支做受控笛卡尔组合。保持 `max_steps=4`，不以放宽预算掩盖错误建模。 | 冻结重放从 5 槽改写为 4 槽并正确输出；但 v7 在线编译三轮均未形成可校验的输入计划，最终回退为单槽，`operator_rewrites=operators_executed=0`、F1=0。预算失败消失不等于算子修复生效。 | schema v9 离线通过、在线未通过 |
+| F6 | v6 2Wiki 的三个 `comparison` 样本金答案均为 `no`；SlotRAG 分别输出语义正确的 `No, ...` 解释，单题 F1 仅 0.143/0.143/0.083。另一个 `bridge_comparison` 同样正确回答 `No. ...`，F1 为 0.095。Hybrid 也受同一评分契约影响。 | Hotpot/SQuAD token-F1 奖励最短答案，但生成器没有对一般数据集的极性问题强制 canonical `yes/no`；这会把正确解释误计为低质量，并混淆方法质量与输出格式。 | schema v10 增加无金标泄漏的统一极性规范化：仅当问题是白名单助动词开头且以问号结束、最终答案首 token 为 yes/no/true/false 时，映射为 `yes`/`no`；对所有方法在 `run_method` 出口一致应用，并记录可审计计数。 | v8 在线双方各且仅改变同 4 题，每条计数 1，非极性题为 0；SlotRAG/Hybrid EM=F1 为 0.900/1.000，检索、证据与提供方调用逻辑不变。 | schema v10 在线通过 |
+| F7 | v6 的 31 个 SlotRAG attempts 共记录 25 次计划校验错误；v7 的 10 个最终记录又产生 22 次结构失败、15 次修复调用和 5 次单槽 fallback。可提取的 16 条校验错误中有断图 6、缺工具调用 3、旧比较/argmin 表达 3、嵌套 JSON 1、错误 join field 1、同实体变量不一致 1、无变量槽 1；5 个 fallback 全部属于 `comparison` 或 `bridge_comparison`。 | 大量成本来自可分类的结构协议不一致，而不是查询本身需要多轮规划；F5 还证明“有效计划之后才执行的改写”无法覆盖入口校验失败。不过缺工具调用、未落地常量等错误不能安全本地猜测。 | 先实现全方法统一的 F6 出口规范化，再独立预注册编译入口修复：对白名单别名和双重 JSON 做无损规范化；字段极值问题采用严格句法和问题内常量约束的类型化入口，其他断图、缺工具调用和未落地字段仍重试或 fallback。 | 冻结重放逐类报告成功修复率和误修复率；在线同样本必须记录触发范围、编译 calls/tokens/延迟、F5 答案和全部异常，不得吞掉 ValidationError。 | v7 再现，待独立 schema 验证 |
 
 ### schema v5 候选架构与预注册复验（2026-07-21）
 
@@ -802,7 +802,114 @@ H15（边界与无回退）：只匹配 Compare/DateCompare、两个已物化变
 
 离线门槛通过后，在新的源码指纹和运行目录上重跑相同 2Wiki diagnostic 10 题；必须同时报告目标题、总体 F1/证据、异常状态、算子触发范围及相对 Hybrid 的全部成本。若只是消除预算失败却继续显著劣于 Hybrid，仍不得进入 Tune50。
 
-首次在线启动门槛检查于 `2026-07-21T20:06:05+08:00` 执行：Agnes 为 `HTTP 200`，但 embedding 与 reranker 均在 60 秒后 `ReadTimeout`。因此本次没有创建 manifest、样本或逐题结果，也不计为 v7 实验 attempt；只生成了数据审计和无密钥的 `runs/vldb2027-diagnostic-v7/service-doctor.json`。探针执行时源码指纹为 `7b146469...b0be`；补齐 `field_argmax` 对称测试后的最终候选指纹为 `be5b59803d2b84dbfd59c4b8fa6ff74efb3c53a4d0bf4a85d5e8c26185e5068d`，完整离线门槛保存在 `offline-validation.json`。审计 SHA-256 与前轮一致。恢复后必须先重跑 doctor，三项服务全部通过才允许创建 v7 manifest。
+首次在线启动门槛检查于 `2026-07-21T20:06:05+08:00` 执行：Agnes 为 `HTTP 200`，但 embedding 与 reranker 均在 60 秒后 `ReadTimeout`。补齐 `field_argmax` 对称测试并冻结最终候选源码后，于 `2026-07-21T21:52:10+08:00` 再次执行相同探针；最终源码指纹 `be5b59803d2b84dbfd59c4b8fa6ff74efb3c53a4d0bf4a85d5e8c26185e5068d` 下结果仍为 Agnes `HTTP 200`、embedding/reranker `ReadTimeout`。两次检查分别保存在无密钥的 `service-doctor.json` 与 `service-doctor-history.json`，后者保留完整时间序列；没有创建 manifest、样本或逐题结果，也没有产生 v7 在线 attempt。
+
+截至第二次检查，`runs/vldb2027-diagnostic-v7/` 仅有离线与服务探针文件；这段基础设施阻塞不作为方法失败或重试样本计入统计。服务于 `2026-07-22T10:31:29+08:00` 恢复，三项探针均为 `HTTP 200`，恢复记录已追加到 `service-doctor-history.json`；随后才在同一冻结指纹下创建 manifest 并启动 v7。
+
+### schema v9 在线同样本复验（v7，2026-07-22）
+
+v7 manifest 源码指纹为 `be5b59803d2b84dbfd59c4b8fa6ff74efb3c53a4d0bf4a85d5e8c26185e5068d`，数据审计 SHA-256 为 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`，2Wiki 样本 SHA-256 为 `5bcc2298686f2c3d1e0e570bcfa6197454f32660009d6cf3e9599dae63f1c1a4`，均与预注册值一致。20/20 个最终记录、20 个不可变 attempts、0 重试、0 failed/empty/unsupported，全部为 schema v9；流程完成率为 1.0，但答案质量仍单独计分。
+
+| v7 2Wiki diagnostic（10 题/方法） | SlotRAG | Hybrid |
+| --- | ---: | ---: |
+| EM / F1 | 0.600 / 0.636 | 0.600 / 0.652 |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.900 / 0.950 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.420 / 0.220 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence MRR / NDCG@10 | 1.000 / 0.950 | 1.000 / 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 3.4 / 2.9 / 2,054 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 7.3 / 5.8 / 7.5 / 5.9 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 4.7 / 1.5 / 1.5 / 1.5 | 1.1 / 1.0 / 1.0 / 1.0 |
+| Total tokens / provider calls / 含索引 calls | 10,736 / 7.7 / 8.7 | 1,841 / 3.1 / 3.1 |
+| 在线延迟 mean / P50 / P95 / P99 | 94.35 / 79.40 / 185.31 / 187.14 s | 22.38 / 15.72 / 55.13 / 68.62 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 46.77 / 40.57 / 40.57 / 7.00 s | 0 / 0 / 0 / 21.51 s |
+| 结构失败 / 修复 / plan fallback / evidence fallback | 2.2 / 1.5 / 0.5 / 0.3 | 0 / 0 / 0 / 0 |
+| 确定性答案 / operator rewrite / operator executed | 0.6 / 0 / 0 | 0 / 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.5 / 0.5 / 1.5 / 1.0 / 0 / 4.5 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.5 / 0.073 / 0.375 / 0.375 | 0 / 0.017 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 0.502 MB / 1.1 / 0.5 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 1.189 / 0 | N/A / N/A |
+| 索引构建延迟 / embedding calls / cache hit rate | 0.359 s / 1.0 / 0.555 | 0.001 s / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+Hybrid 在方法顺序中复用 SlotRAG 已建立的 passage embedding cache，因此索引构建差异不解释为方法优势；主表在线延迟不含索引构建，`total_latency_with_index` 分别为 94.70/22.38 s。SlotRAG 相对 Hybrid 减少 40.8% 唯一文档和 29.3% 证据文本字符，但 LLM calls、tokens 和在线延迟分别为 4.27、5.83 和 4.22 倍，同时 Evidence Recall@5/@10 更低。
+
+配对 bootstrap 的 SlotRAG-Hybrid F1 差为 `-0.0164`，2 胜/7 平/1 负，Cliff's delta `-0.06`，95% CI `[-0.2982, 0.2455]`，`p=p_holm=0.9276`。分层结果如下；每层只有 1--4 题，仅用于定位故障：
+
+| 分层（n） | SlotRAG / Hybrid F1 | R@5 | NDCG@10 | 唯一文档 | LLM calls / tokens | 在线延迟 | 诊断 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| bridge_comparison (2) | 0.053 / 0.543 | 0.750 / 0.875 | 0.832 / 0.977 | 4.5 / 9.5 | 6.0/17,957 / 1.5/1,971 | 120.66 / 40.31 s | 两题均 fallback；F5 是唯一配对负例。 |
+| comparison (3) | 0.417 / 0.144 | 1.000 / 1.000 | 1.000 / 1.000 | 4.67 / 9.67 | 5.33/10,584 / 1.0/1,747 | 108.53 / 21.99 s | SlotRAG 一题返回 canonical `No`，形成两项配对胜例之一；另两题仍受格式惩罚。 |
+| compositional (4) | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 0.908 | 7.25 / 10.0 | 3.25/5,694 / 1.0/1,506 | 48.50 / 16.70 s | 质量持平、证据排序略高，但成本仍约 2.9 倍。 |
+| inference (1) | 1.000 / 1.000 | 0.500 / 0.500 | 0.832 / 0.798 | 6.0 / 10.0 | 6.0/16,916 / 1.0/3,206 | 182.52 / 10.38 s | 单题持平，无法支持泛化结论。 |
+
+F5 在线 attempt-0001 的三轮候选依次因断图、旧式 `argmin`/`<` 和双重 JSON 结构校验失败，最终回退到 1 槽；输出“证据不足”，EM/F1=0，`operator_rewrites=operators_executed=0`。因此 H13/H14 只在冻结计划成立，在线端到端不通过；H15 的“同样本仅目标题触发”也未成立，因为 10 题全部 0 次触发。v7 证明算子本身与事后改写正确，但编译入口仍是瓶颈，不能把 0 流程失败误写为 F5 修复成功。
+
+v7 的无 gold 极性冻结重评分仍只改变双方相同 4 题：SlotRAG/Hybrid F1 变为 0.900/1.000，0 胜/9 平/1 负，差值 `-0.100`，95% CI `[-0.300, 0]`，`p=0.7114`；唯一负例为 F5。结果保存在 `polar-answer-replay-v7.json`。全部原始指标见 `runs/vldb2027-diagnostic-v7/summaries/diagnostic/{metrics,retrieval_metrics,per_question,stratified_metrics,paired_bootstrap}.csv` 与 `summary.json`。v7 不进入 Tune50：下一步先独立实现 F6 统一出口协议，再预注册 F7/F5 编译入口修复。
+
+### schema v10 统一极性答案协议预注册（2026-07-22）
+
+schema v10 只修改所有方法共享的 `run_method` 出口，不改变检索、计划、执行、证据或提供方调用。触发条件不读取 gold：问题去除尾部空白后必须以 `?` 结束，首词必须是 `Do/Does/Did/Is/Are/Was/Were/Can/Could/Would/Will/Has/Have/Had` 之一，成功结果的答案首 token 必须是 `yes/no/true/false`；随后统一映射为小写 `yes/no`。已经是小写 canonical 答案时保持不变且不重复计数，祈使句、WH 问句、非首 token 和异常状态不改。新增 `polar_answer_normalizations`，schema v9 及以前报告 N/A。
+
+```text
+H16（触发精度）：冻结 v7 只改变双方相同 4 个极性题，非极性题改变 0；问题或答案边界不满足时不触发。
+H17（方法对称与不变性）：规范化位于共享出口，对 SlotRAG、Hybrid 和其他基线采用同一规则；rows、EvidenceRecord、状态、检索指标、provider calls/tokens/latency 全部不变。
+H18（可审计与幂等）：每个实际改变的结果计数 1，已经 canonical 的结果计数 0；schema 10 汇总报告该字段，schema 9 不回填 0。
+```
+
+离线实现已完成。聚焦测试先后观察到 verbose `No` 未压缩、祈使句误触发、旧 schema 不报告新字段和 canonical `no` 重复计数四个 RED，再分别修至 GREEN；全仓为 `78 passed, 1 skipped`，Python 编译、pilot YAML 和 `git diff --check` 均通过。候选源码指纹为 `df8bf7e53fd84c317eca08934b2caa3374d0251bfa56d57f0eff91c8a63a5fb5`。
+
+冻结 v7 原始结果调用实际 schema v10 出口后，SlotRAG/Hybrid 都恰好改变相同 4 个 question IDs，F1 精确为 0.900/1.000，非极性题改变 0；因此 H16-H18 的离线部分通过。验证记录保存在 `runs/vldb2027-diagnostic-v8/offline-validation.json`。在线复验使用独立 v8 目录、相同 2Wiki 样本、预算与两方法；三项 service doctor 全部通过且 manifest 指纹匹配后才启动。在线仅验证协议触发和运行时不变性，不将提供方随机波动误归因于规范化，也不混入 F7 编译入口修改。
+
+#### schema v10 在线结果（v8）
+
+三项服务于 `2026-07-22T11:05:59+08:00` 全部返回 `HTTP 200` 后才创建 manifest。manifest 指纹、审计 SHA-256 和样本 SHA-256 均与预注册值一致；20/20 条记录和 20 attempts 全部为 schema 10，0 重试、0 failed/empty/unsupported。
+
+| v8 2Wiki diagnostic（10 题/方法） | SlotRAG | Hybrid |
+| --- | ---: | ---: |
+| EM / F1 | 0.900 / 0.900 | 1.000 / 1.000 |
+| Polar normalization | 0.4（4/10） | 0.4（4/10） |
+| Evidence Recall@1 / @5 / @10 | 0.450 / 0.875 / 0.925 | 0.450 / 0.925 / 1.000 |
+| Evidence Precision@1 / @5 / @10 | 1.000 / 0.400 / 0.210 | 1.000 / 0.440 / 0.240 |
+| Evidence Hit@1 / @5 / @10 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| Evidence MRR / NDCG@10 | 1.000 / 0.930 | 1.000 / 0.938 |
+| 检索证据数 / 文档数 / 文本字符 | 3.1 / 2.7 / 1,739 | 9.9 / 9.8 / 2,906 |
+| 累计文档 / 唯一文档 / 累计 passage / 唯一 passage | 7.3 / 5.8 / 7.5 / 5.9 | 9.8 / 9.8 / 9.9 / 9.9 |
+| LLM / retrieval / embedding / reranker calls | 4.6 / 1.5 / 1.5 / 1.5 | 1.1 / 1.0 / 1.0 / 1.0 |
+| Total tokens / provider calls / 含索引 calls | 10,197 / 7.6 / 8.6 | 1,961 / 3.1 / 3.1 |
+| 在线延迟 mean / P50 / P95 / P99 | 110.96 / 93.62 / 218.09 / 259.99 s | 19.82 / 17.06 / 35.33 / 41.40 s |
+| 编译 / 执行 / 物化 / 生成延迟 | 62.23 / 40.52 / 40.52 / 8.21 s | 0 / 0 / 0 / 18.92 s |
+| 结构失败 / 修复 / local repair / plan fallback | 2.2 / 1.5 / 0.1 / 0.5 | 0 / 0 / 0 / 0 |
+| evidence fallback / deterministic / operator rewrite / executed | 0.2 / 0.7 / 0 / 0 | 0 / 0 / 0 / 0 |
+| slots / joins / variables / outputs / operators / complexity | 1.5 / 0.5 / 1.5 / 1.0 / 0 / 4.5 | 0 / 0 / 0 / 0 / 0 / 0 |
+| steps / LLM预算 / 检索预算 / step预算 | 1.5 / 0.072 / 0.375 / 0.375 | 0 / 0.017 / 0.250 / 0 |
+| 峰值 RSS 增量 / 最大中间绑定 / reoptimization | 0.461 MB / 1.3 / 0.5 | 0 / 0 / 0 |
+| 平均 selectivity error / planner regret | 2.060 / 0 | N/A / N/A |
+| 索引构建延迟 / embedding calls / cache hit rate | 0.410 s / 1.0 / 0.555 | 0.001 s / 0 / 1.000 |
+| 索引大小 / phase token coverage | 85,697 bytes / 1.0 | 85,697 bytes / 1.0 |
+
+双方触发的 question IDs 精确相同：`49b5...`、`904a...`、`d6a...`、`fce9...`；每条 `polar_answer_normalizations=1`，其余 12 个方法-题记录为 0，没有计数大于 1。H16-H18 的在线部分通过，完整判定保存在 `runs/vldb2027-diagnostic-v8/online-validation.json`。这项协议修复消除了格式假负例，但没有制造 SlotRAG 优势。
+
+配对 bootstrap 中 SlotRAG-Hybrid F1 差为 `-0.100`，0 胜/9 平/1 负，Cliff's delta `-0.10`，95% CI `[-0.300, 0]`，`p=p_holm=0.7008`。`comparison`、`compositional` 和 `inference` 分层双方 F1 均为 1.0；`bridge_comparison` 为 0.5/1.0，唯一差异仍是 F5。F5 本轮产生 5 次结构失败和 3 次修复，最终单槽 fallback；8 次 LLM 调用、23,241 tokens、270.46 s，`operator_rewrites=operators_executed=0`，EM/F1=0。故 schema v10 通过自身协议门槛，但 v8 仍不进入 Tune50；后续 F7 必须独立修复类型化编译入口及其长尾成本。全部原始指标保存在 v8 `summaries/diagnostic/` 的 CSV、REPORT 和 `summary.json`。
+
+### schema v11 字段极值类型化入口预注册（2026-07-22）
+
+v7/v8 连续证明 schema v9 的事后改写无法覆盖 LLM 输出在 `SlotPlan` 入口前就失败的情形。schema v11 因此把已经冻结验证的字段极值查询类前移到编译器确定性入口，优先级为“月份差类型模板 → 字段极值类型模板 → 单文档/原 LLM 编译路径”。本轮不加入通用断图猜测、缺工具调用恢复或任意 comparator 修补，避免把多类机制混成一次实验。
+
+白名单语法完整锚定为 `Which film/movie has the director who was born {first|earlier|earliest|later|latest}, A or B?`，忽略大小写和边界空白。只允许两个非空、规范化后不同、内部不再含候选分隔词的显式标签；标签直接来自问题，不读取数据集类型、gold answer 或 gold evidence。入口生成两个 `DirectorOf`、两个 `BirthDate` 事实槽，两条实体 join，以及一个 `field_argmin` 或 `field_argmax`，输出 `?answer`；计划仍受 `max_steps=4`、字段类型一致、唯一极值和平局拒绝约束。新增 `field_extremum_templates`，并增加只关闭该入口的 `slotrag-no-extremum-template` 消融；后者仍保留原 LLM 编译及安全事后改写。
+
+```text
+H19（入口确定性）：F5 不调用编译 LLM，生成 4 slots/2 joins/1 field_argmin，labels 精确为 Find Me Guilty/Tear Gas Squad；typed_plan_templates=field_extremum_templates=1，operator_rewrites=0。
+H20（对称与边界）：later/latest 生成 field_argmax；同名候选、三个候选、非电影关系、非完整锚定语法均不触发并走原路径。
+H21（端到端执行）：F5 在 4 步预算内执行一次算子，输出 Tear Gas Squad，EM/F1=1，plan_fallbacks=0；不得通过放宽预算或读取 gold 达成。
+H22（同样本范围与成本）：2Wiki 10 题中只 F5 的 field_extremum_templates=1，其余 9 题为 0；相对 v8 的 F5 编译 calls/tokens/延迟和总成本下降，并完整报告证据指标与异常状态。
+```
+
+离线实现已完成。新增编译入口、独立 `slotrag-no-extremum-template` 消融开关、schema 11 统计门控及端到端四步执行测试；旧的 LLM 计划后校验用例显式关闭新入口，继续独立覆盖 schema v9 路径。聚焦测试为 `64 passed`，全仓为 `90 passed, 1 skipped`；Python 编译、pilot YAML/消融注册和 `git diff --check` 均通过。冻结源码/配置/测试指纹为 `3b5f4572c2dc15b90003590fbf9a77be02acbee05cca44f67cccf312b7f07b84`。
+
+冻结范围审计复用 v8 的 2Wiki 10 题快照，审计 SHA-256 仍为 `a24ad382ed92fe32949d050c282a366eaf6a16085ad8df27dfc9f12b7c00c67e`，样本 SHA-256 仍为 `5bcc2298686f2c3d1e0e570bcfa6197454f32660009d6cf3e9599dae63f1c1a4`。静态入口扫描只命中 F5 `55b23a90084c11ebbd56ac1f6bf848b6`，其余 9 题不命中；目标计划为 4 slots/2 joins/1 `field_argmin`，编译 LLM calls=0。基于冻结事实绑定的执行顺序为 `S1→S2→S3→S4`，4 次检索、1 次算子执行，输出 `Tear Gas Squad`。重复候选、三个候选、非电影关系和缺少完整问号边界均拒绝，`latest` 映射为 `field_argmax`。因此 H19、H20 与 H21 的冻结执行部分通过，H22 仅范围部分通过、在线成本部分待测；机器可读记录为 `runs/vldb2027-diagnostic-v9/offline-validation.json`。
+
+在线因果验证继续使用相同 2Wiki 样本；只有离线测试、冻结执行和负例范围全部通过后才创建新 manifest。若在线 F5 因检索/抽取未获得两个可解析日期而失败，必须保留空结果或证据 fallback，不允许类型算子猜测标签。
 
 ---
 
