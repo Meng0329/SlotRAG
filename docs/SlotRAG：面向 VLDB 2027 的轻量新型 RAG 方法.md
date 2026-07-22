@@ -1999,6 +1999,30 @@ v25 是新的架构修复诊断，不改写 v24 阈值；仍明确使用同一�
 
 预注册门判定：H85 **通过**；H86 **失败**，虽然 7/7 题都有一个 query context，但 raw contract/normalization 为 9 而非预注册的恰好 7，因为两题各物化两个 binding contexts；H87 **失败**，候选 F1 与正确数显著高于 GRPE，但同轮旧 ACEW 随机答对 `42fc8c`，候选相对该控制只新增修正 1/3 demonym IDs；H88、H89 **通过**。因此仍不授权 disjoint-50 或 held-out-200，也不再对这 7 题做在线调参。下一步先离线拆分三类剩余错误：compiler root omission、gold surface alias、grounding repair；新的在线门必须使用不同问题，而不是继续追逐七题随机波动。机器判定见 v25 `offline-validation.json`、`online-validation.json` 与完整 summaries。
 
+#### v26：Query-Root + Evidence-Surface Repair 与新 50 题训练门
+
+schema26 将 v25 剩余错误拆成两个互不混淆的局部修复。**Query-root repair** 只在问题中能唯一恢复一个标题、计划中该标题尚未出现、且只有一个无约束的度 1 `*Of` 根槽时，把标题追加为该根槽常量；歧义、多根、非 `*Of`、已有常量或已有约束时保持惰性。**Evidence-surface repair** 只处理闭合 country/nationality 谓词族的角色投影字段：抽取值与证据中的单个原词必须为最短 5 字符的前缀近邻且长度差不超过 2，才用证据原词替换，例如 `Australia -> Australian`；它不访问 gold、QID、外部词典或第二个模型，也不把 `American -> America` 这类评分别名问题伪装成 grounding 修复。新增遥测为 `query_anchor_plan_repairs` 与 `evidence_surface_grounding_repairs`。
+
+实现提交为 `86f0c65`，随后在 `c23f0fc` 增加两个显式单组件方法，形成 CQAC 基座上的 2×2 消融：无修复、仅 root、仅 surface、root+surface。全仓回归为 `195 passed, 1 skipped`，Python compileall 与 diff check 通过；冻结执行源码指纹为 `09de771e...03af1`。六路训练配置为默认 SlotRAG source、GRPE、CQAC、CQAC+root、CQAC+surface、CQAC+root+surface，配置文件为 `configs/experiments/repaired-anchor-training.yaml`。
+
+本轮不是 v23 的失败重跑，而是另建 `runs/vldb2027-training-v26`。在任何在线调用前，先汇总 36 份既有 2Wiki sample artifact 的 100 个唯一 ID，再从 167,454 条公开 train 中排除它们；以种子 2030、与 benchmark sampler 相同的“按层配额 + 最小 `SHA256(seed:dataset:id)`”规则冻结 50 题。结果为 50/50 唯一、历史交集 0，bridge-comparison/comparison/compositional/inference=`11/15/22/2`，sample SHA-256=`5a1ca0e9...9ea91`；原始 train 仍为 0 invalid、SHA-256=`ad0f2771...18f01`。完整文件级交集审计见 `historical-sample-overlap-audit.json`。
+
+执行采用两阶段不可变门：先只运行 50 条默认 SlotRAG，生成同源 frozen plans 和 source finals；只有 H90-H92 全部通过才运行其余 250 条 replay。服务许可/运行硬限/相邻同 provider attempt 固定为 `30 RPM / 20 RPM / 3s`，retry 同样占配额；用户指定的最大并发为 2，因此 replay 最多同时启动两个互斥 worker。完整实验若获授权应有 300 条 schema26 final，250 条 replay 必须共享相同 50 个计划。
+
+| 门 | 预注册通过条件 |
+|---|---|
+| H90 材料完整性 | 50 个唯一 ID、所有历史 2Wiki 样本交集为 0、数据审计有效，并冻结 revision/fingerprint/config/sample hash；本项在调用前已通过 |
+| H91 source 完整性 | 50 个有效计划快照与 50 个 schema26 source final，至少 49/50 final ok；attempt、provider retry、provenance 与 hash 全保留 |
+| H92 replay 必要性 | source 计划至少 4 个唯一问题出现闭合 country/nationality 谓词族，且至少 1 个唯一计划可被 query-root repair；source success rate 至少 0.98，否则立即停止，不运行 250 条 replay |
+| H93 replay 完整性 | 共 300 final、至少 294 ok；250 replay 同源；missing/unknown/hash mismatch/inconsistent pair/effective variant 全为 0 |
+| H94 回答质量 | 完整候选总体 F1 ≥ `max(GRPE,CQAC)-0.02`；任一新修复激活子集上 F1 不低于 CQAC 且 wins≥losses；success rate ≥0.98 |
+| H95 作用域与消融 | 2×2 四格只改变 root/surface 开关；完整候选两组件各至少一次真实激活；无越界修复，非回退窗口不扩张，累计字符削减至少 30% |
+| H96 成本与可靠性 | 完整候选 calls/provider attempts/tokens 各 ≤`1.10×CQAC`；结构失败、repair、ground reject、evidence fallback、generation、length finish 各 ≤`CQAC+0.02/题`；deterministic rate ≥`CQAC-0.02` |
+| H97 检索保持 | Evidence Recall、MRR、R@1/5/10、P@1/5/10、nDCG@10 每项均 ≥`CQAC-0.02` |
+| H98 完整报告 | aggregate、逐题、检索、macro、分层、失败、计划、时延分位数、provider/RPM、激活、paired bootstrap 95% CI、精确配对检验、Holm 校正和配对效应量全部落盘 |
+
+统计检验不作为晋级硬门，避免在单个 50 题训练样本上用显著性替代效应与机制证据。只有 H93-H98 全部通过，才授权另行冻结 held-out-200；观察本样本后若再改架构，必须换新的无重叠训练样本。机器预注册见 v26 `offline-validation.json`；截至预注册完成尚未发起本轮在线调用。
+
 ---
 
 # 11. 关键消融
@@ -2044,6 +2068,12 @@ vs. 禁用共识并保留最终生成器
 
 锚点中心属性抽取窗
 vs. 在完整检索段落上抽取与 grounding
+
+查询根常量修复
+vs. 保持编译器输出的无约束关系根
+
+证据原词表面修复
+vs. 保持抽取器返回的规范化实体表面
 ```
 
 ---
