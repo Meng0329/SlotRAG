@@ -1011,6 +1011,7 @@ class SlotMaterializer:
         protected_anchor_values: set[str] | None = None,
         extraction_enable_thinking: bool | None = None,
         bound_role_signatures: bool = False,
+        semantic_role_type_filter: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1020,6 +1021,7 @@ class SlotMaterializer:
         self.protected_anchor_values = set(protected_anchor_values or ())
         self.extraction_enable_thinking = extraction_enable_thinking
         self.bound_role_signatures = bound_role_signatures
+        self.semantic_role_type_filter = semantic_role_type_filter
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1034,6 +1036,43 @@ class SlotMaterializer:
         needle = cls._normalized_text(value)
         haystack = cls._normalized_text(" ".join(part for part in (source_id, doc_id or "", source_span) if part))
         return bool(needle and f" {needle} " in f" {haystack} ")
+
+    @classmethod
+    def _semantic_role_gender(cls, field: str) -> str | None:
+        tokens = set(cls._normalized_text(field).split())
+        female_roles = {
+            "mother", "grandmother", "wife", "daughter", "sister", "aunt", "niece", "woman", "female",
+        }
+        male_roles = {
+            "father", "grandfather", "husband", "son", "brother", "uncle", "nephew", "man", "male",
+        }
+        if tokens & female_roles:
+            return "female"
+        if tokens & male_roles:
+            return "male"
+        return None
+
+    @classmethod
+    def _semantic_role_type_conflict(cls, field: str, value: str) -> str | None:
+        expected = cls._semantic_role_gender(field)
+        if expected is None:
+            return None
+        tokens = set(cls._normalized_text(value).split())
+        male_markers = {
+            "mr", "mister", "sir", "lord", "earl", "king", "prince", "duke", "baron", "emperor",
+            "father", "husband", "son", "brother", "uncle", "nephew",
+        }
+        female_markers = {
+            "mrs", "ms", "miss", "lady", "queen", "princess", "duchess", "countess", "baroness", "empress",
+            "mother", "wife", "daughter", "sister", "aunt", "niece",
+        }
+        observed_male = bool(tokens & male_markers)
+        observed_female = bool(tokens & female_markers)
+        if expected == "female" and observed_male and not observed_female:
+            return f"{field} requires a female role but {value!r} has an explicit male marker"
+        if expected == "male" and observed_female and not observed_male:
+            return f"{field} requires a male role but {value!r} has an explicit female marker"
+        return None
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
@@ -1055,6 +1094,10 @@ class SlotMaterializer:
             if self.role_projected_extraction
             else slot.variables
         )
+        semantic_role_fields = {
+            field for field in requested_fields
+            if self._semantic_role_gender(field) is not None
+        }
         boolean_fields = {
             field
             for field, value_type in slot.variable_types.items()
@@ -1075,6 +1118,9 @@ class SlotMaterializer:
                 self.extraction_enable_thinking is False and bool(passages)
             ),
             bound_role_signatures=int(self.bound_role_signatures and bool(passages)),
+            semantic_role_type_contracts=int(
+                self.semantic_role_type_filter and bool(passages) and bool(semantic_role_fields)
+            ),
         )
         rows: list[BindingRow] = []
         if not passages:
@@ -1165,6 +1211,8 @@ class SlotMaterializer:
                 if not extracted.rows and attempt == 0:
                     raise SchemaError(f"empty extraction for {slot.id}; review the retrieved passages once")
                 rejection_reasons: list[str] = []
+                semantic_rejections = 0
+                accepted_before = len(extracted_rows)
                 for row in extracted.rows:
                     source_id = row.get("source_id", "")
                     normalized = {
@@ -1215,9 +1263,30 @@ class SlotMaterializer:
                             "grounding_rejections": metrics.grounding_rejections + 1,
                         })
                         continue
+                    semantic_conflicts = [
+                        conflict
+                        for key, value in normalized.items()
+                        if (conflict := self._semantic_role_type_conflict(key, value)) is not None
+                    ] if self.semantic_role_type_filter else []
+                    if semantic_conflicts:
+                        rejection_reasons.extend(semantic_conflicts)
+                        semantic_rejections += 1
+                        metrics = metrics.model_copy(update={
+                            "semantic_role_type_rejections": metrics.semantic_role_type_rejections + 1,
+                        })
+                        continue
                     normalized.update({key: value for key, value in effective_bindings.items() if key in expected})
                     if source_id in by_source and set(normalized) == expected and all(normalized.values()):
                         extracted_rows.append((normalized, source_id))
+                if (
+                    extracted.rows
+                    and len(extracted_rows) == accepted_before
+                    and semantic_rejections == len(extracted.rows)
+                ):
+                    metrics = metrics.model_copy(update={
+                        "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + 1,
+                    })
+                    break
                 if extracted.rows and not extracted_rows:
                     detail = f"; {'; '.join(rejection_reasons)}" if rejection_reasons else ""
                     raise SchemaError(
@@ -1294,6 +1363,9 @@ class SlotMaterializer:
                 "extraction_thinking_disabled": metrics.extraction_thinking_disabled + current_metrics.extraction_thinking_disabled,
                 "bound_role_signatures": metrics.bound_role_signatures + current_metrics.bound_role_signatures,
                 "extraction_length_finishes": metrics.extraction_length_finishes + current_metrics.extraction_length_finishes,
+                "semantic_role_type_contracts": metrics.semantic_role_type_contracts + current_metrics.semantic_role_type_contracts,
+                "semantic_role_type_rejections": metrics.semantic_role_type_rejections + current_metrics.semantic_role_type_rejections,
+                "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + current_metrics.semantic_role_type_abstentions,
                 "provider_request_ids": metrics.provider_request_ids + current_metrics.provider_request_ids,
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + current_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + current_metrics.extraction_validation_errors,
@@ -1699,6 +1771,9 @@ class AdaptiveExecutor:
                 "extraction_thinking_disabled": metrics.extraction_thinking_disabled + slot_metrics.extraction_thinking_disabled,
                 "bound_role_signatures": metrics.bound_role_signatures + slot_metrics.bound_role_signatures,
                 "extraction_length_finishes": metrics.extraction_length_finishes + slot_metrics.extraction_length_finishes,
+                "semantic_role_type_contracts": metrics.semantic_role_type_contracts + slot_metrics.semantic_role_type_contracts,
+                "semantic_role_type_rejections": metrics.semantic_role_type_rejections + slot_metrics.semantic_role_type_rejections,
+                "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + slot_metrics.semantic_role_type_abstentions,
                 "plan_fallbacks": metrics.plan_fallbacks + slot_metrics.plan_fallbacks,
                 "materialization_requests": metrics.materialization_requests + len(binding_contexts),
                 "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows) if current is None else len(current)],

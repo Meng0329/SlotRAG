@@ -379,6 +379,33 @@ def test_schema21_reports_extraction_phase_controls_without_backfilling_schema20
     assert legacy_summary["extraction_length_finishes"] is None
 
 
+def test_schema22_reports_role_type_filter_without_backfilling_schema21():
+    current = _record("slotrag-grounded-role-type-filter", "q1", 1.0)
+    current["schema_version"] = 22
+    current["result"]["metrics"] = RunMetrics(
+        semantic_role_type_contracts=2,
+        semantic_role_type_rejections=1,
+        semantic_role_type_abstentions=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag-grounded-role-projection", "q1", 1.0)
+    legacy["schema_version"] = 21
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-grounded-role-type-filter"
+    )
+    legacy_summary = next(
+        row for row in rows if row["method"] == "slotrag-grounded-role-projection"
+    )
+
+    assert current_summary["semantic_role_type_contracts"] == 2
+    assert current_summary["semantic_role_type_rejections"] == 1
+    assert current_summary["semantic_role_type_abstentions"] == 1
+    assert legacy_summary["semantic_role_type_contracts"] is None
+    assert legacy_summary["semantic_role_type_rejections"] is None
+    assert legacy_summary["semantic_role_type_abstentions"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

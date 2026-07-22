@@ -414,6 +414,9 @@ def test_adaptive_executor_propagates_role_projection_metrics():
                 extraction_thinking_disabled=1,
                 bound_role_signatures=1,
                 extraction_length_finishes=1,
+                semantic_role_type_contracts=1,
+                semantic_role_type_rejections=1,
+                semantic_role_type_abstentions=1,
                 extraction_finish_reasons=["length"],
                 extraction_validation_errors=["SchemaError: truncated tool call"],
             )
@@ -432,6 +435,9 @@ def test_adaptive_executor_propagates_role_projection_metrics():
     assert result.metrics.extraction_thinking_disabled == 1
     assert result.metrics.bound_role_signatures == 1
     assert result.metrics.extraction_length_finishes == 1
+    assert result.metrics.semantic_role_type_contracts == 1
+    assert result.metrics.semantic_role_type_rejections == 1
+    assert result.metrics.semantic_role_type_abstentions == 1
     assert result.metrics.extraction_finish_reasons == ["length"]
     assert result.metrics.extraction_validation_errors == ["SchemaError: truncated tool call"]
 
@@ -1533,3 +1539,99 @@ def test_materializer_disables_thinking_and_counts_bound_role_signatures():
     assert metrics.extraction_length_finishes == 0
     assert metrics.extraction_finish_reasons == ["tool_calls"]
     assert metrics.extraction_validation_errors == []
+
+
+def test_role_type_filter_rejects_explicit_gender_contradiction_without_retry():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[
+            {
+                "grandmother": "Gilbert de Clare, 4th Earl of Hertford",
+                "source_id": "Amice de Clare#0",
+            },
+            {
+                "grandmother": "Isabel Marshal",
+                "source_id": "Amice de Clare#0",
+            },
+        ]]),
+        StaticRetriever(Passage(
+            id="Amice de Clare#0",
+            doc_id="Amice de Clare",
+            text=(
+                "Amice de Clare was the daughter of Gilbert de Clare, "
+                "4th Earl of Hertford, and Isabel Marshal."
+            ),
+        )),
+        role_projected_extraction=True,
+        semantic_role_type_filter=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="MotherOf", arguments=["?mother", "?grandmother"]),
+        {"mother": "Amice de Clare"},
+    )
+
+    assert [row.bindings for row in rows] == [{
+        "mother": "Amice de Clare",
+        "grandmother": "Isabel Marshal",
+    }]
+    assert metrics.semantic_role_type_contracts == 1
+    assert metrics.semantic_role_type_rejections == 1
+    assert metrics.semantic_role_type_abstentions == 0
+    assert metrics.structured_output_failures == 0
+    assert metrics.structured_output_repairs == 0
+    assert metrics.grounding_rejections == 0
+
+
+def test_role_type_filter_is_conservative_without_an_explicit_contradiction():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[
+            {"grandfather": "Muhammad al-Baqir", "source_id": "p"},
+        ]]),
+        StaticRetriever(Passage(
+            id="p",
+            doc_id="Muhammad al-Baqir",
+            text="Isma'il ibn Ja'far was the son of Ja'far al-Sadiq, son of Muhammad al-Baqir.",
+        )),
+        role_projected_extraction=True,
+        semantic_role_type_filter=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="FatherOf", arguments=["?father", "?grandfather"]),
+        {"father": "Ja'far al-Sadiq"},
+    )
+
+    assert [row.bindings["grandfather"] for row in rows] == ["Muhammad al-Baqir"]
+    assert metrics.semantic_role_type_contracts == 1
+    assert metrics.semantic_role_type_rejections == 0
+    assert metrics.semantic_role_type_abstentions == 0
+
+
+def test_role_type_filter_abstains_without_repair_when_every_row_contradicts():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[
+            {
+                "grandmother": "Gilbert de Clare, 4th Earl of Hertford",
+                "source_id": "p",
+            },
+        ]]),
+        StaticRetriever(Passage(
+            id="p",
+            doc_id="Amice de Clare",
+            text="Amice de Clare was the daughter of Gilbert de Clare, 4th Earl of Hertford.",
+        )),
+        role_projected_extraction=True,
+        semantic_role_type_filter=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="MotherOf", arguments=["?mother", "?grandmother"]),
+        {"mother": "Amice de Clare"},
+    )
+
+    assert rows == []
+    assert metrics.semantic_role_type_contracts == 1
+    assert metrics.semantic_role_type_rejections == 1
+    assert metrics.semantic_role_type_abstentions == 1
+    assert metrics.structured_output_failures == 0
+    assert metrics.structured_output_repairs == 0

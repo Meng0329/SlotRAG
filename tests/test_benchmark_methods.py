@@ -651,6 +651,96 @@ def test_lean_grounded_role_projection_routes_phase_controls_only_when_triggered
     assert result.metrics.direct_grounded_anchor_projections == 1
 
 
+def test_grounded_role_type_filter_routes_only_inside_direct_anchor_scope(monkeypatch):
+    triggered_plan = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "MotherOf",
+                "arguments": ["Baldwin De Redvers, 7Th Earl Of Devon", "?mother"],
+            },
+            {"id": "S2", "predicate": "MotherOf", "arguments": ["?mother", "?grandmother"]},
+        ],
+        "joins": [["S1.mother", "S2.mother"]],
+        "outputs": ["?grandmother"],
+    })
+    inert_plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, effective, *, strategy):
+            output = effective.outputs[0].lstrip("?")
+            return ExecutionResult(rows=[{output: "Isabel Marshal"}], order=[slot.id for slot in effective.slots])
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+    spec = methods.METHODS["slotrag-grounded-role-type-filter"]
+
+    triggered = methods._run_slotrag(
+        spec,
+        "2wikimultihop",
+        QuestionRecord(
+            id="triggered",
+            question="Who is Baldwin De Redvers, 7Th Earl Of Devon's maternal grandmother?",
+        ),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=triggered_plan,
+    )
+    inert = methods._run_slotrag(
+        spec,
+        "2wikimultihop",
+        QuestionRecord(id="inert", question="Is this answer supported?"),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=inert_plan,
+    )
+
+    assert materializer_options == [
+        {
+            "max_passages": 5,
+            "typed_extraction_contracts": False,
+            "role_projected_extraction": True,
+            "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
+            "semantic_role_type_filter": True,
+        },
+        {
+            "max_passages": 5,
+            "typed_extraction_contracts": False,
+        },
+    ]
+    assert triggered.metrics.direct_grounded_anchor_projections == 1
+    assert inert.metrics.direct_grounded_anchor_projections == 0
+
+
 def test_grounded_role_projection_prefers_substitution_activation(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [

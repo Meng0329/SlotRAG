@@ -1757,6 +1757,63 @@ GRPE 的总体 F1 比 GECS 高 0.02，但这个均值不能支持方法收益：
 
 结论不是放弃直接锚检测器：H58/H59 证明它是稳定、保守且不改计划的有效框架组件；被否定的是“只靠 prompt/schema role projection 就能让执行更准更省”的当前策略。GRPE 不提升为默认方法，也不进入独立 200 题验证。下一轮保留已验证的作用域检测器，先增加抽取失败原因的可审计遥测，并针对 relation-role validation/确定性 join 做更窄的执行修复；新门槛必须在再次联网前预注册，不能据 v19 结果放宽 H60/H61。完整机器记录为 v19 `online-validation.json`，全部指标、分层、bootstrap、逐题和不可变失败分别见 `summary.json`、`metrics.csv`、`stratified_metrics.csv`、`paired_bootstrap.csv`、`per_question.csv` 与 `failure_report.csv`。
 
+#### schema v21：阶段自适应轻量抽取与 v20 诊断预注册
+
+v19 的 GRPE 抽取平均每次产生约 1096 completion tokens，部分调用触及 2048 上限；目标题和两个最大成本题的额外开销主要来自结构化抽取而非计划或检索。Agnes 2.0 Flash 的本地 API 文档提供 `chat_template_kwargs.enable_thinking`。因此 schema21 不改变已验证的 direct-anchor 范围，而引入一个更轻的阶段策略：规划仍保留原模型行为，只有已触发 role projection 的结构化抽取调用可显式设置 `enable_thinking=false`。惰性题、GECS 和旧 GRPE 不发送该参数，避免把全局模型配置变化伪装成方法收益。
+
+第二个独立组件是 **bound role signature**。旧工具描述只显示 `MotherOf(?mother, ?grandmother)`；新描述在执行时把已知绑定代入为 `MotherOf("Amice de Clare", ?grandmother)`，并明确已知实参的位置和值，但仍只要求 unresolved 字段。它不改 plan、query、retrieval、join 或保护锚，仅减少参数方向歧义。
+
+为避免再次只看到笼统的 `structured_output_failures`，schema21 新增 `extraction_thinking_disabled`、`bound_role_signatures`、`extraction_length_finishes`、`extraction_finish_reasons` 和 `extraction_validation_errors`。finish reason 与经截断的验证错误逐次保存在 final record，三个计数可进入聚合；schema20 及更早记录不回填。方法消融固定为：原 GRPE、只关闭 extraction thinking、只代入 bound signature、两者组合的 Lean GRPE（LGRPE）。全仓验证为 `160 passed, 1 skipped`，`compileall`、pilot YAML 与 `git diff --check` 通过；冻结源码/配置/测试指纹为 `ba895b...f429`。
+
+v20 使用 `runs/vldb2027-diagnostic-v20` 与 `lean_grounded_role_diagnostic`，不是随机或独立验证集。它固定 6 个已观察诊断题：`574...` 确定性 join 失败目标、`53f...` 最大 token 增量且质量下降、`05b...` 高成本双失败、`254...` 与 `c52...` 两个 nationality 形式漂移对照，以及 `49b...` 单槽惰性负例。样本 SHA-256 为 `1c6c1b...ae38`；5 个 direct 触发、1 个惰性题，每个 role 方法预期 direct 总数 5。6 个 v19 共享计划已离线导入，6 snapshots/6 plan attempts 均为 ok，五个执行方法逐题 effective hash 与 source hash 完全一致。
+
+```text
+H62（同源完整性）：6 imported snapshots、30 schema21 final replay；全部 source/effective/result/provenance 检查通过，五路逐题 effective hash 相同。
+
+H63（组件与遥测隔离）：5 个触发题上四个 role 方法 direct=1，惰性题所有 role/phase telemetry=0。只关 thinking 的方法只计 thinking-disabled，只绑定签名的方法只计 bound-signature，组合方法两者都计，原 GRPE 两者都为 0。
+
+H64（目标题确定性门）：组合方法在 574... 上答 Isabel Marshal、F1=1，direct/role/projected 为正，join/deterministic 为正，无 fallback/generation、无 extraction validation error，calls/tokens 不高于同时运行的 GECS 和 GRPE。
+
+H65（六题联合门）：组合方法 6/6 final ok，F1 不低于 GECS 与 GRPE；平均 calls、tokens、structured failures、repairs、length finishes 均不高于二者。
+```
+
+在线运行五种执行方法共 30 条；`slotrag` 仅作为 frozen plan source，不执行。worker A 为 GECS+GRPE+只关 thinking 共 18 条，worker B 为只绑定签名+组合方法共 12 条；最大并发 2、许可 30 RPM、运行上限 20 RPM。为避免再次向不稳定的 embedding 上游重复提交同文本，五路等同导入 v19 同模型缓存，SHA-256 为 `314b8d...90cc`；共享索引成本仍从在线执行指标排除。有失败时仍保留 attempt、doctor 后并发 1 续跑。只有 H62-H65 全过才允许开启新的 50 题调优门；该 6 题诊断不能用于显著性或 held-out 结论。机器预注册为 v20 `offline-validation.json` 与 `lean-role-diagnostic-scope-audit.json`。
+
+#### v20 在线结果：阶段控制隔离成立，但 LGRPE 拒绝晋级
+
+v20 得到 30/30 条 schema21 final `ok`，五种执行方法各 6 条；30 个不可变 attempts 全为首次成功，没有失败、重试或补跑。在线前 `2026-07-22T20:39:41+08:00` 的 Agnes、embedding、reranker doctor 均为 HTTP 200。执行保持两 worker 并发，首末落盘间隔 364 秒；Agnes/embedding/reranker 共 73/56/56 次 provider attempts，对应阶段平均 12.03/9.23/9.23 RPM，低于实际运行上限 20 RPM，也没有把 30 RPM 服务许可当作目标吞吐。该计算仍是阶段平均而非一分钟瞬时峰值。
+
+同源审计无污染：6 imported snapshots、6 plan attempts、30 replay 全部有效，缺 provenance、缺 result/effective hash、source hash 不一致、未知 snapshot、跨方法 plan 不一致与 effective variant 均为 0。组件遥测也逐项精确：四个 role 方法在 5 个触发题上均为 direct/role/known=`5/10/5`；只关 thinking 为 thinking/bound=`10/0`，只绑签名为 `0/10`，组合为 `10/10`，原 GRPE 为 `0/0`。惰性题所有 phase telemetry 为 0，五种方法的 `extraction_length_finishes` 全为 0。因此 H62、H63 通过。
+
+六题质量、检索与效率均值如下。该表只用于已观察诊断集上的组件选择；完整 130+ 指标仍以 v20 `metrics.csv`、`retrieval_metrics.csv`、`stratified_metrics.csv` 和 `summary.json` 为准。
+
+| 方法 | EM / F1 | Evidence Recall / MRR | R@1 / R@5 / R@10 | P@1 / P@5 / P@10 | nDCG@10 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GECS | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9720 |
+| GRPE | 0.8333 / 0.8333 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9720 |
+| 只关 extraction thinking | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9586 |
+| 只绑 role signature | 0.5000 / 0.5000 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9586 |
+| LGRPE（组合） | 0.6667 / 0.6667 | 0.9583 / 1.0000 | 0.4583 / 0.9583 / 0.9583 | 1.0000 / 0.4333 / 0.2167 | 0.9586 |
+
+| 方法 | LLM / extraction / generation calls | Tokens | Provider calls | Wall mean / p50 / p95 (s) | Fail / repair / grounding | Deterministic / fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GECS | 2.500 / 2.000 / 0.167 | 3865.00 | 6.500 | 23.72 / 22.97 / 36.91 | 0.000 / 0.000 / 0.000 | 0.833 / 0.000 |
+| GRPE | 2.167 / 2.000 / 0.000 | 3584.83 | 5.833 | 18.10 / 17.61 / 26.00 | 0.167 / 0.167 / 0.000 | 1.000 / 0.000 |
+| 只关 extraction thinking | 2.500 / 2.333 / 0.167 | 4350.00 | 6.167 | 23.14 / 22.97 / 34.31 | 0.667 / 0.500 / 0.500 | 0.833 / 0.167 |
+| 只绑 role signature | 2.333 / 2.000 / 0.333 | 3775.67 | 6.000 | 23.74 / 22.06 / 38.72 | 0.333 / 0.167 / 0.333 | 0.667 / 0.167 |
+| LGRPE（组合） | 2.667 / 2.000 / 0.333 | 3751.67 | 6.333 | 31.32 / 33.58 / 46.71 | 0.333 / 0.167 / 0.333 | 0.667 / 0.167 |
+
+目标题 `574...` 给出最直接的否定证据。LGRPE 回答 `Isabel Marshal`、F1=1，direct/role/known/thinking/bound=`1/2/1/2/2`，两次抽取 finish reason 均为 `tool_calls`，没有 validation error、结构失败、repair、grounding rejection、length finish 或 evidence fallback。但是它抽出两个 join rows，`deterministic_answers=0`，随后使用 1 次 generation；共 4 次 LLM 调用、5679 tokens，高于同期 GECS 的 3/4664 和 GRPE 的 2/4847。只绑定签名的方法更直接地输出错误答案 `Gilbert de Clare, 5th Earl of Hertford`：`MotherOf("Amice de Clare", ?grandmother)` 消除了格式/grounding 错误，却仍从“Amice 是 Gilbert 与 Isabel 的女儿”中同时接纳父亲和母亲，说明失败根因是 predicate-role 语义约束缺失，而不是参数是否显示为已绑定。
+
+| 预注册假设 | 判定 | 依据 |
+| --- | --- | --- |
+| H62 同源完整性 | **通过** | 6 snapshots、30 replay，全部 plan/provenance/hash 检查为 0 error。 |
+| H63 组件与遥测隔离 | **通过** | 四路 role telemetry 与 thinking/bound 消融逐项精确，惰性题无泄漏，length finish 全为 0。 |
+| H64 目标题确定性 | **失败** | 答案与抽取协议条件通过，但 join rows=2、deterministic=0、generation=1，calls/tokens 高于 GECS 与 GRPE。 |
+| H65 六题联合质量/效率 | **失败** | LGRPE F1 低于 GRPE；calls、tokens、failures 均高于 GRPE，且 calls/failures/repairs 高于 GECS。 |
+
+因此拒绝 LGRPE，不开启新的 50 题门，也不进入 200 题 held-out。`enable_thinking=false` 在本组没有减少 tokens，反而增加结构失败与 repair；bound signature 有助于暴露已知参数，却不能独立承担关系语义验证。下一候选必须在已验证的 direct-anchor 作用域内加入通用的 predicate-role 语义约束，并先用离线反例覆盖父/母、国籍/国家等角色边界，再冻结新门槛；不得据本轮结果放宽 H64/H65。机器判定见 v20 `online-validation.json`，完整聚合、逐题、检索、分层、attempt 分母与计划审计见同运行 `summaries/lean_grounded_role_diagnostic/`。
+
 ---
 
 # 11. 关键消融

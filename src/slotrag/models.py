@@ -305,6 +305,9 @@ class RunMetrics(StrictModel):
     extraction_thinking_disabled: int = 0
     bound_role_signatures: int = 0
     extraction_length_finishes: int = 0
+    semantic_role_type_contracts: int = 0
+    semantic_role_type_rejections: int = 0
+    semantic_role_type_abstentions: int = 0
     deterministic_answers: int = 0
     join_input_rows: int = 0
     join_output_rows: int = 0

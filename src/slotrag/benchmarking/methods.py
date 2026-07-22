@@ -45,6 +45,7 @@ class MethodSpec:
     direct_grounded_anchor_projection: bool = False
     extraction_enable_thinking: bool | None = None
     bound_role_signatures: bool = False
+    semantic_role_type_filter: bool = False
     description: str = ""
 
 
@@ -68,6 +69,7 @@ ABLATION_METHODS = [
     "slotrag-anchor-substitution",
     "slotrag-role-projected-substitution",
     "slotrag-grounded-role-projection",
+    "slotrag-grounded-role-type-filter",
     "slotrag-grounded-role-no-thinking",
     "slotrag-grounded-role-bound-signature",
     "slotrag-lean-grounded-role-projection",
@@ -146,6 +148,14 @@ METHODS: dict[str, MethodSpec] = {
         grounded_entity_anchor_substitution=True,
         role_projected_extraction=True,
         direct_grounded_anchor_projection=True,
+    ),
+    "slotrag-grounded-role-type-filter": MethodSpec(
+        "slotrag-grounded-role-type-filter",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        semantic_role_type_filter=True,
     ),
     "slotrag-grounded-role-no-thinking": MethodSpec(
         "slotrag-grounded-role-no-thinking",
@@ -750,6 +760,8 @@ def _run_slotrag(
             materializer_options["extraction_enable_thinking"] = spec.extraction_enable_thinking
         if spec.bound_role_signatures:
             materializer_options["bound_role_signatures"] = True
+        if spec.semantic_role_type_filter:
+            materializer_options["semantic_role_type_filter"] = True
     materializer = SlotMaterializer(client, retriever, **materializer_options)
     executor = AdaptiveExecutor(
         materializer,

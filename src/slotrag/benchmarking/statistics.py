@@ -95,6 +95,9 @@ METRICS = [
     "extraction_thinking_disabled",
     "bound_role_signatures",
     "extraction_length_finishes",
+    "semantic_role_type_contracts",
+    "semantic_role_type_rejections",
+    "semantic_role_type_abstentions",
     "deterministic_answers",
     "join_input_rows",
     "join_output_rows",
@@ -434,6 +437,14 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             "extraction_length_finishes",
         )
     }
+    schema22_metrics = {
+        name: metrics[name] if schema_version >= 22 else None
+        for name in (
+            "semantic_role_type_contracts",
+            "semantic_role_type_rejections",
+            "semantic_role_type_abstentions",
+        )
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -503,6 +514,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema18_metrics,
         **schema20_metrics,
         **schema21_metrics,
+        **schema22_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,
@@ -801,6 +813,9 @@ def _retrieval_report(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "role_projected_extraction_contracts",
         "known_binding_fields_projected",
         "protected_anchor_rejections",
+        "semantic_role_type_contracts",
+        "semantic_role_type_rejections",
+        "semantic_role_type_abstentions",
         "operators_executed",
         "structured_output_failures",
         "plan_fallbacks",
