@@ -416,6 +416,60 @@ def direct_grounded_relation_anchor_values(
     return tuple(values)
 
 
+def query_grounded_anchor_values(
+    plan: SlotPlan,
+    question: str,
+) -> tuple[str, ...]:
+    """Recover only question-grounded entity titles already present in a plan or query."""
+    generic_values = {
+        "answer", "book", "city", "country", "entity", "film", "item", "movie", "person", "place", "series", "song",
+    }
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(candidate: object) -> None:
+        value = str(candidate).strip()
+        normalized = SlotMaterializer._normalized_text(value)
+        if len(normalized) < 4 or normalized in generic_values:
+            return
+        match = re.search(rf"(?<!\w){re.escape(value)}(?!\w)", question, flags=re.IGNORECASE)
+        if match is None:
+            return
+        grounded = question[match.start():match.end()]
+        if not any(character.isupper() or character.isdigit() for character in grounded):
+            return
+        key = normalized
+        if key not in seen:
+            seen.add(key)
+            values.append(value)
+
+    for slot in plan.slots:
+        for argument in slot.arguments:
+            if not argument.startswith("?"):
+                add_candidate(argument)
+        for constraint in slot.constraints.values():
+            if isinstance(constraint, str):
+                add_candidate(constraint)
+    if values:
+        return tuple(values)
+
+    relation_root = any(
+        len(re.sub(r"[^a-z0-9]", "", slot.predicate.casefold())) >= 4
+        and re.sub(r"[^a-z0-9]", "", slot.predicate.casefold()).endswith("of")
+        for slot in plan.slots
+    )
+    if not relation_root:
+        return ()
+    title_match = re.search(
+        r"\b(?:of|for)\s+(?:the\s+)?(?:film|movie|song)\s+(.+?)(?=\s+(?:is\s+from|from)\b|\?|$)",
+        question,
+        flags=re.IGNORECASE,
+    )
+    if title_match is not None:
+        add_candidate(title_match.group(1).strip())
+    return tuple(values)
+
+
 class SlotCompiler:
     def __init__(self, client: AgnesClient) -> None:
         self.client = client

@@ -455,6 +455,23 @@ def test_schema24_reports_predicate_normalizations_without_backfilling_schema23(
     assert legacy_summary["anchor_window_predicate_normalizations"] is None
 
 
+def test_schema25_reports_query_anchor_context_without_backfilling_schema24():
+    current = _record("slotrag-context-normalized-anchor-window-projection", "q1", 1.0)
+    current["schema_version"] = 25
+    current["result"]["metrics"] = RunMetrics(query_grounded_anchor_contexts=1).model_dump(mode="json")
+    legacy = _record("slotrag-normalized-anchor-window-projection", "q1", 1.0)
+    legacy["schema_version"] = 24
+
+    rows = aggregate([current, legacy])
+    current_summary = next(
+        row for row in rows if row["method"] == "slotrag-context-normalized-anchor-window-projection"
+    )
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag-normalized-anchor-window-projection")
+
+    assert current_summary["query_grounded_anchor_contexts"] == 1
+    assert legacy_summary["query_grounded_anchor_contexts"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

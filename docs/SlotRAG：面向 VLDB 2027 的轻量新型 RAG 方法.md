@@ -1967,6 +1967,22 @@ source phase 先完成 50 个默认 SlotRAG 计划与执行：plan/plan-attempt/
 
 因此下一架构组件限定为 **Predicate-Family Normalization for ACEW**：把语义明确的 country/nationality 计划别名映射到同一局部窗口作用域，同时保留 schema23 exact-registry ACEW 作消融。不得使用任意 `country` 子串扩张，不得声称解决上游检索或 gold alias。先在这 7 个已观察训练别名题做新编号诊断；若通过，再换另一组不重叠样本检验泛化。机器判定见 v23 `predicate-scope-audit.json` 与 `early-stop-validation.json`。
 
+#### v24：谓词族归一化 ACEW 诊断结果
+
+schema24 在保持 schema23 exact-registry ACEW 不变的前提下，新增闭合集合别名 `HasNationality`、`CountryOfBirth`、`FromCountry`，并记录 `anchor_window_predicate_normalizations`。实现不引入额外检索、gold/QID、外部知识或额外 LLM；别名窗口仍要求问题锚定的受保护实体值，避免把任意 `country` 子串当作语义关系。新增方法名为 `slotrag-normalized-anchor-window-projection`，旧 ACEW 与 GRPE 作为控制。
+
+本轮使用 v23 已观察的 7 条 2Wiki train 别名题，sample SHA-256=`7722c7...b000`，不把它们当作 held-out 或泛化集。v24 在在线调用前固定了 schema24、21 条记录、7 个 imported frozen plans、两个 worker、服务许可 30 RPM、运行硬限 20 RPM、相邻 permit 3 秒；实际运行只启动两个控制 worker，再启动一个候选 worker。最终 21/21 final `ok`、21/21 immutable attempts、attempt1、benchmark retry=0，7/7 计划 imported/ok，missing/hash mismatch/effective variant/inconsistent pair 均为 0；三项 doctor 均 HTTP 200。完整分母与运行审计见 `runs/vldb2027-diagnostic-v24/summaries/predicate_normalized_anchor_diagnostic/`、`manifest.json`、`progress.json`、`service-doctor.json`。
+
+| 方法 | EM | F1 | Evidence Recall | MRR | R@1/5/10 | P@1/5/10 | nDCG@10 | LLM/provider calls | total tokens | wall mean/p50/p95 (s) | structured fail/repair/ground | deterministic |
+|---|---:|---:|---:|---:|---|---|---:|---:|---:|---|---|---:|
+| GRPE | 0.2857 | 0.3061 | 0.7857 | 0.7500 | 0.3571/0.7143/0.7857 | 0.7143/0.2857/0.1571 | 0.7279 | 3.4286/8.0000 | 4108.14 | 41.50/47.19/65.64 | 1.0000/0.7143/0.7143 | 0.5714 |
+| ACEW（schema23 exact） | 0.2857 | 0.2857 | 0.7857 | 0.7500 | 0.3571/0.7143/0.7857 | 0.7143/0.2857/0.1571 | 0.7279 | 4.1429/8.7143 | 4105.43 | 41.04/45.39/54.18 | 1.0000/0.7143/0.7143 | 0.5714 |
+| NACEW（schema24） | 0.4286 | 0.4286 | 0.7857 | 0.7500 | 0.3571/0.7143/0.7857 | 0.7143/0.2857/0.1571 | 0.7279 | 3.4286/8.0000 | 3625.43 | 37.43/35.45/54.53 | 0.7143/0.5714/0.4286 | 0.7143 |
+
+NACEW 相对 GRPE 的平均 token 减少约 11.75%，wall mean 减少约 9.79%；窗口累计输入/输出字符为 `3243/948`，池化字符削减率 `0.7174`，无窗口 fallback。检索指标全部与控制相同，说明本轮收益来自抽取上下文而非检索分布变化。逐题结果显示 NACEW 3/7 正确（`2b7192`、`a04e2f`、`bc4447`），ACEW 2/7、GRPE 2/7；`a04e2f` 的 `United States→American` 被修正，但 `42fc8c` 与 `a78307` 两个 demonym 错误未修正，`5f99e2` 的上游导演计划缺约束，`6b2fb1` 的 gold 表面为 `America`。
+
+预注册门判定：H80 完整性 **通过**；H81 作用域 **失败**（候选仅 3/7 alias contracts 与 3/7 normalizations，控制为 0）；H82 目标质量 **失败**（候选总体 F1 达标，但 3 个预注册 demonym 错误只修正 1 个）；H83 成本/可靠性 **通过**；H84 报告完整性 **通过**。因此不授权新的 disjoint-50 泛化门，也不在同一 7 题上改阈值重跑。失败原因是当前窗口契约依赖 `protected_anchor_values`：含计划常量的题可触发，只有约束或编译缺少实体常量的题不会伪造窗口。下一步改为独立的 **constraint-aware query anchor context** 诊断：仅从计划约束/问题中确定性恢复已出现的锚点，仍保持闭合谓词集合、无外部知识，并换新运行编号验证。
+
 ---
 
 # 11. 关键消融

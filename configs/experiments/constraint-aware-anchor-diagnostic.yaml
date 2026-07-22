@@ -1,0 +1,22 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - 2wikimultihop
+seed: 2028
+random_seeds: [2028]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  constraint_aware_anchor_diagnostic:
+    split: train
+    sample_size: 7
+    methods:
+      - slotrag
+      - slotrag-grounded-role-projection
+      - slotrag-anchor-window-projection
+      - slotrag-context-normalized-anchor-window-projection
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/vldb2027-training-v23/plans/anchor_window_training_gate

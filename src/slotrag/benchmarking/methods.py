@@ -23,6 +23,7 @@ from ..planner import (
     fold_grounded_entity_anchor,
     substitute_grounded_entity_anchor,
     substitute_grounded_entity_anchor_with_values,
+    query_grounded_anchor_values,
 )
 from ..providers import AgnesClient, ChatResult
 from ..retrieval import HybridRetriever, tokenize
@@ -48,6 +49,7 @@ class MethodSpec:
     semantic_role_type_filter: bool = False
     anchor_centered_extraction: bool = False
     normalize_anchor_window_predicates: bool = False
+    query_grounded_anchor_context: bool = False
     description: str = ""
 
 
@@ -74,6 +76,7 @@ ABLATION_METHODS = [
     "slotrag-grounded-role-type-filter",
     "slotrag-anchor-window-projection",
     "slotrag-normalized-anchor-window-projection",
+    "slotrag-context-normalized-anchor-window-projection",
     "slotrag-grounded-role-no-thinking",
     "slotrag-grounded-role-bound-signature",
     "slotrag-lean-grounded-role-projection",
@@ -177,6 +180,16 @@ METHODS: dict[str, MethodSpec] = {
         direct_grounded_anchor_projection=True,
         anchor_centered_extraction=True,
         normalize_anchor_window_predicates=True,
+    ),
+    "slotrag-context-normalized-anchor-window-projection": MethodSpec(
+        "slotrag-context-normalized-anchor-window-projection",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        anchor_centered_extraction=True,
+        normalize_anchor_window_predicates=True,
+        query_grounded_anchor_context=True,
     ),
     "slotrag-grounded-role-no-thinking": MethodSpec(
         "slotrag-grounded-role-no-thinking",
@@ -760,6 +773,12 @@ def _run_slotrag(
         protected_anchor_values.update(direct_anchor_values)
         compiler_metrics = compiler_metrics.model_copy(update={
             "direct_grounded_anchor_projections": len(direct_anchor_values),
+        })
+    if spec.query_grounded_anchor_context:
+        query_anchor_values = query_grounded_anchor_values(plan, question.question)
+        protected_anchor_values.update(query_anchor_values)
+        compiler_metrics = compiler_metrics.model_copy(update={
+            "query_grounded_anchor_contexts": len(query_anchor_values),
         })
     if len(plan.slots) > max_steps:
         return ExecutionResult(

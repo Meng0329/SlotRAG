@@ -47,6 +47,7 @@ stages:
       - slotrag-grounded-role-projection
       - slotrag-anchor-window-projection
       - slotrag-normalized-anchor-window-projection
+      - slotrag-context-normalized-anchor-window-projection
       - slotrag-grounded-role-no-thinking
       - slotrag-grounded-role-bound-signature
       - slotrag-lean-grounded-role-projection
@@ -81,6 +82,7 @@ stages:
       - slotrag-grounded-role-projection
       - slotrag-anchor-window-projection
       - slotrag-normalized-anchor-window-projection
+      - slotrag-context-normalized-anchor-window-projection
       - slotrag-grounded-role-no-thinking
       - slotrag-grounded-role-bound-signature
       - slotrag-lean-grounded-role-projection
@@ -163,6 +165,7 @@ stages:
       - slotrag-grounded-role-projection
       - slotrag-anchor-window-projection
       - slotrag-normalized-anchor-window-projection
+      - slotrag-context-normalized-anchor-window-projection
     frozen_plan_source: slotrag
     frozen_plan_import_dir: runs/vldb2027-diagnostic-v19/plans/grounded_role_projection_gate
   tune:
@@ -194,6 +197,7 @@ stages:
       - slotrag-grounded-role-projection
       - slotrag-anchor-window-projection
       - slotrag-normalized-anchor-window-projection
+      - slotrag-context-normalized-anchor-window-projection
       - slotrag-grounded-role-type-filter
       - slotrag-grounded-role-no-thinking
       - slotrag-grounded-role-bound-signature

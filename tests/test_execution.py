@@ -10,6 +10,7 @@ from slotrag.planner import (
     apply_operators,
     direct_grounded_relation_anchor_values,
     extraction_tool,
+    query_grounded_anchor_values,
     substitute_grounded_entity_anchor_with_values,
 )
 from slotrag.providers import ChatResult, ToolCall, Usage
@@ -1643,6 +1644,39 @@ def test_normalized_anchor_window_rejects_unrelated_country_substrings(predicate
     slot = Slot(id="S2", predicate=predicate, arguments=["?entity", "?value"])
 
     assert SlotMaterializer._uses_anchor_window(slot, normalize_predicates=True) is False
+
+
+def test_query_grounded_anchor_values_uses_constraints_and_title_phrases():
+    constrained = SlotPlan.model_validate({
+        "slots": [
+            {
+                "id": "S1",
+                "predicate": "PerformerOf",
+                "arguments": ["?performer", "?song"],
+                "constraints": {"song": "Lift Him Up That's All"},
+            },
+            {"id": "S2", "predicate": "FromCountry", "arguments": ["?performer", "?country"]},
+        ],
+        "joins": [["S1.performer", "S2.performer"]],
+        "outputs": ["?country"],
+    })
+    under_specified = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "DirectorOf", "arguments": ["?director"]},
+            {"id": "S2", "predicate": "HasNationality", "arguments": ["?director", "?nationality"]},
+        ],
+        "joins": [["S1.director", "S2.director"]],
+        "outputs": ["?nationality"],
+    })
+
+    assert query_grounded_anchor_values(
+        constrained,
+        "Which country the performer of song Lift Him Up That'S All is from?",
+    ) == ("Lift Him Up That's All",)
+    assert query_grounded_anchor_values(
+        under_specified,
+        "What nationality is the director of film Claire (1924 Film)?",
+    ) == ("Claire (1924 Film)",)
 
 
 def test_role_type_filter_rejects_explicit_gender_contradiction_without_retry():
