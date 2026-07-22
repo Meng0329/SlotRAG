@@ -2021,7 +2021,31 @@ schema26 将 v25 剩余错误拆成两个互不混淆的局部修复。**Query-r
 | H97 检索保持 | Evidence Recall、MRR、R@1/5/10、P@1/5/10、nDCG@10 每项均 ≥`CQAC-0.02` |
 | H98 完整报告 | aggregate、逐题、检索、macro、分层、失败、计划、时延分位数、provider/RPM、激活、paired bootstrap 95% CI、精确配对检验、Holm 校正和配对效应量全部落盘 |
 
-统计检验不作为晋级硬门，避免在单个 50 题训练样本上用显著性替代效应与机制证据。只有 H93-H98 全部通过，才授权另行冻结 held-out-200；观察本样本后若再改架构，必须换新的无重叠训练样本。机器预注册见 v26 `offline-validation.json`；截至预注册完成尚未发起本轮在线调用。
+统计检验不作为晋级硬门，避免在单个 50 题训练样本上用显著性替代效应与机制证据。只有 H93-H98 全部通过，才授权另行冻结 held-out-200；观察本样本后若再改架构，必须换新的无重叠训练样本。机器预注册见 v26 `offline-validation.json`；source 结束后的不可变判定见 `source-plan-audit.json` 与 `early-stop-validation.json`。
+
+#### v26 source 提前停止：随机训练门缺少 surface 覆盖
+
+三项服务探针均为 HTTP 200 后，source 先顺序运行 50 题；过程中 1 个 embedding HTTP 503 attempt（含 2 次 provider retry）被保留并在恢复探针后以 `attempt-0002` 成功续跑。最终为 50/50 schema26 final `ok`、50/50 计划快照有效、51 个 execution attempts（benchmark retry=1），无缺失计划、provenance、plan hash mismatch、effective variant 或题内不一致。attempt 级失败分母仍报告为 1/51=`0.0196`，不能只报告续跑后的 50/50。
+
+| source SlotRAG 指标（n=50） | 数值 |
+|---|---:|
+| EM / F1 | 0.8600 / 0.8884 |
+| Evidence Recall / MRR / nDCG@10 | 0.8200 / 0.9433 / 0.8317 |
+| R@1 / R@5 / R@10 | 0.3950 / 0.8100 / 0.8200 |
+| P@1 / P@5 / P@10 | 0.9000 / 0.3680 / 0.1860 |
+| LLM calls / provider calls（共享编译排除） | 1.92 / 5.24 |
+| shared-compile-inclusive LLM / provider calls | 2.88 / 6.20 |
+| execution tokens / shared-compile-inclusive tokens | 2810.04 / 4546.58 |
+| wall mean / p50 / p95 / p99（s） | 18.06 / 16.48 / 37.19 / 43.99 |
+| structured failure / repair / grounding rejection | 0.1200 / 0.1200 / 0.0200 |
+| deterministic answer rate | 0.8600 |
+| index build mean / index provider calls | 1.342 s / 0.98 |
+
+所有 source 计划中只有 **1 个唯一问题**出现闭合 country/nationality 谓词族（`HasNationality`），而预注册 H92 要求至少 4 个；query-root repair 的前瞻机会有 5 个，source final success rate 为 1.0。故 H91 **通过**、H92 **失败**：root 组件有覆盖，但 surface 组件没有达到预注册的必要覆盖，不能用 1 题结果声称 2×2 消融有效。按照调用前冻结的 futility rule，不启动 250 条 replay，也不把 H93-H98 记为失败或通过；held-out-200 继续未授权。
+
+source 阶段 benchmark provider attempts（计划编译、索引和执行合计）为 Agnes/embedding/reranker=`147/138/85`，provider retries=`0/2/0`，总计 370 attempts；按落盘记录窗口计算平均 RPM=`3.56/3.34/2.06`，共享 limiter 仍固定执行 `20 RPM` 硬上限、每次 retry 重新取得 3 秒 permit、最大并发 2。完整 source 指标、分层结果、逐题结果、检索指标、失败分母、计划审计和时延分位数均已生成于 `runs/vldb2027-training-v26/summaries/repaired_anchor_training_gate/`。
+
+这次早停说明的是**随机样本的机制覆盖不足**，不是 surface repair 已被证伪。下一步不在这 50 题上补跑；改为新建完全不重叠的、按公开 2Wiki relation strata 预注册的机制门：单独保证足够的 country-of-citizenship 目标题与标题关系根控制题，再重新执行同一 2×2 消融。该机制门的结论只能作为组件诊断，不能替代随机 held-out 泛化评估。
 
 ---
 
