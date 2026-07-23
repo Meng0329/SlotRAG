@@ -2134,6 +2134,46 @@ H108、H109、H110 全部**通过**。在 40 个 target 中 37 个计划出现 s
 
 source 的计划、索引和执行合计 Agnes/embedding/reranker provider attempts=`217/170/120`，provider retry=`1/0/0`，总计 507 attempts。全部落盘记录窗因两次长停顿跨 21,377.5 秒，故窗口平均 RPM 仅为 `0.61/0.48/0.34`，不将其误当作瞬时吞吐；共享 limiter 仍对每个 attempt/retry 强制 3 秒 permit 和 20 RPM 硬上限。两个 300 秒 deadline 的落盘 wall 异常为约 2,360 秒与 4,240 秒，表明会话暂停或阻塞调用会延迟 Python 信号交付；后续可靠性结论必须同时报告 final 时延与 attempt 长尾，不能只报成功 final。
 
+#### v28 replay 完成：root repair 有效，surface repair 覆盖不足，严格门禁不晋级
+
+v28 replay 在 source 的 50 个冻结计划上完成了五个 replay 方法，共 300/300 final `ok`、303 个 immutable execution attempts。attempt 分母中的 3 个失败均保留：source 有 1 次 `budget_exceeded` 后重试成功，CQAC 有 2 次 embedding HTTP 503 后分别在 `attempt-0002` 恢复；没有最终失败记录被覆盖。所有 final schema 均为 27，provenance 缺失、source plan hash mismatch、unknown snapshot 和未预期的 effective-plan variant 均为 0。
+
+| 方法 | EM / F1 | Evidence Recall / MRR / nDCG@10 | R@1/5/10 | P@1/5/10 | LLM / provider calls | tokens | final wall mean / p95 (s) | struct fail / repair / ground / fallback | deterministic | root / surface 激活题数 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.4800 / 0.5193 | 0.7000 / 0.7125 / 0.6743 | 0.34 / 0.67 / 0.70 | 0.680 / 0.268 / 0.140 | 2.96 / 7.64 | 4114.72 | 26.34 / 47.86 | 0.48 / 0.44 / 0.04 / 0.10 | 0.82 | 0 / 0 |
+| GRPE | 0.4400 / 0.4824 | 0.6900 / 0.6762 / 0.6513 | 0.32 / 0.65 / 0.69 | 0.640 / 0.260 / 0.138 | 3.02 / 7.70 | 4330.76 | 27.18 / 54.50 | 0.50 / 0.44 / 0.10 / 0.18 | 0.74 | 0 / 0 |
+| CQAC | 0.4800 / 0.5224 | 0.7600 / 0.7154 / 0.6887 | 0.33 / 0.66 / 0.76 | 0.660 / 0.264 / 0.152 | 3.36 / 8.00 | 4241.32 | 28.03 / 52.44 | 0.76 / 0.64 / 0.24 / 0.32 | 0.62 | 0 / 0 |
+| CQAC + root | 0.5600 / 0.6024 | 0.8900 / 0.9500 / 0.8864 | 0.47 / 0.87 / 0.89 | 0.940 / 0.348 / 0.178 | 2.42 / 6.38 | 3315.90 | 21.88 / 45.01 | 0.30 / 0.22 / 0.22 / 0.16 | 0.82 | 15 / 0 |
+| CQAC + surface | 0.4800 / 0.5224 | 0.7400 / 0.7154 / 0.6793 | 0.33 / 0.65 / 0.74 | 0.660 / 0.260 / 0.148 | 3.32 / 7.92 | 4173.10 | 30.77 / 61.30 | 0.72 / 0.62 / 0.22 / 0.30 | 0.64 | 0 / 0 |
+| CQAC + root + surface | **0.5800 / 0.6224** | **0.9000 / 0.9500 / 0.8971** | **0.47 / 0.88 / 0.90** | **0.940 / 0.352 / 0.180** | **2.42 / 6.42** | **3248.28** | **19.87 / 39.07** | **0.28 / 0.20 / 0.20 / 0.12** | **0.86** | **15 / 1** |
+
+表中 calls/tokens 是 execution-only；shared-compile-inclusive 的 combined/CQAC 分别为 `3.74/7.74/5400.40` 与 `4.68/9.32/6393.44`，三项均低于 `1.10×CQAC`。完整列级指标、逐题记录、失败分母、计划审计、时延分位数和 retrieval 指标仍以 `summaries/compositional_repair_gate/` 为准。
+
+配对统计以题目为单位、bootstrap `10,000` 次、seed=`2032`，差值定义为 `combined-reference`；精确 McNemar/配对符号检验只作描述，不作为晋级门槛：
+
+| 比较 | F1 mean Δ | 95% bootstrap CI | wins / ties / losses | bootstrap p (Holm) | exact sign p (Holm) | exact McNemar EM p (Holm) |
+|---|---:|---:|---:|---:|---:|---:|
+| combined vs GRPE | +0.1400 | [0.0600, 0.2400] | 7 / 43 / 0 | 0.0016 (0.0192) | 0.0156 (0.1406) | 0.0156 (0.1406) |
+| combined vs CQAC | +0.1000 | [0.0200, 0.2000] | 5 / 45 / 0 | 0.0128 (0.1280) | 0.0625 (0.4375) | 0.0625 (0.4375) |
+| combined vs CQAC + root | +0.0200 | [0.0000, 0.0600] | 1 / 49 / 0 | 0.7248 (1.0000) | 1.0000 (1.0000) | 1.0000 (1.0000) |
+| combined vs CQAC + surface | +0.1000 | [0.0200, 0.1800] | 5 / 45 / 0 | 0.0094 (0.1034) | 0.0625 (0.4375) | 0.0625 (0.4375) |
+
+机制分层验证了 root repair 的主要贡献：在 40 个 target 上，combined/CQAC F1=`0.5625/0.4375`；在 15 个 root-active 题上为 `0.6000/0.2667`；surface-active 仅 1 题，F1=`1.0000/0.0000`，因此不能把最后一项当作稳定结论。combined root repair 实际激活 15 题，surface repair 仅激活 1 题；10 个控制题 surface activation=0。anchor-window 的 pooled character reduction=`0.6942`（逐题均值=`0.6602`），非 fallback window 没有扩张。
+
+门禁最终状态如下：
+
+| 门禁 | 状态 | 解释 |
+|---|---|---|
+| H108/H109/H110 | **PASS** | 样本、source 完整性和机制覆盖满足预注册阈值；source target closed=37/40、control=0/10、prospective root=15/35。 |
+| H111 replay integrity | **严格 FAIL；注册 root variant 完整性 PASS** | 300 final、250 replay、hash/provenance 全部一致；但字面预注册要求 effective-plan variant=0，而 root factor 产生了 15 个预期 variant。 |
+| H112 answer quality | **PASS** | overall、target、root-active、surface-active 均满足与 CQAC 的预注册比较，combined success=1.0。 |
+| H113 factorial scope | **FAIL** | root 激活 15≥4，但 surface 仅 1<4；cell identity、query-grounding、closed-predicate、exact-source 实现边界和窗口不扩张检查通过。 |
+| H114/H115/H116 | **PASS** | 成本/可靠性、检索保持和全量统计产物均满足门槛。 |
+
+因此 v28 **不授权**新的随机 disjoint-100，也不授权 held-out-200。失败不是通过调阈值或在同一批题上重放可以解决的：下一轮必须新建无重叠样本和新的预注册。v29 的首要调优是扩大 surface repair 的可触发覆盖，同时把 H111 改成“source plan hash 必须一致、effective variant 只允许出现在预注册 root-active 集合”而不是与 root repair 相互矛盾的 variant=0；在此之前不宣称 surface ablation 已被验证。
+
+本轮机器审计产物：`runs/vldb2027-training-v28/online-validation.json`、`replay-audit.json`、`paired-statistics.json`、`mechanism-replay-metrics.json`；离线预注册快照已更新为 `offline-validation.json` 的 `replay_complete` 状态，source 判定仍保存在 `early-stop-validation.json`。
+
 ---
 
 # 11. 关键消融
