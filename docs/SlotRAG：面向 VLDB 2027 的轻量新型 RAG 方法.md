@@ -2110,6 +2110,30 @@ v28 固定为 `runs/vldb2027-training-v28`、阶段 `compositional_repair_gate`�
 
 只有 H111-H116 全部通过，才授权另建自然分布、无历史交集的随机 100 题训练泛化门；v28 本身不直接授权 held-out-200。观察 v28 后若修改架构、谓词集或阈值，必须更换新的无重叠样本。机器预注册为 v28 `offline-validation.json`，source 完成后以 `source-plan-audit.json` 和 `early-stop-validation.json` 作不可变判定。
 
+#### v28 source 通过：授权 250 条同计划 replay
+
+source 最终为 50/50 schema27 final `ok`、50/50 frozen plan snapshot 有效。执行共 51 个 immutable attempts：一题首次触发 300 秒 question timeout，`attempt-0002` 恢复，因此 benchmark retry=1，attempt 失败率为 1/51=`0.0196`；计划编译同样为 51 attempts，另一题首次 timeout 后恢复。两个失败分属不同问题，均未被最终成功记录覆盖；provenance 缺失、snapshot/effective hash mismatch、unknown snapshot 与 effective-plan variant 均为 0。
+
+| source SlotRAG 指标（n=50，compositional 机制集） | 数值 |
+|---|---:|
+| EM / F1 | 0.4800 / 0.5193 |
+| Evidence Recall / MRR / nDCG@10 | 0.7000 / 0.7125 / 0.6743 |
+| R@1 / R@5 / R@10 | 0.3400 / 0.6700 / 0.7000 |
+| P@1 / P@5 / P@10 | 0.6800 / 0.2680 / 0.1400 |
+| LLM / provider calls（共享编译排除） | 2.96 / 7.64 |
+| shared-compile-inclusive LLM / provider calls | 4.28 / 8.96 |
+| execution / shared-compile-inclusive tokens | 4114.72 / 6266.84 |
+| 成功 final wall mean / p50 / p95 / p99（s） | 26.34 / 22.44 / 47.86 / 51.44 |
+| structured failure / repair / grounding rejection | 0.4800 / 0.4400 / 0.0400 |
+| deterministic answer rate | 0.8200 |
+| index build mean / index provider calls | 0.890 s / 0.98 |
+
+机制分层显示 source 在 40 个 target 上 EM/F1=`0.4250/0.4375`，其中 25 个 title-root target 为 `0.2800/0.2800`，15 个 non-title target 为 `0.6667/0.7000`；10 个非 country 控制为 `0.7000/0.8467`。title-root target 的低分只说明这是有意构造的困难机制集，不能当作自然分布性能；同时它为 root/surface 消融提供了足够的差异空间。完整机制分层指标见 `source-mechanism-metrics.json`，标准全列见 `summaries/compositional_repair_gate/`。
+
+H108、H109、H110 全部**通过**。在 40 个 target 中 37 个计划出现 schema27 闭合谓词（阈值 35），包括 `NationalityOf=18`、`HasNationality=6`、`Nationality=4`、`FromCountry=4`、`CountryOfBirth=3`、`CountryOfOrigin=2`；10 个控制污染为 0，35 个 title-root 中 15 个可前瞻触发 query-root repair，source success rate=1.0。三项均越过调用前锁定的 `35/1/4/0.98` 阈值，因此 `early-stop-validation.json` 给出 `CONTINUE_TO_REPLAY`，授权 GRPE、CQAC 与 2×2 四格共 250 条同计划 replay。
+
+source 的计划、索引和执行合计 Agnes/embedding/reranker provider attempts=`217/170/120`，provider retry=`1/0/0`，总计 507 attempts。全部落盘记录窗因两次长停顿跨 21,377.5 秒，故窗口平均 RPM 仅为 `0.61/0.48/0.34`，不将其误当作瞬时吞吐；共享 limiter 仍对每个 attempt/retry 强制 3 秒 permit 和 20 RPM 硬上限。两个 300 秒 deadline 的落盘 wall 异常为约 2,360 秒与 4,240 秒，表明会话暂停或阻塞调用会延迟 Python 信号交付；后续可靠性结论必须同时报告 final 时延与 attempt 长尾，不能只报成功 final。
+
 ---
 
 # 11. 关键消融
