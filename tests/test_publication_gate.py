@@ -4,7 +4,7 @@ import json
 from slotrag.benchmarking.publication_gate import audit_publication_readiness
 
 
-def _write_run(root, *, exact_upstream: bool, stage: str = "test"):
+def _write_run(root, *, exact_upstream: bool, stage: str = "test", adapted: bool = False):
     trace_path = root / "traces" / stage / "hotpotqa" / "hybrid" / "q1" / "attempt-0001.jsonl"
     trace_path.parent.mkdir(parents=True)
     trace_path.write_text('{"schema_version":1}\n', encoding="utf-8")
@@ -43,6 +43,31 @@ def _write_run(root, *, exact_upstream: bool, stage: str = "test"):
         "stage": stage, "jobs": [{"dataset": "hotpotqa", "method": "hybrid"}],
     }), encoding="utf-8")
     (root / "baseline-audit.json").write_text("{}", encoding="utf-8")
+    if not adapted:
+        (root / "adapter-audit.json").write_text("{}", encoding="utf-8")
+    if adapted:
+        (root / "adapter-audit.json").write_text(json.dumps({
+            "schema_version": 1,
+            "protocol": "shared_provider_adapted",
+            "publication_scope": "adapted_protocol_only",
+            "exact_upstream_execution_verified": False,
+            "checks": {
+                "same_question_sample": True,
+                "same_provider_model": True,
+                "same_retrieval_corpus": True,
+                "same_answer_extraction": True,
+                "raw_outputs_preserved": True,
+                "attempts_and_failures_preserved": True,
+            },
+            "methods": {
+                "hybrid": {
+                    "execution_kind": "controlled_adapter",
+                    "source": "repository-local",
+                    "source_revision": "local",
+                    "adaptation_notes": "controlled shared-provider adapter",
+                },
+            },
+        }), encoding="utf-8")
     (root / "command.txt").write_text("test\n", encoding="utf-8")
 
 
@@ -69,3 +94,33 @@ def test_gate_labels_smoke_as_diagnostic_even_without_baselines(tmp_path):
     assert report["analysis_ready"] is True
     assert report["publication_ready"] is False
     assert report["status"] == "diagnostic_complete"
+
+
+def test_gate_allows_explicit_adapted_protocol_only_with_opt_in(tmp_path):
+    _write_run(tmp_path, exact_upstream=False, adapted=True)
+
+    report = audit_publication_readiness(
+        tmp_path,
+        "test",
+        require_trace=True,
+        allow_adapted_protocol=True,
+    )
+
+    assert report["analysis_ready"] is True
+    assert report["publication_ready"] is True
+    assert report["publication_scope"] == "adapted_protocol_only"
+    assert report["status"] == "publication_ready_adapted_protocol"
+
+
+def test_gate_rejects_adapted_protocol_without_audit_file(tmp_path):
+    _write_run(tmp_path, exact_upstream=False)
+
+    report = audit_publication_readiness(
+        tmp_path,
+        "test",
+        require_trace=True,
+        allow_adapted_protocol=True,
+    )
+
+    assert report["publication_ready"] is False
+    assert any(reason.startswith("adapted_protocol_invalid:") for reason in report["blocking_reasons"])

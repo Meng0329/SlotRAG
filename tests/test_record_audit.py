@@ -25,6 +25,7 @@ def _write_record(root, *, trace: bool):
     (root / "manifest.json").write_text("{}", encoding="utf-8")
     (root / "matrix-manifest.json").write_text("{}", encoding="utf-8")
     (root / "baseline-audit.json").write_text("{}", encoding="utf-8")
+    (root / "adapter-audit.json").write_text("{}", encoding="utf-8")
     (root / "command.txt").write_text("test\n", encoding="utf-8")
 
 

@@ -13,6 +13,7 @@
 - GraphRAG：固定 `baseline/graph_rag` commit；若用当前 QA 记录构建索引，必须标为“GraphRAG adapted protocol”，不能标 exact reproduction。
 - Hybrid/ReAct/SRAG：当前目录只有说明性 README，若保留，只能标为 repository-local diagnostic adapter；主表优先替换为有可执行上游代码和公开评测协议的 baseline。
 - 每个方法生成 `baseline-audit.json`、commit、入口 SHA-256、依赖锁定、数据转换脚本和可运行命令；缺失任何一项就停在审计阶段。
+- 当上游入口无法映射到统一 QA 集时，矩阵必须额外生成 `adapter-audit.json`。该文件只能把结果归入 `shared_provider_adapted` / `adapted_protocol_only`，不能把 `exact_upstream_execution_verified` 置为 true；投稿 gate 需要显式 `--allow-adapted-protocol` 才允许生成适配协议表。
 
 当前 IRCoT 前置状态记录在 `runs/ircot-upstream-preflight-v1.json`：processed data 和 official evaluation 已固定，但 raw Wikipedia corpus、retriever/LLM server 和 Completion API 兼容性仍未通过；该报告的 `ready_for_exact_execution=false` 是正式阻塞，不得用本地方法替代。
 
@@ -40,6 +41,14 @@
 
 每个正式阶段结束后运行 `slotrag benchmark records-audit <stage> --output-dir <run> --require-trace`，再运行 `slotrag benchmark gate <stage> --output-dir <run> --require-trace`；前者报告 `complete=true` 且后者报告 `analysis_ready=true` 才能进入统计汇总。只有 `publication_ready=true` 才能进入论文主表。旧 run 若没有 trace、matrix manifest、baseline audit 或 command manifest，只能保留为历史诊断，不能回填为完整投稿记录。
 
+适配协议阶段还必须运行：
+
+```bash
+slotrag benchmark gate <stage> --output-dir <run> --require-trace --allow-adapted-protocol
+```
+
+只有返回 `status=publication_ready_adapted_protocol` 时，结果才可进入单独的“shared-provider adapted”表；该表必须与 exact upstream 表分栏，不能合并成“击败 baseline”的结论。
+
 ## 完整记录布局
 
 ```text
@@ -50,6 +59,7 @@ runs/vldb2027-exact-v31/<run-id>/
   command.txt
   dataset-audit.json
   baseline-audit.json
+  adapter-audit.json
   environment/packages.json
   services/doctor-before.json
   services/doctor-after.json

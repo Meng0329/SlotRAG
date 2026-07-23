@@ -2271,6 +2271,25 @@ Qwen 专用预注册快照为 `runs/vldb2027-submission-qwen36-v1/offline-valida
 
 IRCoT 上游材料已进一步落盘：`baseline/ircot/processed_data` 官方压缩包解压完成（HotpotQA/2WikiMultiHopQA/MuSiQue/IIRC 的 dev、subsampled test 与 train 文件 hash 见 `runs/ircot-processed-data-sha256-v1.txt`），官方评测仓库固定为 Hotpot `3635853403a8735609ee997664e1528f4480762a`、2Wiki `6bdd033bd51aae2d36ba939688c651b5c54ec28a`、MuSiQue `24cc5b297acc2abfc5fb3d0becb6ef7b73d03717`。隔离环境已生成官方 HotpotQA 配置；`runs/ircot-upstream-preflight-v1.json` 仍判定不可执行，阻塞为 raw Wikipedia corpus 下载源无响应、retriever/LLM server 未启动，以及上游 `openai.Completion(code-davinci-002)` 与 Qwen Chat Completions 接口不兼容。因此没有伪造 IRCoT Qwen 结果，也没有把官方旧 prediction 当作当前实验结果。
 
+#### v33：共享服务适配协议与 HotpotQA trace smoke（2026-07-23）
+
+为保证在上游 runner 不可直接映射到当前五个 QA 集时仍能做可复核的受控比较，新增
+`src/slotrag/benchmarking/adapted_protocol.py` 和 `adapter-audit.json`。该协议明确标记
+`protocol=shared_provider_adapted`、`publication_scope=adapted_protocol_only`，并为每个
+baseline 固定仓库 commit、入口 SHA-256、适配差异、统一题目/语料/模型/答案解析和失败
+分母检查；它永远不会把 `exact_upstream_execution_verified` 置为 true。默认 gate 仍拒绝
+适配器主表，只有显式 `--allow-adapted-protocol` 且审计字段全部通过时，才会返回
+`publication_ready_adapted_protocol`，并在输出中保留 `publication_scope=adapted_protocol_only`。
+
+新的 HotpotQA 5 题/7 方法 smoke 目录为 `runs/vldb2027-adapted-smoke-hotpot-v1`：
+35/35 final、35/35 immutable attempts、35/35 trace，schema v28，0 retry、0 failed、0
+empty、0 budget failure；records-audit 的 `complete=true`、`missing_trace_count=0`，适配
+gate 的 `analysis_ready=true`。由于仍是 smoke 且 IRCoT/PlanRAG/GraphRAG 未执行其上游入口，
+gate 正确返回 `status=diagnostic_complete`、`publication_ready=false`；该目录只用于验证
+限流、trace、断点续跑和统计链路，不能支撑质量排名或投稿结论。完整统计已写入
+`runs/vldb2027-adapted-smoke-hotpot-v1/summaries/main_comparison_smoke/`，原始输出和 trace
+不含 API key。
+
 # 11. 关键消融
 
 必须包含：

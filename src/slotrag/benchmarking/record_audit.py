@@ -67,7 +67,7 @@ def audit_run_records(output_dir: Path, stage: str, *, require_trace: bool = Fal
                 trace_error_counts[reason or "invalid"] = trace_error_counts.get(reason or "invalid", 0) + 1
     missing_manifest = [
         name
-        for name in ("manifest.json", "matrix-manifest.json", "baseline-audit.json", "command.txt")
+        for name in ("manifest.json", "matrix-manifest.json", "baseline-audit.json", "adapter-audit.json", "command.txt")
         if not (output_dir / name).is_file()
     ]
     complete = bool(records) and not missing_attempt_count and not missing_trace_count and not missing_manifest

@@ -126,6 +126,7 @@ def benchmark_gate(
     output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
     require_trace: bool = typer.Option(True, "--require-trace/--allow-missing-trace"),
     allow_diagnostic_adapters: bool = typer.Option(False, "--allow-diagnostic-adapters"),
+    allow_adapted_protocol: bool = typer.Option(False, "--allow-adapted-protocol"),
     output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
 ) -> None:
     """Gate a run before statistics or publication claims."""
@@ -134,6 +135,7 @@ def benchmark_gate(
         stage,
         require_trace=require_trace,
         allow_diagnostic_adapters=allow_diagnostic_adapters,
+        allow_adapted_protocol=allow_adapted_protocol,
     )
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     if output is not None:

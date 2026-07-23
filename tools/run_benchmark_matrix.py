@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from slotrag.benchmarking.config import BenchmarkSuite
+from slotrag.benchmarking.adapted_protocol import build_adapter_audit
 from slotrag.benchmarking.baselines import audit_baselines
 
 
@@ -114,6 +115,10 @@ def main() -> int:
     (args.output_dir / "command.txt").write_text(shlex.join([sys.executable, *sys.argv]) + "\n", encoding="utf-8")
     (args.output_dir / "baseline-audit.json").write_text(
         json.dumps(audit_baselines(Path.cwd(), suite.datasets), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (args.output_dir / "adapter-audit.json").write_text(
+        json.dumps(build_adapter_audit(Path.cwd(), suite.datasets, methods), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     with ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as executor:

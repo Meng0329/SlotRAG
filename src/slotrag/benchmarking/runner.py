@@ -719,6 +719,18 @@ class BenchmarkRunner:
         root = Path.cwd()
         audit_path = self.output_dir / "dataset-audit.json"
         audit = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else None
+        adapter_audit_path = self.output_dir / "adapter-audit.json"
+        adapter_audit = (
+            json.loads(adapter_audit_path.read_text(encoding="utf-8"))
+            if adapter_audit_path.exists()
+            else None
+        )
+        cache_reuse_path = self.output_dir / "cache-reuse.json"
+        cache_reuse = (
+            json.loads(cache_reuse_path.read_text(encoding="utf-8"))
+            if cache_reuse_path.exists()
+            else None
+        )
         initial_manifest = {
             "material_passport": {
                 "origin_skill": "academic-research-suite/experiment-agent",
@@ -739,6 +751,8 @@ class BenchmarkRunner:
                 "graph_rag": _git_revision(root / "baseline" / "graph_rag"),
             },
             "baseline_audit": audit_baselines(root, self.suite.datasets),
+            "adapter_protocol_audit": adapter_audit,
+            "cache_reuse": cache_reuse,
             "comparison_validity": {
                 "status": "diagnostic_local_adapters",
                 "exact_upstream_execution_verified": False,

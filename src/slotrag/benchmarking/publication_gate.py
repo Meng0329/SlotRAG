@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from .adapted_protocol import validate_adapter_audit
 from .record_audit import audit_run_records
 
 
@@ -97,10 +98,12 @@ def audit_publication_readiness(
     *,
     require_trace: bool = True,
     allow_diagnostic_adapters: bool = False,
+    allow_adapted_protocol: bool = False,
 ) -> dict[str, Any]:
     """Return a machine-readable publication and diagnostic readiness report."""
     manifest = _read_json(output_dir / "manifest.json") or {}
     matrix = _read_json(output_dir / "matrix-manifest.json")
+    adapter_audit = _read_json(output_dir / "adapter-audit.json")
     record_audit = audit_run_records(output_dir, stage, require_trace=require_trace)
     expected_cells, matrix_errors = _expected_cells(output_dir, stage, manifest, matrix)
     observed_cells, ok_cells = _observed_cells(output_dir, stage)
@@ -138,8 +141,16 @@ def audit_publication_readiness(
     baseline_methods = sorted(method for method in methods if method.split("@", 1)[0] in _BASELINE_METHODS)
     validity = manifest.get("comparison_validity") or {}
     exact_upstream = bool(validity.get("exact_upstream_execution_verified"))
+    adapted_errors: list[str] = []
+    adapted_valid = False
     if baseline_methods and not exact_upstream:
-        reasons.append("upstream_baseline_execution_not_verified")
+        if allow_adapted_protocol:
+            adapted_errors = validate_adapter_audit(adapter_audit, baseline_methods)
+            adapted_valid = not adapted_errors
+            if not adapted_valid:
+                reasons.extend(f"adapted_protocol_invalid:{error}" for error in adapted_errors)
+        else:
+            reasons.append("upstream_baseline_execution_not_verified")
 
     analysis_blockers = {
         "record_audit_incomplete",
@@ -147,11 +158,13 @@ def audit_publication_readiness(
         "missing_or_invalid_matrix_manifest",
     }
     analysis_ready = not [reason for reason in reasons if reason in analysis_blockers or reason.startswith(("cell_count_mismatch:", "unexpected_observed_cells:", "duplicate matrix cell:"))]
-    publication_ready = analysis_ready and "smoke_stage_not_for_publication" not in reasons and (exact_upstream or not baseline_methods)
+    publication_ready = analysis_ready and "smoke_stage_not_for_publication" not in reasons and (
+        exact_upstream or not baseline_methods or (allow_adapted_protocol and adapted_valid)
+    )
     if analysis_ready and not publication_ready and (allow_diagnostic_adapters or "smoke" in stage.casefold()):
         status = "diagnostic_complete"
     elif publication_ready:
-        status = "publication_ready"
+        status = "publication_ready_adapted_protocol" if adapted_valid else "publication_ready"
     else:
         status = "blocked"
     return {
@@ -163,13 +176,18 @@ def audit_publication_readiness(
         "publication_ready": publication_ready,
         "publication_claim_allowed": publication_ready,
         "allow_diagnostic_adapters": allow_diagnostic_adapters,
+        "allow_adapted_protocol": allow_adapted_protocol,
         "require_trace": require_trace,
         "record_audit": record_audit,
         "baseline_execution": {
             "methods": baseline_methods,
             "exact_upstream_execution_verified": exact_upstream,
             "comparison_validity": validity,
+            "adapted_protocol_valid": adapted_valid,
+            "adapted_protocol_errors": adapted_errors,
         },
+        "adapter_audit": adapter_audit,
+        "publication_scope": "adapted_protocol_only" if adapted_valid else ("exact_upstream" if exact_upstream else None),
         "cells": cell_report,
         "extra_observed_cells": [{"dataset": dataset, "method": method} for dataset, method in extra_cells],
         "blocking_reasons": sorted(set(reasons)),
