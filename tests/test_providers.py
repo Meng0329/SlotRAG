@@ -1,9 +1,11 @@
 import httpx
 import pytest
+import json
 
 from slotrag.config import AgnesConfig, EmbeddingConfig, RerankerConfig
 from slotrag.errors import SchemaError
 from slotrag.providers import AgnesClient, EmbeddingClient, RerankerClient
+from slotrag.tracing import provider_trace
 
 
 def _transport(handler):
@@ -20,6 +22,28 @@ def test_agnes_parses_tool_call(monkeypatch):
     result = client.complete([{"role": "user", "content": "x"}], tools=[{"type": "function"}])
     assert result.tool_calls[0].name == "emit"
     assert result.usage.total_tokens == 5
+
+
+def test_agnes_emits_provider_trace_with_sanitized_payload(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_KEY", "secret")
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "id": "trace-id",
+            "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+        })
+
+    trace_path = tmp_path / "provider.jsonl"
+    client = AgnesClient(
+        AgnesConfig(base_url="http://test/v1", model="m", api_key_env="TEST_KEY", timeout_seconds=1),
+        _transport(handler),
+    )
+    with provider_trace(trace_path, include_payloads=True):
+        client.complete([{"role": "user", "content": "x"}])
+    event = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    assert event["request"]["model"] == "m"
+    assert "secret" not in trace_path.read_text(encoding="utf-8")
+    assert event["response"]["id"] == "trace-id"
 
 
 def test_agnes_can_disable_thinking_for_constrained_tool_calls(monkeypatch):

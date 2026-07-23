@@ -9,7 +9,10 @@ import typer
 from .config import AppConfig
 from .baseline import run_whole_question_baseline
 from .benchmarking.config import BenchmarkSuite
+from .benchmarking.baselines import audit_baselines
 from .benchmarking.datasets import audit_suite
+from .benchmarking.record_audit import audit_run_records
+from .benchmarking.publication_gate import audit_publication_readiness
 from .benchmarking.runner import BenchmarkRunner
 from .benchmarking.statistics import summarize_run
 from .data import chunk_passages, fetch_dataset, load_questions, normalize_jsonl
@@ -84,6 +87,63 @@ def benchmark_audit(
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(payload + "\n", encoding="utf-8")
     typer.echo(payload)
+
+
+@benchmark_app.command("baseline-audit")
+def benchmark_baseline_audit(
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
+) -> None:
+    """Audit baseline provenance, entrypoints, and dataset comparability."""
+    cfg = load_benchmark_suite(suite)
+    report = audit_baselines(Path.cwd(), cfg.datasets)
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(payload)
+
+
+@benchmark_app.command("records-audit")
+def benchmark_records_audit(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+    require_trace: bool = typer.Option(False, "--require-trace/--allow-missing-trace"),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
+) -> None:
+    """Check immutable final, attempt, trace, and manifest completeness."""
+    report = audit_run_records(output_dir, stage, require_trace=require_trace)
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(payload)
+
+
+@benchmark_app.command("gate")
+def benchmark_gate(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+    require_trace: bool = typer.Option(True, "--require-trace/--allow-missing-trace"),
+    allow_diagnostic_adapters: bool = typer.Option(False, "--allow-diagnostic-adapters"),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
+) -> None:
+    """Gate a run before statistics or publication claims."""
+    report = audit_publication_readiness(
+        output_dir,
+        stage,
+        require_trace=require_trace,
+        allow_diagnostic_adapters=allow_diagnostic_adapters,
+    )
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(payload)
+    if not report["analysis_ready"]:
+        raise typer.Exit(code=2)
+    if not report["publication_ready"] and not allow_diagnostic_adapters:
+        raise typer.Exit(code=3)
 
 
 @benchmark_app.command("prepare")

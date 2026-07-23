@@ -78,6 +78,13 @@ class DataConfig(BaseModel):
     processed_dir: Path = Path("data/processed")
 
 
+class TraceConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    include_payloads: bool = False
+
+
 class RateLimitConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -116,6 +123,7 @@ class AppConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     data: DataConfig = Field(default_factory=DataConfig)
+    trace: TraceConfig = Field(default_factory=TraceConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
     @classmethod
@@ -156,6 +164,8 @@ class AppConfig(BaseModel):
             "SLOTRAG_RERANKER_PROVIDER_RPM": ("rate_limit", "reranker_provider_rpm"),
             "SLOTRAG_RERANKER_OPERATIONAL_RPM": ("rate_limit", "reranker_operational_rpm"),
             "SLOTRAG_RERANKER_MAX_CONCURRENCY": ("rate_limit", "reranker_max_concurrency"),
+            "SLOTRAG_TRACE_ENABLED": ("trace", "enabled"),
+            "SLOTRAG_TRACE_INCLUDE_PAYLOADS": ("trace", "include_payloads"),
         }
         for env_name, (section, field) in mappings.items():
             value = os.getenv(env_name)

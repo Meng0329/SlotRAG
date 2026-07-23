@@ -11,13 +11,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 from slotrag.benchmarking.config import BenchmarkSuite
+from slotrag.benchmarking.baselines import audit_baselines
 
 
 def _safe_label(value: str) -> str:
@@ -83,6 +86,36 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     results: list[dict[str, Any]] = []
+    safe_env = {
+        key: value
+        for key, value in env.items()
+        if (key.startswith("SLOTRAG_") or key.startswith("QWEN36_"))
+        and "KEY" not in key.upper()
+        and "TOKEN" not in key.upper()
+        and "SECRET" not in key.upper()
+    }
+    matrix_manifest = {
+        "schema_version": 1,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "stage": args.stage,
+        "suite": str(args.suite),
+        "output_dir": str(args.output_dir),
+        "workers": min(args.workers, len(jobs)),
+        "datasets": datasets,
+        "methods": methods,
+        "jobs": [{"dataset": dataset, "method": method} for dataset, method in jobs],
+        "safe_environment": safe_env,
+        "command": [sys.executable, *sys.argv],
+    }
+    (args.output_dir / "matrix-manifest.json").write_text(
+        json.dumps(matrix_manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (args.output_dir / "command.txt").write_text(shlex.join([sys.executable, *sys.argv]) + "\n", encoding="utf-8")
+    (args.output_dir / "baseline-audit.json").write_text(
+        json.dumps(audit_baselines(Path.cwd(), suite.datasets), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     with ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as executor:
         futures = {
             executor.submit(_run_cell, args.stage, args.suite, args.output_dir, dataset, method, log_dir, env): (dataset, method)

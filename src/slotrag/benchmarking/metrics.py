@@ -9,6 +9,59 @@ from typing import Any
 from ..models import ExecutionResult, QuestionRecord
 
 
+def extract_answer_span(value: str) -> str:
+    """Extract the final answer while retaining the raw model output elsewhere.
+
+    Qwen-compatible endpoints may return a reasoning block followed by
+    ``</think>`` even when the prompt requests a concise answer.  Official QA
+    metrics score the answer span, not that hidden reasoning transcript.  The
+    parser is intentionally conservative: it prefers the text after a closing
+    thinking tag or an explicit final-answer marker and otherwise leaves the
+    original text unchanged.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    closing = list(re.finditer(r"</think>", text, flags=re.IGNORECASE))
+    # Remove every reasoning block before looking for an answer tag. This
+    # prevents a final-looking marker inside <think> from being scored.
+    outside_think = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    answer_tags = re.compile(
+        r"<(?P<tag>answer|final(?:_answer)?|output|result)\b[^>]*>"
+        r"(?P<content>.*?)"
+        r"</(?P=tag)\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    tagged = list(answer_tags.finditer(outside_think))
+    if tagged:
+        text = tagged[-1].group("content").strip()
+    elif closing:
+        text = text[closing[-1].end() :].strip()
+    else:
+        text = outside_think.strip()
+
+    markers = list(
+        re.finditer(
+            r"(?:final\s+answer|final\s+response|answer|output)\s*[:：]\s*",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if markers:
+        text = text[markers[-1].end() :].strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    while len(lines) > 1 and lines[-1].casefold().rstrip(".! ") in {"done", "end", "finished"}:
+        lines.pop()
+    if len(lines) == 1:
+        text = lines[0]
+    elif len(lines[-1]) <= 256:
+        text = lines[-1]
+    text = text.strip().strip("`").strip()
+    return text
+
+
 def normalize_answer(value: str) -> str:
     """HotpotQA/SQuAD normalization."""
     value = value.lower()
@@ -169,7 +222,8 @@ def evidence_scores(result: ExecutionResult, question: QuestionRecord) -> dict[s
 
 
 def score_record(dataset: str, question: QuestionRecord, result: ExecutionResult) -> dict[str, Any]:
-    prediction = result.answer or ""
+    raw_prediction = result.answer or ""
+    prediction = extract_answer_span(raw_prediction)
     em = exact_match(prediction, question.answers)
     f1 = token_f1(prediction, question.answers)
     accuracy: float | None = None
@@ -181,6 +235,9 @@ def score_record(dataset: str, question: QuestionRecord, result: ExecutionResult
         drop_em, drop_f1 = drop_scores(prediction, question.answers)
     primary = accuracy if dataset == "strategyqa" else drop_f1 if dataset == "drop" else f1
     return {
+        "prediction_raw_chars": len(raw_prediction),
+        "prediction_scored": prediction,
+        "answer_extraction": "final_tag_or_think_suffix_v2",
         "em": em,
         "f1": f1,
         "accuracy": accuracy,

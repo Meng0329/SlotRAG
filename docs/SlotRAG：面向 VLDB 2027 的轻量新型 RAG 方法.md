@@ -2203,6 +2203,74 @@ Qwen 专用预注册快照为 `runs/vldb2027-submission-qwen36-v1/offline-valida
 
 ---
 
+#### v29-Qwen36-main：3500 条投稿级主对比正式结果（2026-07-23）
+
+> **审计结论：本节结果撤销投稿资格。** 这次运行调用的是
+> `src/slotrag/benchmarking/methods.py` 的受控本地适配器，没有调用
+> `/data/mzb/SlotRAG/baseline` 中 IRCoT、PlanRAG 或 GraphRAG 的上游推理入口；
+> Hybrid/ReAct/SRAG 目录也只有说明性 README。因而本节只能作为 runner、限流、
+> 失败分母和统计链路的诊断记录，不能作为“击败已发表 baseline”的主表。
+> 机器审计见 `runs/baseline-audit-v1.json`，后续主表必须在每个方法挂接真实入口、
+> 固定 commit、数据转换、提示词/模型配置和原始输出后重新生成。
+
+`runs/vldb2027-submission-qwen36-v3` 的 `main_comparison` 已按冻结协议完成 35 个 dataset-method cell，共 3,500/3,500 个 final 和 3,500/3,500 个 immutable attempts，schema v27，缺失记录为 0。最终状态为 3,453 `ok`、30 `empty`、17 `budget_exceeded`，完成率 1.0，最终 `ok` 率 98.657%，通过预注册的 98% 主实验门槛；本轮无重试 attempt，失败状态全部进入分母。HotpotQA 与 2WikiMultiHopQA 共 1,400 条记录有 gold evidence，其他数据集的证据指标严格为 `N/A`。
+
+主指标按数据集定义：HotpotQA/2WikiMultiHopQA/MuSiQue 为 F1，StrategyQA 为 Accuracy，DROP 为 DROP F1。下表是 100 题/格的主指标均值；完整列级指标、逐题记录、分层结果、失败报告和 paired bootstrap 位于对应 summary 目录。
+
+| 数据集（主指标） | SlotRAG | GraphRAG | Hybrid | IRCoT | PlanRAG | ReAct | SRAG |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2WikiMultiHopQA（F1） | **0.6091** | 0.0181 | 0.0183 | 0.0181 | 0.0168 | 0.0179 | 0.4811 |
+| HotpotQA（F1） | **0.5041** | 0.0140 | 0.0165 | 0.0151 | 0.0137 | 0.0156 | 0.4561 |
+| MuSiQue（F1） | **0.3278** | 0.0054 | 0.0080 | 0.0097 | 0.0085 | 0.0095 | 0.1563 |
+| StrategyQA（Accuracy） | 0.8700 | 0.4700 | 0.4700 | 0.4700 | 0.4700 | 0.4700 | **0.8900** |
+| DROP（DROP F1） | **0.5851** | 0.0218 | 0.0215 | 0.0218 | 0.0213 | 0.0223 | 0.4641 |
+
+相对最强结构对照 SRAG 的逐题 paired bootstrap 结果如下。SlotRAG 在 2Wiki、MuSiQue 和 DROP 的质量差异显著，在 HotpotQA 和 StrategyQA 上区间包含 0；因此不能把“所有数据集全面显著领先”写入论文。
+
+| 数据集 | SlotRAG-SRAG 均值差 | 95% CI | 胜/平/负 | Holm p |
+|---|---:|---:|---:|---:|
+| 2WikiMultiHopQA | +0.1280 | [+0.0577, +0.1989] | 26/65/9 | 0.0006 |
+| HotpotQA | +0.0480 | [-0.0245, +0.1215] | 30/46/24 | 0.3840 |
+| MuSiQue | +0.1715 | [+0.0920, +0.2572] | 44/35/21 | <0.0001 |
+| StrategyQA | -0.0200 | [-0.0500, 0] | 0/98/2 | 0.3840 |
+| DROP | +0.1210 | [+0.0579, +0.1902] | 16/78/6 | <0.0001 |
+
+跨数据集宏平均用于描述成本与系统行为，不把不同任务的主指标简单当成同一统计量。SlotRAG / Hybrid / SRAG 的关键均值分别为：Evidence Recall@5 `0.7525 / 0.9325 / 0.7400`，Evidence MRR `0.9475 / 0.9833 / 0.9460`，Evidence NDCG@10 `0.7940 / 0.9476 / 0.7736`；唯一文档访问 `4.44 / 6.50 / 4.67`，total tokens `3,836 / 2,010 / 4,894`，provider calls `5.95 / 3.00 / 6.40`，在线 wall latency `18.82 / 21.38 / 22.96 s`。SlotRAG 的编译/执行/物化/生成均值延迟为 `5.83 / 8.16 / 8.16 / 4.82 s`，平均计划为 `1.59 slots / 0.61 joins / complexity 4.76`。这说明方法的质量收益伴随编译和抽取成本，检索证据排序不是当前优势，成本/延迟只在部分数据集改善。
+
+本表的 GraphRAG、Hybrid、IRCoT、ReAct、PlanRAG、SRAG 仍是 `src/slotrag/benchmarking/methods.py` 的受控本地适配器：它们共享 normalized records、题目、检索预算、Qwen3.6 服务和限流，但尚未逐项复现各论文上游仓库的训练、提示词和推理实现。因此不能将本表用于“击败已发表方法”、投稿排名或全面成本优势结论。旧表中的极低 F1 还暴露了 Qwen 推理文本污染答案的问题；评分修订为 `final_tag_or_think_suffix_v2`，先取最后答案标签或最后 `</think>` 后缀，同时保留原始输出，旧数值不与新协议混合。正式原始产物仍保留在 `runs/vldb2027-submission-qwen36-v3/summaries/main_comparison/`，但标记为诊断结果。
+
+#### v30：baseline 真实性门禁与评分协议
+
+新增 `slotrag benchmark baseline-audit --suite configs/experiments/vldb-submission-main.yaml`。每次运行 manifest 现在记录 baseline 的本地路径、git commit、入口文件 SHA-256、缺失运行材料、支持的数据集和 `exact_upstream_execution_verified`；当前值为 `false`，比较有效性固定为 `diagnostic_local_adapters`。只有在逐方法执行记录、原始 stdout/stderr、统一数据映射和答案解析审计全部通过后，才允许把该字段升级为 `upstream_reproduction`。
+
+评分字段同时保留 `prediction_raw_chars`、`prediction_scored` 和 `answer_extraction=final_tag_or_think_suffix_v2`：先排除全部 `<think>...</think>`，再取最后一个 `<answer>/<final>/<final_answer>/<output>/<result>` 标签内容；没有答案标签时取最后一个 `</think>` 后的非空内容。这不会覆盖原始模型输出，也不会把解析后的分数与旧 `main_comparison` 数值混写；所有重跑必须新建 run 目录并重新生成 paired bootstrap、失败报告和数据审计。
+
+离线重评分产物为 `runs/vldb2027-submission-qwen36-v3-rescored-v2-final`（provider calls=0，3500 final + 3500 immutable attempts，缺失=0）。它只替换 `scores`，不改原始 `result.answer`。主指标变化如下，表中仍然只是本地适配器诊断，不具备 upstream baseline 投稿资格：
+
+| 数据集 | SlotRAG | GraphRAG | Hybrid | IRCoT | PlanRAG | ReAct | SRAG |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2WikiMultiHopQA F1 | 0.6872 | 0.8199 | 0.8099 | 0.8116 | 0.7799 | 0.8099 | 0.6040 |
+| HotpotQA F1 | 0.6749 | 0.8087 | 0.7844 | 0.7986 | 0.7140 | 0.7818 | 0.6968 |
+| MuSiQue F1 | 0.4384 | 0.2133 | 0.4480 | 0.5318 | 0.5001 | 0.4686 | 0.3392 |
+| StrategyQA Accuracy | 0.8400 | 0.8900 | 0.9000 | 0.8600 | 0.8600 | 0.8800 | 0.8600 |
+| DROP F1 | 0.6245 | 0.6908 | 0.7062 | 0.6735 | 0.6978 | 0.7078 | 0.5845 |
+
+这组结果否定了旧表的“SlotRAG 全面领先”叙事：答案抽取修复后，SlotRAG 只在 MuSiQue 相对部分本地适配器占优，DROP/2Wiki/Hotpot 等需要重新设计方法或改用真实上游实现，不能通过调阈值修饰。下一轮投稿主实验必须以真实可运行 baseline 或明确的不可比清单为前置门禁。
+
+#### v31：投稿级实验执行与完整记录协议
+
+完整执行计划见 [`docs/VLDB2027-experiment-plan-v31.md`](VLDB2027-experiment-plan-v31.md)。新 run 先经过上游 baseline/data/split 审计，再进行 10--20 题 smoke，最后才允许完整 evaluation/test 和不重叠消融；所有阶段固定题目 ID、服务限流、失败分母和统计脚本。记录层新增可选 provider trace：`SLOTRAG_TRACE_ENABLED=true` 时，每个题目和 attempt 保存 Agnes/embedding/reranker 的脱敏请求/响应、HTTP 状态、耗时、retry 和 request ID；`SLOTRAG_TRACE_INCLUDE_PAYLOADS=true` 才保存完整 payload/response，API key 永不写入。矩阵命令同时保存 `matrix-manifest.json`，旧 run 不被覆盖。
+
+#### v32：可审计 smoke 与投稿门禁落地（2026-07-23）
+
+新增 `slotrag benchmark gate`。它把 `manifest.json`、`matrix-manifest.json`、`baseline-audit.json`、`command.txt`、final/item、immutable attempt、trace 的事件数与 SHA-256、dataset-method cell 数量和上游执行真实性合并为一个机器判定；默认不允许用 local adapter 结果生成投稿结论，`--allow-diagnostic-adapters` 只放行内部分析，不改变 `publication_claim_allowed=false`。smoke 阶段即使完整，也固定标为 `diagnostic_complete`，不能进入论文主表。
+
+真实 Qwen3.6-27B 服务 smoke 运行目录为 `runs/vldb2027-smoke-qwen36-trace-v1`，配置为允许 30 RPM、实际 20 RPM、服务级并发 64，embedding/reranker 同样使用 20 RPM 实际限流；Qwen3.6、Qwen3-Embedding 和 BGE-reranker doctor 均为 HTTP 200。HotpotQA evaluation 的 5 题 SlotRAG cell 结果为 5/5 final、5/5 attempt、5/5 `ok`，无 retry、empty 或 budget failure；每题有 1 个 trace 文件，事件数与 SHA-256 审计通过，trace payload 未发现 API key。答案解析版本固定为 `final_tag_or_think_suffix_v2`，示例记录 `prediction_scored` 与 `result.answer` 分离保存。
+
+该 smoke 只证明新 Qwen 服务、限流、答案抽取、trace 和断点记录链路可运行，不证明 SlotRAG 相对任何 baseline 的优势。下一步先为 IRCoT/GraphRAG 建立逐仓库执行记录并按其可支持数据集单独报告；PlanRAG 维持 DQA locating/building 独立实验，不能硬映射到五个 QA 集。完成真实 upstream gate 前，任何全量对比或消融都只生成诊断数据。
+
+IRCoT 上游材料已进一步落盘：`baseline/ircot/processed_data` 官方压缩包解压完成（HotpotQA/2WikiMultiHopQA/MuSiQue/IIRC 的 dev、subsampled test 与 train 文件 hash 见 `runs/ircot-processed-data-sha256-v1.txt`），官方评测仓库固定为 Hotpot `3635853403a8735609ee997664e1528f4480762a`、2Wiki `6bdd033bd51aae2d36ba939688c651b5c54ec28a`、MuSiQue `24cc5b297acc2abfc5fb3d0becb6ef7b73d03717`。隔离环境已生成官方 HotpotQA 配置；`runs/ircot-upstream-preflight-v1.json` 仍判定不可执行，阻塞为 raw Wikipedia corpus 下载源无响应、retriever/LLM server 未启动，以及上游 `openai.Completion(code-davinci-002)` 与 Qwen Chat Completions 接口不兼容。因此没有伪造 IRCoT Qwen 结果，也没有把官方旧 prediction 当作当前实验结果。
+
 # 11. 关键消融
 
 必须包含：

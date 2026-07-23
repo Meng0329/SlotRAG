@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from .concurrency import ConcurrencyLimiter, FileConcurrencyLimiter, FileRateLimiter, RateLimiter
 from .config import AgnesConfig, EmbeddingConfig, RerankerConfig
 from .errors import ProviderError, SchemaError
+from .tracing import record_provider_event
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ class RerankResult(BaseModel):
 
 
 class _HTTPProvider:
+    service_name = "provider"
+
     def __init__(
         self,
         client: httpx.Client | None = None,
@@ -101,6 +104,15 @@ class _HTTPProvider:
                     elapsed = (time.perf_counter() - started) * 1000
                     self.stats.latency_ms += elapsed
                     request_error = exc
+                    record_provider_event(
+                        service=self.service_name,
+                        url=url,
+                        request=payload,
+                        status_code=None,
+                        latency_ms=elapsed,
+                        retry_index=retry_index,
+                        error=f"{exc.__class__.__name__}: {exc}",
+                    )
                 else:
                     elapsed = (time.perf_counter() - started) * 1000
                     self.stats.latency_ms += elapsed
@@ -111,17 +123,49 @@ class _HTTPProvider:
                     continue
                 raise ProviderError(f"request failed for {url}: {request_error.__class__.__name__}") from request_error
             transient = response.status_code == 429 or response.status_code >= 500
+            raw_response: Any
+            try:
+                raw_response = response.json()
+            except ValueError:
+                raw_response = response.text[:2000]
             if transient and retry_index < max_retries:
+                record_provider_event(
+                    service=self.service_name,
+                    url=url,
+                    request=payload,
+                    response=raw_response,
+                    status_code=response.status_code,
+                    latency_ms=elapsed,
+                    retry_index=retry_index,
+                    error=f"transient_http_{response.status_code}",
+                )
                 self.stats.retries += 1
                 time.sleep(retry_backoff_seconds * (2 ** retry_index))
                 continue
             if response.status_code >= 400:
                 body = response.text[:300].replace("\n", " ")
+                record_provider_event(
+                    service=self.service_name,
+                    url=url,
+                    request=payload,
+                    response=raw_response,
+                    status_code=response.status_code,
+                    latency_ms=elapsed,
+                    retry_index=retry_index,
+                    error=f"http_{response.status_code}",
+                )
                 raise ProviderError(f"provider returned HTTP {response.status_code}: {body}")
-            try:
-                body = response.json()
-            except ValueError as exc:
-                raise SchemaError(f"provider returned non-JSON response from {url}") from exc
+            body = raw_response
+            record_provider_event(
+                service=self.service_name,
+                url=url,
+                request=payload,
+                response=body,
+                status_code=response.status_code,
+                latency_ms=elapsed,
+                retry_index=retry_index,
+                request_id=str(body.get("id")) if isinstance(body, dict) and body.get("id") else None,
+            )
             self.stats.successes += 1
             if isinstance(body, dict) and body.get("id"):
                 self.stats.request_ids.append(str(body["id"]))
@@ -130,6 +174,8 @@ class _HTTPProvider:
 
 
 class AgnesClient(_HTTPProvider):
+    service_name = "agnes"
+
     def __init__(
         self,
         config: AgnesConfig,
@@ -222,6 +268,8 @@ class AgnesClient(_HTTPProvider):
 
 
 class EmbeddingClient(_HTTPProvider):
+    service_name = "embedding"
+
     def __init__(
         self,
         config: EmbeddingConfig,
@@ -267,6 +315,8 @@ class EmbeddingClient(_HTTPProvider):
 
 
 class RerankerClient(_HTTPProvider):
+    service_name = "reranker"
+
     def __init__(
         self,
         config: RerankerConfig,

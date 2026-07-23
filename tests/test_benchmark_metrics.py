@@ -1,4 +1,4 @@
-from slotrag.benchmarking.metrics import score_record
+from slotrag.benchmarking.metrics import extract_answer_span, score_record
 from slotrag.models import EvidenceRecord, ExecutionResult, QuestionRecord
 
 
@@ -20,6 +20,29 @@ def _result(*source_ids: str) -> ExecutionResult:
             for source_id in source_ids
         ],
     )
+
+
+def test_extract_answer_span_removes_qwen_thinking_suffix():
+    raw = "reasoning transcript\n</think>\n\nLazio"
+    assert extract_answer_span(raw) == "Lazio"
+
+
+def test_extract_answer_span_prefers_last_final_marker():
+    raw = "Answer: an intermediate guess\nFinal Answer: Rome\nDone."
+    assert extract_answer_span(raw) == "Rome"
+
+
+def test_extract_answer_span_prefers_last_answer_tag_outside_thinking():
+    raw = "<think><answer>wrong</answer></think><answer>first</answer><final>Rome</final>"
+    assert extract_answer_span(raw) == "Rome"
+
+
+def test_score_record_preserves_raw_length_but_scores_final_span():
+    result = _result("d1#0").model_copy(update={"answer": "long reasoning\n</think>\nalpha"})
+    scores = score_record("hotpotqa", _question(available=False), result)
+    assert scores["prediction_raw_chars"] > len(scores["prediction_scored"])
+    assert scores["prediction_scored"] == "alpha"
+    assert scores["f1"] == 1.0
 
 
 def test_evidence_quality_metrics_are_na_without_gold_labels():

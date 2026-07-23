@@ -19,7 +19,9 @@ from ..data import normalize_jsonl
 from ..models import ExecutionResult, QuestionRecord, RunMetrics, SlotPlan
 from ..providers import AgnesClient, EmbeddingClient, RerankerClient, provider_clients
 from ..retrieval import EmbeddingCache, HybridRetriever
+from ..tracing import provider_trace, trace_metadata
 from .config import BenchmarkSuite
+from .baselines import audit_baselines
 from .datasets import DATASETS, load_sample
 from .methods import METHODS, compile_slotrag_plan, run_method, slotrag_compile_options
 from .metrics import score_record
@@ -527,17 +529,31 @@ class BenchmarkRunner:
                             if path.stem.rsplit("-", 1)[-1].isdigit()
                         ]
                         attempt_index = max(attempt_indices, default=0) + 1
+                        trace_path = (
+                            self.output_dir
+                            / "traces"
+                            / stage_name
+                            / dataset
+                            / method_label
+                            / _safe_id(question.id)
+                            / f"attempt-{attempt_index:04d}.jsonl"
+                        )
+                        trace_target = trace_path if self.app_config.trace.enabled else None
                         frozen_plan: SlotPlan | None = None
                         plan_provenance: dict[str, Any] | None = None
                         plan_error: Exception | None = None
                         if stage.frozen_plan_source is not None and METHODS[method].family == "slotrag":
                             try:
-                                frozen_plan, plan_provenance = self._load_or_create_frozen_plan(
-                                    stage_name,
-                                    dataset,
-                                    question,
-                                    stage.frozen_plan_source,
-                                )
+                                with provider_trace(
+                                    trace_target,
+                                    include_payloads=self.app_config.trace.include_payloads,
+                                ):
+                                    frozen_plan, plan_provenance = self._load_or_create_frozen_plan(
+                                        stage_name,
+                                        dataset,
+                                        question,
+                                        stage.frozen_plan_source,
+                                    )
                             except FrozenPlanPreparationError as exc:
                                 plan_error = exc
                                 plan_provenance = exc.provenance
@@ -552,8 +568,12 @@ class BenchmarkRunner:
                         if plan_error is None and METHODS[method].family != "graphrag":
                             index_started = time.perf_counter()
                             try:
-                                retriever = self._retriever(question)
-                                retriever.build_index()
+                                with provider_trace(
+                                    trace_target,
+                                    include_payloads=self.app_config.trace.include_payloads,
+                                ):
+                                    retriever = self._retriever(question)
+                                    retriever.build_index()
                             except Exception as exc:
                                 index_error = exc
                             index_build_ms = (time.perf_counter() - index_started) * 1000
@@ -583,19 +603,23 @@ class BenchmarkRunner:
                             result = ExecutionResult(status="failed", error=f"{index_error.__class__.__name__}: {index_error}")
                         else:
                             try:
-                                with _question_deadline(self.suite.budget.question_timeout_seconds):
-                                    result = run_method(
-                                        method,
-                                        dataset=dataset,
-                                        question=question,
-                                        retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
-                                        client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
-                                        config=self.app_config,
-                                        seed=seed,
-                                        max_steps=self.suite.budget.max_steps,
-                                        max_retrieval_calls=self.suite.budget.max_retrieval_calls,
-                                        frozen_plan=frozen_plan,
-                                    )
+                                with provider_trace(
+                                    trace_target,
+                                    include_payloads=self.app_config.trace.include_payloads,
+                                ):
+                                    with _question_deadline(self.suite.budget.question_timeout_seconds):
+                                        result = run_method(
+                                            method,
+                                            dataset=dataset,
+                                            question=question,
+                                            retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
+                                            client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
+                                            config=self.app_config,
+                                            seed=seed,
+                                            max_steps=self.suite.budget.max_steps,
+                                            max_retrieval_calls=self.suite.budget.max_retrieval_calls,
+                                            frozen_plan=frozen_plan,
+                                        )
                             except BenchmarkBudgetExceeded as exc:
                                 result = ExecutionResult(status="budget_exceeded", error=str(exc))
                             except Exception as exc:
@@ -625,8 +649,11 @@ class BenchmarkRunner:
                                 **plan_provenance,
                                 "effective_plan_sha256": _plan_sha256(result.plan),
                             }
+                        trace_info = trace_metadata(trace_target)
+                        if trace_info["enabled"]:
+                            trace_info["path"] = str(trace_path.relative_to(self.output_dir))
                         record = {
-                            "schema_version": 27,
+                            "schema_version": 28,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
@@ -643,6 +670,7 @@ class BenchmarkRunner:
                             "provider_delta": provider_delta,
                             "index_provider_delta": index_delta,
                             "plan_provenance": plan_provenance,
+                            "provider_trace": trace_info,
                             "failure_category": _failure_category(result.status, result.error, result.answer),
                         }
                         _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record)
@@ -709,6 +737,16 @@ class BenchmarkRunner:
                 "PlanRAG": _git_revision(root / "baseline" / "PlanRAG"),
                 "ircot": _git_revision(root / "baseline" / "ircot"),
                 "graph_rag": _git_revision(root / "baseline" / "graph_rag"),
+            },
+            "baseline_audit": audit_baselines(root, self.suite.datasets),
+            "comparison_validity": {
+                "status": "diagnostic_local_adapters",
+                "exact_upstream_execution_verified": False,
+                "publication_claim_allowed": False,
+                "reason": (
+                    "The benchmark methods are local controlled adapters until an explicit "
+                    "upstream execution record is attached for each baseline."
+                ),
             },
             "suite": self.suite.model_dump(mode="json"),
             "provider_config": self.app_config.public_dict(),

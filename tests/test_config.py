@@ -33,3 +33,12 @@ def test_provider_specific_limits_override_global_defaults(monkeypatch):
     assert config.rate_limit.agnes_max_concurrency == 64
     assert config.rate_limit.agnes_operational_rpm == 480
     assert config.rate_limit.agnes_provider_rpm == 600
+
+
+def test_trace_environment_override_is_public_and_secret_free(monkeypatch):
+    monkeypatch.setenv("SLOTRAG_TRACE_ENABLED", "true")
+    monkeypatch.setenv("SLOTRAG_TRACE_INCLUDE_PAYLOADS", "true")
+    config = AppConfig.from_yaml("configs/default.yaml")
+    assert config.trace.enabled is True
+    assert config.trace.include_payloads is True
+    assert "TRACE_INCLUDE_PAYLOADS" not in str(config.public_dict())
