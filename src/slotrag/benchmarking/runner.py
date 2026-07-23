@@ -74,7 +74,7 @@ def _git_revision(path: Path) -> str:
 
 def _source_fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
-    roots = [root / "src", root / "configs", root / "tests"]
+    roots = [root / "src", root / "configs", root / "tests", root / "tools"]
     files = [root / "pyproject.toml", root / "README.md", root / "benchmark" / "download_datasets.py"]
     for directory in roots:
         if directory.exists():

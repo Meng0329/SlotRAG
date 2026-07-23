@@ -305,25 +305,33 @@ class RerankerClient(_HTTPProvider):
 
 def provider_clients(config: Any, client: httpx.Client | None = None) -> tuple[AgnesClient, EmbeddingClient, RerankerClient]:
     state_dir = config.rate_limit.state_dir
-    rpm = config.rate_limit.operational_rpm
-    concurrency = config.rate_limit.max_concurrency
+    rate_limit = config.rate_limit
+
+    def limits(service: str) -> tuple[float, int]:
+        operational_rpm = getattr(rate_limit, f"{service}_operational_rpm", None) or rate_limit.operational_rpm
+        max_concurrency = getattr(rate_limit, f"{service}_max_concurrency", None) or rate_limit.max_concurrency
+        return operational_rpm, max_concurrency
+
+    agnes_rpm, agnes_concurrency = limits("agnes")
+    embedding_rpm, embedding_concurrency = limits("embedding")
+    reranker_rpm, reranker_concurrency = limits("reranker")
     return (
         AgnesClient(
             config.agnes,
             client,
-            rate_limiter=FileRateLimiter(state_dir / "agnes.json", rpm=rpm),
-            concurrency_limiter=FileConcurrencyLimiter(state_dir / "agnes", limit=concurrency),
+            rate_limiter=FileRateLimiter(state_dir / "agnes.json", rpm=agnes_rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "agnes", limit=agnes_concurrency),
         ),
         EmbeddingClient(
             config.embedding,
             client,
-            rate_limiter=FileRateLimiter(state_dir / "embedding.json", rpm=rpm),
-            concurrency_limiter=FileConcurrencyLimiter(state_dir / "embedding", limit=concurrency),
+            rate_limiter=FileRateLimiter(state_dir / "embedding.json", rpm=embedding_rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "embedding", limit=embedding_concurrency),
         ),
         RerankerClient(
             config.reranker,
             client,
-            rate_limiter=FileRateLimiter(state_dir / "reranker.json", rpm=rpm),
-            concurrency_limiter=FileConcurrencyLimiter(state_dir / "reranker", limit=concurrency),
+            rate_limiter=FileRateLimiter(state_dir / "reranker.json", rpm=reranker_rpm),
+            concurrency_limiter=FileConcurrencyLimiter(state_dir / "reranker", limit=reranker_concurrency),
         ),
     )

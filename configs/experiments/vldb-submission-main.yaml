@@ -1,0 +1,64 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+  - musique
+  - strategyqa
+  - drop
+seed: 2040
+random_seeds: [2040, 2041, 2042, 2043, 2044]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  main_comparison_smoke:
+    split: evaluation
+    sample_size: 5
+    methods:
+      - slotrag
+      - hybrid
+      - ircot
+      - react
+      - planrag
+      - srag
+      - graphrag
+  main_comparison:
+    split: evaluation
+    sample_size: 100
+    methods:
+      - slotrag
+      - hybrid
+      - ircot
+      - react
+      - planrag
+      - srag
+      - graphrag
+  execution_ablation:
+    split: evaluation
+    sample_size: 50
+    methods:
+      - slotrag
+      - slotrag-question
+      - slotrag-fixed
+      - slotrag-random
+      - slotrag-oracle
+      - slotrag-no-replan
+      - slotrag-late-join
+      - slotrag-eager
+      - slotrag-no-bindings
+      - slotrag-no-operators
+      - slotrag-grounded-role-projection
+    frozen_plan_source: slotrag
+  component_ablation:
+    split: evaluation
+    sample_size: 25
+    methods:
+      - slotrag
+      - slotrag-no-direct
+      - slotrag-no-extremum-template
+      - slotrag-no-polar-template
+      - slotrag-no-polar-consensus
+      - slotrag-typed-extraction

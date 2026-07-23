@@ -2174,6 +2174,31 @@ v28 replay 在 source 的 50 个冻结计划上完成了五个 replay 方法，�
 
 本轮机器审计产物：`runs/vldb2027-training-v28/online-validation.json`、`replay-audit.json`、`paired-statistics.json`、`mechanism-replay-metrics.json`；离线预注册快照已更新为 `offline-validation.json` 的 `replay_complete` 状态，source 判定仍保存在 `early-stop-validation.json`。
 
+#### v29 / vldb-submission-v1：五数据集投稿级主协议已冻结
+
+为回答“所有 baseline、benchmark、指标和消融是否完整”的投稿要求，新增统一配置 `configs/experiments/vldb-submission-main.yaml`，运行目录固定为 `runs/vldb2027-submission-v1`。本协议在任何 provider 调用前完成预注册，机器快照为 `offline-validation.preregistered.json`（SHA-256=`32a570562edca74c8e2c1c8fd3922910178acb538a3d89811d9bbe0bf8f06996`），数据审计为 `dataset-audit.json`。
+
+| 阶段 | 数据集 | 题数/数据集 | 方法/因子 | 预期 final |
+|---|---|---:|---|---:|
+| `main_comparison_smoke` | HotpotQA、2WikiMultihop、MuSiQue、StrategyQA、DROP evaluation | 5 | SlotRAG + Hybrid、IRCoT、ReAct、PlanRAG、SRAG、GraphRAG | 175 |
+| `main_comparison` | 同上 | 100 | 同上七路受控适配器 | 3,500 |
+| `execution_ablation` | 同上 | 50 | 原问题、自适应/固定/随机/Oracle 顺序，静态规划、no-replan、late-join、eager、no-bindings、no-operators、grounded-role projection；随机顺序使用 2040--2044 五个显式种子 | 3,750 |
+| `component_ablation` | 同上 | 25 | source、no-direct、no-extremum-template、no-polar-template、no-polar-consensus、typed-extraction | 750 |
+
+主比较和消融均使用同一 evaluation split、同一确定性分层采样和同一预算（最多 4 steps、64 次 LLM、4 次 retrieval、单题 300 秒）；不允许在线后重采样。每个 provider attempt（包括 retry）都必须取得 3 秒 permit，运行硬限为 20 RPM、许可上限 30 RPM、最大并发 2；失败 attempt 不覆盖，最终记录与 immutable attempts 分开统计。
+
+最终报告注册 EM/F1、Accuracy、DROP EM/F1、Evidence Recall/MRR/R@1/5/10、P@1/5/10、nDCG@10，以及文档/段落访问、索引与各阶段时延 P50/P95/P99、LLM/provider calls、attempt/retry、token、失败类别、结构化修复、grounding rejection、重规划、绑定/算子、anchor/repair 激活等全部列级指标。统计以题目配对为单位，保存 10,000 次 paired bootstrap 95% CI、精确 sign/McNemar 描述检验和 Holm 校正；无 gold evidence 的数据集只报告 N/A，不回填为 0。
+
+这里的 Hybrid、IRCoT、ReAct、PlanRAG、SRAG、GraphRAG 是 `src/slotrag/benchmarking/methods.py` 中在相同 normalized records、retrieval budget 和 provider 限流下运行的**受控本地适配器**；在没有逐项验证上游仓库训练/推理环境前，不把它们标成 exact upstream reproduction。`main_comparison_smoke` 仅用于验证 runner、服务和指标链路，不进入主表、显著性或投稿结论。
+
+晋级条件已在预注册中固定：四个阶段的 final 分母完整、所有 dataset-method cell 存在、最终 `ok` 率达到 0.98（smoke 为 0.95）、attempt/retry/provenance/hash 审计通过、paired statistics 和所有失败分母落盘，并将结果与本节同步后，才可称为 submission-ready。任何架构、谓词集、阈值或样本变化都必须新建运行目录和新的预注册快照；不能在同一 run 上改协议。
+
+#### v29-Qwen36：高并发服务切换与独立复验
+
+原 `runs/vldb2027-submission-v1` 使用旧 Agnes 服务的 smoke 在 52 条 final、52 条 attempts 处停止，未完成且不进入任何主表。根据新的本地服务文档 `docs/qwen3.6-27b.md`，生成服务切换为 Qwen3.6-27B；新运行目录固定为 `runs/vldb2027-submission-qwen36-v1`，与旧服务完全隔离。Qwen 地址通过 `QWEN36_BASE_URL` 传入，配置层会将 `/v1/chat/completions` 规范化为 `/v1`，密钥只从 `QWEN36_API_KEY` 读取，永不写入 manifest 或结果。
+
+Qwen 专用预注册快照为 `runs/vldb2027-submission-qwen36-v1/offline-validation.preregistered.json`，当前 SHA-256=`e0b0974893f6ddc0108dc3ff17b4e0a190da3296ce137f5ab77ca0368b446eb0`。生成服务初始限流为 provider 600 RPM、operational 480 RPM、并发 64；embedding/reranker 保持 30/20 RPM、默认并发 4。新增 `tools/run_benchmark_matrix.py` 按 dataset-method cell 启动最多 64 个独立 worker，单题仍沿用原子 item/immutable attempt、失败重试和共享文件限流，因此不会用线程共享全局 provider delta 伪造成本指标。先完成 35 个 cell 的 smoke（175 条 final），仅以吞吐、HTTP 错误、tool/JSON 解析和指标完整性决定是否提高并发；smoke 仍不进入最终结论。
+
 ---
 
 # 11. 关键消融

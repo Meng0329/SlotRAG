@@ -83,13 +83,27 @@ class RateLimitConfig(BaseModel):
 
     provider_rpm: float = Field(default=30.0, gt=0)
     operational_rpm: float = Field(default=20.0, gt=0)
-    max_concurrency: int = Field(default=4, gt=0, le=64)
+    max_concurrency: int = Field(default=4, gt=0, le=256)
+    agnes_provider_rpm: float | None = Field(default=None, gt=0)
+    agnes_operational_rpm: float | None = Field(default=None, gt=0)
+    agnes_max_concurrency: int | None = Field(default=None, gt=0, le=256)
+    embedding_provider_rpm: float | None = Field(default=None, gt=0)
+    embedding_operational_rpm: float | None = Field(default=None, gt=0)
+    embedding_max_concurrency: int | None = Field(default=None, gt=0, le=256)
+    reranker_provider_rpm: float | None = Field(default=None, gt=0)
+    reranker_operational_rpm: float | None = Field(default=None, gt=0)
+    reranker_max_concurrency: int | None = Field(default=None, gt=0, le=256)
     state_dir: Path = Path("runs/.rate-limits")
 
     @model_validator(mode="after")
     def validate_operational_limit(self) -> "RateLimitConfig":
         if self.operational_rpm > self.provider_rpm:
             raise ValueError("operational_rpm cannot exceed provider_rpm")
+        for service in ("agnes", "embedding", "reranker"):
+            provider_rpm = getattr(self, f"{service}_provider_rpm") or self.provider_rpm
+            operational_rpm = getattr(self, f"{service}_operational_rpm") or self.operational_rpm
+            if operational_rpm > provider_rpm:
+                raise ValueError(f"{service}_operational_rpm cannot exceed {service}_provider_rpm")
         return self
 
 
@@ -133,11 +147,33 @@ class AppConfig(BaseModel):
             "SLOTRAG_PROVIDER_RPM": ("rate_limit", "provider_rpm"),
             "SLOTRAG_OPERATIONAL_RPM": ("rate_limit", "operational_rpm"),
             "SLOTRAG_MAX_CONCURRENCY": ("rate_limit", "max_concurrency"),
+            "SLOTRAG_AGNES_PROVIDER_RPM": ("rate_limit", "agnes_provider_rpm"),
+            "SLOTRAG_AGNES_OPERATIONAL_RPM": ("rate_limit", "agnes_operational_rpm"),
+            "SLOTRAG_AGNES_MAX_CONCURRENCY": ("rate_limit", "agnes_max_concurrency"),
+            "SLOTRAG_EMBEDDING_PROVIDER_RPM": ("rate_limit", "embedding_provider_rpm"),
+            "SLOTRAG_EMBEDDING_OPERATIONAL_RPM": ("rate_limit", "embedding_operational_rpm"),
+            "SLOTRAG_EMBEDDING_MAX_CONCURRENCY": ("rate_limit", "embedding_max_concurrency"),
+            "SLOTRAG_RERANKER_PROVIDER_RPM": ("rate_limit", "reranker_provider_rpm"),
+            "SLOTRAG_RERANKER_OPERATIONAL_RPM": ("rate_limit", "reranker_operational_rpm"),
+            "SLOTRAG_RERANKER_MAX_CONCURRENCY": ("rate_limit", "reranker_max_concurrency"),
         }
         for env_name, (section, field) in mappings.items():
             value = os.getenv(env_name)
             if value:
                 raw.setdefault(section, {})[field] = value
+
+        qwen_base_url = os.getenv("QWEN36_BASE_URL")
+        qwen_model = os.getenv("QWEN36_MODEL")
+        qwen_api_key = os.getenv("QWEN36_API_KEY")
+        if qwen_base_url:
+            normalized = qwen_base_url.rstrip("/")
+            suffix = "/chat/completions"
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+            raw.setdefault("agnes", {})["base_url"] = normalized
+            raw["agnes"]["api_key_env"] = "QWEN36_API_KEY" if qwen_api_key else raw["agnes"].get("api_key_env", "QWEN36_API_KEY")
+        if qwen_model:
+            raw.setdefault("agnes", {})["model"] = qwen_model
 
     def public_dict(self) -> dict[str, Any]:
         """Return a manifest-safe config with no secrets."""
