@@ -2199,6 +2199,8 @@ v28 replay 在 source 的 50 个冻结计划上完成了五个 replay 方法，�
 
 Qwen 专用预注册快照为 `runs/vldb2027-submission-qwen36-v1/offline-validation.preregistered.json`，当前 SHA-256=`e0b0974893f6ddc0108dc3ff17b4e0a190da3296ce137f5ab77ca0368b446eb0`。生成服务初始限流为 provider 600 RPM、operational 480 RPM、并发 64；embedding/reranker 保持 30/20 RPM、默认并发 4。新增 `tools/run_benchmark_matrix.py` 按 dataset-method cell 启动最多 64 个独立 worker，单题仍沿用原子 item/immutable attempt、失败重试和共享文件限流，因此不会用线程共享全局 provider delta 伪造成本指标。先完成 35 个 cell 的 smoke（175 条 final），仅以吞吐、HTTP 错误、tool/JSON 解析和指标完整性决定是否提高并发；smoke 仍不进入最终结论。
 
+并发调优记录：64 生成并发的压力轮因 embedding/reranker 20 RPM 排队产生 27 个 300 秒 timeout；将检索侧调到 16 并发/120 operational RPM 后，32 个矩阵 worker 又产生 17 个 Qwen `ReadTimeout`。两数据集、14 cell 的 16 并发探针为 70/70 `ok`，因此 v3 固定生成/矩阵并发 16、生成 240 operational RPM、embedding/reranker 120 operational RPM。v3 干净 smoke 运行目录为 `runs/vldb2027-submission-qwen36-v3`，预注册 SHA-256=`8291de266519cb92c4550d644940ac47b9a890867b0ced0b90f8dbed69772b66`；175/175 final、176 attempts、173 `ok`、1 个空回答、1 个 MuSiQue 计划超过 4 槽的结构性预算失败，无 HTTP/配置失败，smoke gate 通过。空回答 retry 后仍为空，按失败分母保留，不回填为 0；该 smoke 只授权进入主对比，不授权最终论文结论。
+
 ---
 
 # 11. 关键消融

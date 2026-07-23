@@ -62,12 +62,22 @@ def main() -> int:
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=64)
+    parser.add_argument("--dataset", action="append", dest="datasets", help="Restrict to one or more configured datasets")
+    parser.add_argument("--method", action="append", dest="methods", help="Restrict to one or more methods in the stage")
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be positive")
     suite = BenchmarkSuite.from_yaml(args.suite)
     stage = suite.stage(args.stage)
-    jobs = [(dataset, method) for dataset in suite.datasets for method in stage.methods]
+    datasets = args.datasets or suite.datasets
+    methods = args.methods or stage.methods
+    unknown_datasets = sorted(set(datasets) - set(suite.datasets))
+    unknown_methods = sorted(set(methods) - set(stage.methods))
+    if unknown_datasets:
+        parser.error(f"datasets are not configured: {', '.join(unknown_datasets)}")
+    if unknown_methods:
+        parser.error(f"methods are not configured for {args.stage}: {', '.join(unknown_methods)}")
+    jobs = [(dataset, method) for dataset in datasets for method in methods]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = args.output_dir / "logs" / args.stage
     log_dir.mkdir(parents=True, exist_ok=True)
