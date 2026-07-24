@@ -53,6 +53,7 @@ class MethodSpec:
     query_grounded_anchor_context: bool = False
     query_anchor_plan_repair: bool = False
     evidence_surface_grounding_repair: bool = False
+    question_grounded_retrieval: bool = False
     description: str = ""
 
 
@@ -76,6 +77,8 @@ ABLATION_METHODS = [
     "slotrag-anchor-substitution",
     "slotrag-role-projected-substitution",
     "slotrag-grounded-role-projection",
+    "slotrag-question-grounded-retrieval",
+    "slotrag-grounded-question-retrieval",
     "slotrag-grounded-role-type-filter",
     "slotrag-anchor-window-projection",
     "slotrag-normalized-anchor-window-projection",
@@ -161,6 +164,21 @@ METHODS: dict[str, MethodSpec] = {
         grounded_entity_anchor_substitution=True,
         role_projected_extraction=True,
         direct_grounded_anchor_projection=True,
+    ),
+    "slotrag-question-grounded-retrieval": MethodSpec(
+        "slotrag-question-grounded-retrieval",
+        "slotrag",
+        question_grounded_retrieval=True,
+        description="slot retrieval augmented with the original question context",
+    ),
+    "slotrag-grounded-question-retrieval": MethodSpec(
+        "slotrag-grounded-question-retrieval",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        question_grounded_retrieval=True,
+        description="grounded role projection plus original-question retrieval context",
     ),
     "slotrag-grounded-role-type-filter": MethodSpec(
         "slotrag-grounded-role-type-filter",
@@ -844,6 +862,8 @@ def _run_slotrag(
         "max_passages": config.execution.materialization_top_k,
         "typed_extraction_contracts": spec.typed_extraction_contracts,
     }
+    if spec.question_grounded_retrieval:
+        materializer_options["question_context"] = question.question
     if spec.role_projected_extraction and protected_anchor_values:
         materializer_options.update({
             "role_projected_extraction": True,

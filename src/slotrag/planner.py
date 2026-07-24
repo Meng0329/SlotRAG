@@ -1124,6 +1124,7 @@ class SlotMaterializer:
         anchor_centered_extraction: bool = False,
         normalize_anchor_window_predicates: bool = False,
         evidence_surface_grounding_repair: bool = False,
+        question_context: str | None = None,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1137,6 +1138,7 @@ class SlotMaterializer:
         self.anchor_centered_extraction = anchor_centered_extraction
         self.normalize_anchor_window_predicates = normalize_anchor_window_predicates
         self.evidence_surface_grounding_repair = evidence_surface_grounding_repair
+        self.question_context = question_context.strip() if question_context else None
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1269,6 +1271,8 @@ class SlotMaterializer:
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         query = slot.query_text(bindings)
+        if self.question_context:
+            query = f"{self.question_context} {query}"
         retrieved_passages = self.retriever.search(query)[:self.max_passages]
         self.accessed_passage_ids.update(result.passage.id for result in retrieved_passages)
         self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in retrieved_passages)
