@@ -4,6 +4,14 @@
 
 建立可投稿、可复核、可重新分析的实验闭环。任何结果只有在 baseline 入口、数据 split、模型/提示词、答案解析、失败分母和原始调用记录都可追溯时，才允许进入论文主表。现有 `main_comparison` 和 `rescored-v2` 只作为本地适配器诊断，不进入投稿结论。
 
+截至 2026-07-24，`runs/vldb2027-adapted-main-v1` 已完成五数据集、七方法、每 cell 100
+题的 shared-provider adapted 主对比（3500 final / 3507 attempts / 3507 traces），并
+通过 records audit；gate 仅在显式 `--allow-adapted-protocol` 下返回
+`publication_ready_adapted_protocol`。该 run 的 `exact_upstream_execution_verified=false`，
+所以它可以进入单独的 adapted 结果表和方法诊断，不能作为击败 exact baseline 的投稿主表。
+当前主指标并未显示 SlotRAG 全面领先；后续消融必须使用不重叠 evaluation 题目，并把
+执行因素、组件因素、失败分母和 paired bootstrap 结果同步回本文档。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

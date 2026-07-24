@@ -731,6 +731,12 @@ class BenchmarkRunner:
             if cache_reuse_path.exists()
             else None
         )
+        sample_audit_path = self.output_dir / "sample-audit.json"
+        sample_audit = (
+            json.loads(sample_audit_path.read_text(encoding="utf-8"))
+            if sample_audit_path.exists()
+            else None
+        )
         initial_manifest = {
             "material_passport": {
                 "origin_skill": "academic-research-suite/experiment-agent",
@@ -753,6 +759,7 @@ class BenchmarkRunner:
             "baseline_audit": audit_baselines(root, self.suite.datasets),
             "adapter_protocol_audit": adapter_audit,
             "cache_reuse": cache_reuse,
+            "sample_audit": sample_audit,
             "comparison_validity": {
                 "status": "diagnostic_local_adapters",
                 "exact_upstream_execution_verified": False,
@@ -772,6 +779,11 @@ class BenchmarkRunner:
             },
             "dataset_audit": audit,
             "dataset_audit_sha256": hashlib.sha256(audit_path.read_bytes()).hexdigest() if audit_path.exists() else None,
+            "sample_audit_sha256": (
+                hashlib.sha256(sample_audit_path.read_bytes()).hexdigest()
+                if sample_audit_path.exists()
+                else None
+            ),
             "environment": {
                 "python": os.sys.version,
                 "python_executable": os.sys.executable,

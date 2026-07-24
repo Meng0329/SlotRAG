@@ -104,6 +104,7 @@ def audit_publication_readiness(
     manifest = _read_json(output_dir / "manifest.json") or {}
     matrix = _read_json(output_dir / "matrix-manifest.json")
     adapter_audit = _read_json(output_dir / "adapter-audit.json")
+    sample_audit = _read_json(output_dir / "sample-audit.json")
     record_audit = audit_run_records(output_dir, stage, require_trace=require_trace)
     expected_cells, matrix_errors = _expected_cells(output_dir, stage, manifest, matrix)
     observed_cells, ok_cells = _observed_cells(output_dir, stage)
@@ -117,6 +118,11 @@ def audit_publication_readiness(
         reasons.append("record_audit_incomplete")
     if "smoke" in stage.casefold():
         reasons.append("smoke_stage_not_for_publication")
+    if "ablation" in stage.casefold():
+        if sample_audit is None:
+            reasons.append("missing_or_invalid_sample_audit")
+        elif int(sample_audit.get("all_overlap_count", -1)) != 0:
+            reasons.append("ablation_sample_overlap")
     reasons.extend(matrix_errors)
 
     cell_report: list[dict[str, Any]] = []
@@ -187,6 +193,7 @@ def audit_publication_readiness(
             "adapted_protocol_errors": adapted_errors,
         },
         "adapter_audit": adapter_audit,
+        "sample_audit": sample_audit,
         "publication_scope": "adapted_protocol_only" if adapted_valid else ("exact_upstream" if exact_upstream else None),
         "cells": cell_report,
         "extra_observed_cells": [{"dataset": dataset, "method": method} for dataset, method in extra_cells],

@@ -2290,6 +2290,35 @@ gate 正确返回 `status=diagnostic_complete`、`publication_ready=false`；该
 `runs/vldb2027-adapted-smoke-hotpot-v1/summaries/main_comparison_smoke/`，原始输出和 trace
 不含 API key。
 
+#### v34：五数据集适配协议主对比完成（2026-07-24）
+
+在不改变题目、语料、Qwen3.6-27B、答案抽取和失败分母的前提下，完成
+`runs/vldb2027-adapted-main-v1` 的五数据集主对比：3500/3500 final，3507 次
+immutable attempts，3507 条 trace；其中 3457 个 final 为 `ok`，31 个为空回答，12 个
+预算失败，发生 7 次 retry。`records-audit-main.json` 的 `complete=true` 且没有缺失
+attempt/trace；显式 `--allow-adapted-protocol` 后 gate 返回
+`publication_ready_adapted_protocol`，但 `exact_upstream_execution_verified=false`。
+因此下面只能作为 shared-provider adapted 表，不能写成复现了外部仓库的 exact baseline。
+
+| 数据集 | SlotRAG | GraphRAG* | Hybrid* | IRCoT* | PlanRAG* | ReAct* | SRAG* |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2WikiMultiHopQA F1 | 0.7027 | 0.8199 | 0.8199 | 0.8016 | 0.7799 | 0.8155 | 0.6287 |
+| HotpotQA F1 | 0.6896 | 0.8231 | 0.7938 | 0.8177 | 0.7570 | 0.7895 | 0.7164 |
+| MuSiQue F1 | 0.4896 | 0.2130 | 0.4394 | 0.5139 | 0.4774 | 0.4811 | 0.3096 |
+| StrategyQA Accuracy | 0.8600 | 0.8700 | 0.8800 | 0.8900 | 0.8600 | 0.8700 | 0.8800 |
+| DROP F1 | 0.6178 | 0.7094 | 0.7195 | 0.7195 | 0.6944 | 0.7078 | 0.5639 |
+
+主指标宏平均为 SlotRAG 0.6719，低于 IRCoT* 0.7485、ReAct* 0.7328 和 Hybrid*
+0.7305；SlotRAG 的平均访问文档数约 4.45，低于 Hybrid* 的 6.50，但平均 total
+tokens 约 3819，高于 Hybrid* 的 2003，evidence R@5 也更低。换言之，当前实现只
+显示出访问文档数减少这一局部特征，尚未证明质量/成本 Pareto 优势，更不能宣称“全面
+领先”。31 个 PlanRAG* 空回答和 12 个预算失败已按 final/attempt 双分母保留在
+`summaries/main_comparison/failure_report.csv`；下一步用不重叠 evaluation 子集完成
+execution/component ablation，并据此决定是否建立新的候选方法配置。
+
+`*` 表示受控适配器，不是对应仓库的 exact upstream 执行；完整原始记录、配置、代码
+revision、cache reuse provenance 和统计 CSV 均保存在上述 run 目录。
+
 # 11. 关键消融
 
 必须包含：
