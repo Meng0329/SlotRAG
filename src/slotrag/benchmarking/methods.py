@@ -54,6 +54,7 @@ class MethodSpec:
     query_anchor_plan_repair: bool = False
     evidence_surface_grounding_repair: bool = False
     question_grounded_retrieval: bool = False
+    dual_query_retrieval: bool = False
     description: str = ""
 
 
@@ -79,6 +80,8 @@ ABLATION_METHODS = [
     "slotrag-grounded-role-projection",
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
+    "slotrag-dual-query-retrieval",
+    "slotrag-grounded-dual-query-retrieval",
     "slotrag-grounded-role-type-filter",
     "slotrag-anchor-window-projection",
     "slotrag-normalized-anchor-window-projection",
@@ -179,6 +182,23 @@ METHODS: dict[str, MethodSpec] = {
         direct_grounded_anchor_projection=True,
         question_grounded_retrieval=True,
         description="grounded role projection plus original-question retrieval context",
+    ),
+    "slotrag-dual-query-retrieval": MethodSpec(
+        "slotrag-dual-query-retrieval",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        description="RRF fusion of slot-only and original-question augmented retrieval",
+    ),
+    "slotrag-grounded-dual-query-retrieval": MethodSpec(
+        "slotrag-grounded-dual-query-retrieval",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        description="grounded role projection with dual-query RRF retrieval",
     ),
     "slotrag-grounded-role-type-filter": MethodSpec(
         "slotrag-grounded-role-type-filter",
@@ -864,6 +884,8 @@ def _run_slotrag(
     }
     if spec.question_grounded_retrieval:
         materializer_options["question_context"] = question.question
+    if spec.dual_query_retrieval:
+        materializer_options["dual_query_retrieval"] = True
     if spec.role_projected_extraction and protected_anchor_values:
         materializer_options.update({
             "role_projected_extraction": True,

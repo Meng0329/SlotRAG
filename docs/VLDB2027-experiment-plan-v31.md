@@ -12,6 +12,24 @@
 当前主指标并未显示 SlotRAG 全面领先；后续消融必须使用不重叠 evaluation 题目，并把
 执行因素、组件因素、失败分母和 paired bootstrap 结果同步回本文档。
 
+## 当前方法调优状态（2026-07-24）
+
+外部 baseline 的 adapted 数值已冻结，不再为了调优重复执行。SlotRAG 内部先在 train 做
+方法筛选：`runs/slotrag-method-tune-v1`（11 个模块变体、550 final）和
+`runs/slotrag-method-tune-v2`（7 个候选、350 final）均保留 manifest、trace、immutable
+attempt、records audit、gate 和全指标 CSV。v2 的双查询检索候选在 train primary 宏平均上为
+`0.7015`，高于 plain `0.5811`，但检索调用约翻倍且有预算失败；该结果只能用于选择 held-out
+候选，不能作为投稿优势声明。
+
+最终候选采用双协议记录：严格 4 steps / 4 retrieval calls 的
+`runs/slotrag-final-candidate-v1` 因重新编译计划导致高预算失败而被主动停止，目录含
+`INCOMPLETE_FOR_SUBMISSION.txt` 和 `scheduler-stop.json`，不得进入任何表。可解释的执行因素
+验证改为 `runs/slotrag-final-candidate-replay-v1`：从适配主实验 SlotRAG final record 导出 500
+个校验过的 frozen plans（`input_sha256`/`plan_sha256`/来源状态），在完全相同的 500 个问题上
+比较 plain、DQR 和 grounded-DQR。replay 使用 10 steps / 12 retrieval calls，仅用于同计划模块
+因果与成本比较；它与原 4/4 adapted 主表分栏，完成后必须重新运行 records audit、gate、完整
+指标、paired bootstrap 和失败报告，才允许文档写入任何质量结论。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

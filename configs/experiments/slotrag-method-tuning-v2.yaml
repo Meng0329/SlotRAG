@@ -1,0 +1,27 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+  - musique
+  - strategyqa
+  - drop
+seed: 4071
+random_seeds: [4071, 4072, 4073, 4074, 4075]
+budget:
+  max_steps: 6
+  max_llm_calls: 64
+  max_retrieval_calls: 6
+  question_timeout_seconds: 300
+stages:
+  method_tune:
+    split: train
+    sample_size: 10
+    methods:
+      - slotrag
+      - slotrag-question-grounded-retrieval
+      - slotrag-grounded-role-projection
+      - slotrag-grounded-question-retrieval
+      - slotrag-dual-query-retrieval
+      - slotrag-grounded-dual-query-retrieval
+      - slotrag-repaired-context-anchor-window-projection

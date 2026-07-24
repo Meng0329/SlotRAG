@@ -1125,6 +1125,7 @@ class SlotMaterializer:
         normalize_anchor_window_predicates: bool = False,
         evidence_surface_grounding_repair: bool = False,
         question_context: str | None = None,
+        dual_query_retrieval: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1139,6 +1140,7 @@ class SlotMaterializer:
         self.normalize_anchor_window_predicates = normalize_anchor_window_predicates
         self.evidence_surface_grounding_repair = evidence_surface_grounding_repair
         self.question_context = question_context.strip() if question_context else None
+        self.dual_query_retrieval = dual_query_retrieval
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1270,10 +1272,34 @@ class SlotMaterializer:
         return None
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
-        query = slot.query_text(bindings)
-        if self.question_context:
-            query = f"{self.question_context} {query}"
-        retrieved_passages = self.retriever.search(query)[:self.max_passages]
+        slot_query = slot.query_text(bindings)
+        retrieval_calls = 1
+        query = slot_query
+        if self.question_context and self.dual_query_retrieval:
+            question_query = f"{self.question_context} {slot_query}"
+            ranked_lists = [self.retriever.search(slot_query), self.retriever.search(question_query)]
+            retrieval_calls = 2
+            query = f"{slot_query} || {question_query}"
+            rrf_scores: dict[str, float] = {}
+            representatives: dict[str, RetrievalResult] = {}
+            for ranked in ranked_lists:
+                for rank, result in enumerate(ranked, start=1):
+                    passage_id = result.passage.id
+                    rrf_scores[passage_id] = rrf_scores.get(passage_id, 0.0) + 1.0 / (60 + rank)
+                    current = representatives.get(passage_id)
+                    if current is None or result.score > current.score:
+                        representatives[passage_id] = result
+            retrieved_passages = [
+                representatives[passage_id].model_copy(update={"score": rrf_scores[passage_id]})
+                for passage_id in sorted(
+                    representatives,
+                    key=lambda item: (-rrf_scores[item], -representatives[item].score, item),
+                )[:self.max_passages]
+            ]
+        else:
+            if self.question_context:
+                query = f"{self.question_context} {slot_query}"
+            retrieved_passages = self.retriever.search(query)[:self.max_passages]
         self.accessed_passage_ids.update(result.passage.id for result in retrieved_passages)
         self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in retrieved_passages)
         self.last_evidence = [
@@ -1342,7 +1368,7 @@ class SlotMaterializer:
             if self.typed_extraction_contracts and value_type == "boolean" and field in requested_fields
         }
         metrics = RunMetrics(
-            retrieval_calls=1,
+            retrieval_calls=retrieval_calls,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
             typed_extraction_contracts=int(bool(boolean_fields and passages)),

@@ -86,6 +86,43 @@ class FakeRetriever:
         return [RetrievalResult(passage=Passage(id="p", text="Fact"), score=1.0)]
 
 
+def test_materializer_dual_query_retrieval_merges_and_accounts_for_both_searches():
+    class RecordingRetriever:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            if query.startswith("Who founded Alpha?"):
+                return [
+                    RetrievalResult(passage=Passage(id="shared", doc_id="d1", text="Shared fact"), score=0.8),
+                    RetrievalResult(passage=Passage(id="question", doc_id="d2", text="Question fact"), score=0.7),
+                ]
+            return [
+                RetrievalResult(passage=Passage(id="slot", doc_id="d3", text="Slot fact"), score=0.9),
+                RetrievalResult(passage=Passage(id="shared", doc_id="d1", text="Shared fact"), score=0.8),
+            ]
+
+    retriever = RecordingRetriever()
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "shared"}]]),
+        retriever,
+        question_context="Who founded Alpha?",
+        dual_query_retrieval=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]),
+        {},
+    )
+
+    assert retriever.queries == ["Founded Alpha ?founder", "Who founded Alpha? Founded Alpha ?founder"]
+    assert [row.bindings for row in rows] == [{"founder": "Ada"}]
+    assert metrics.retrieval_calls == 2
+    assert materializer.accessed_passage_ids == {"slot", "shared", "question"}
+    assert [item.source_id for item in materializer.last_evidence].count("shared") == 1
+
+
 class SequenceExtractionClient:
     def __init__(self, rows):
         self.rows = list(rows)

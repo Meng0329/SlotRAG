@@ -2319,6 +2319,55 @@ execution/component ablation，并据此决定是否建立新的候选方法配�
 `*` 表示受控适配器，不是对应仓库的 exact upstream 执行；完整原始记录、配置、代码
 revision、cache reuse provenance 和统计 CSV 均保存在上述 run 目录。
 
+#### v35：SlotRAG 模块筛选、双查询候选与冻结计划验证（2026-07-24）
+
+在冻结外部 baseline 数值后，后续实验只优化和验证 SlotRAG 自身。第一轮模块筛选
+`runs/slotrag-method-tune-v1` 使用五数据集 train、每 dataset-method 10 题、6 steps / 6
+retrieval calls，完成 550/550 final（544 `ok`、6 个预算失败），records audit 和 gate 均
+通过。它不是投稿主表，而是用于判断组件是否值得进入独立 held-out 验证。该轮中 plain
+SlotRAG 的跨数据集 primary 宏平均为 `0.5811`；移除 direct plan 或 polar consensus 后分别为
+`0.5729` / `0.5611`，提示这两个默认模块在该训练筛选中有正贡献。相反，移除 extremum
+template 或 polar template 的小样本值均为 `0.6011`，typed extraction 为 `0.5811`；这些差异
+尚未经过足够样本的显著性验证，不能据此删除模块或写成论文结论。
+
+第二轮 `runs/slotrag-method-tune-v2` 在相同 train 协议下完成 350/350 final、350 immutable
+attempts 和 trace；344 `ok`、6 个 budget/timeout、0 个服务错误，`records-audit.json` 为
+`complete=true`，gate 为 `publication_ready`。新增的 **Dual-Query Retrieval (DQR)** 对每个
+slot 分别发起 slot-only 与 original-question-augmented 检索，以 RRF（`k=60`）融合、按 passage
+ID 去重后再物化；不读取答案、gold evidence、题目 ID 或外部知识。DQR 训练筛选结果如下，
+其中 quality 使用跨数据集 primary 宏平均，不能替代 held-out 结论：
+
+| 方法 | primary 宏平均 | 相对 plain | 平均 retrieval calls | 平均 total tokens | 平均 wall latency |
+|---|---:|---:|---:|---:|---:|
+| SlotRAG | 0.5811 | - | 1.48 | 3788.5 | 54.28 s |
+| Question-grounded retrieval | 0.6387 | +9.9% | 1.46 | 3592.4 | 47.60 s |
+| Grounded role projection | 0.6124 | +5.4% | 1.38 | 3868.2 | 64.52 s |
+| Grounded question retrieval | 0.6484 | +11.6% | 1.44 | 3690.6 | 73.81 s |
+| **DQR** | **0.7015** | **+20.7%** | **2.84** | **3583.9** | **60.92 s** |
+| Grounded DQR | 0.6727 | +15.8% | 2.80 | 3609.6 | 71.21 s |
+| Repaired context/anchor-window projection | 0.6440 | +10.8% | 1.38 | 4442.0 | 71.55 s |
+
+DQR 在训练样本上质量最好，但多一次检索会使 retrieval calls 约翻倍，并在 HotpotQA/MuSiQue
+各出现预算失败；所有 paired bootstrap 的 Holm 校正后 p 值仍不显著，原因是每 cell 只有 10
+题。因此 DQR 仅被选为 held-out 候选，尚未设为默认架构，也不能宣称相对任何 baseline 领先。
+
+为避免候选重新编译计划使“检索模块效果”和“随机计划差异”混在一起，新增
+`tools/build_frozen_plan_import.py`。它从 `runs/vldb2027-adapted-main-v1` 的 SlotRAG final
+records 和原始 sample JSONL 构建 500 个带 `input_sha256`、`plan_sha256`、compiler options 和
+源执行状态的可导入计划；其中 6 个源记录虽受原 4/4 预算限制，但保留了合法 plan，因此只
+作为计划来源而不掩盖源失败。严格同预算候选诊断
+`runs/slotrag-final-candidate-v1` 在 370/1500 final 时被主动停止并写入
+`INCOMPLETE_FOR_SUBMISSION.txt`：重新编译导致长题频繁触发 4-slot/4-retrieval 上限，不能用该
+不稳定过程得出质量结论，所有中间 item/attempt/trace 与 `scheduler-stop.json` 仍保留。
+
+当前正式候选验证为 `runs/slotrag-final-candidate-replay-v1`，使用与主实验完全相同的 500 个
+question IDs 和冻结计划，比较 `slotrag`、`slotrag-dual-query-retrieval`、
+`slotrag-grounded-dual-query-retrieval` 的执行行为。该 replay 为覆盖主源计划的独立协议，预算
+明确扩大到 10 steps / 12 retrieval calls；因此只可用于同计划的组件因果比较和成本分析，不能
+直接替代原 4/4 adapted 主表。样本 SHA-256、计划 import audit、matrix manifest、trace、attempt
+和服务 doctor 均在 run 目录保存；待 1500 条记录完成 records audit、gate、bootstrap 后再写入
+held-out 质量和失败率结论。
+
 # 11. 关键消融
 
 必须包含：
