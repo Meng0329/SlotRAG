@@ -11,6 +11,7 @@ from .baseline import run_whole_question_baseline
 from .benchmarking.config import BenchmarkSuite
 from .benchmarking.baselines import audit_baselines
 from .benchmarking.datasets import DATASETS, audit_suite
+from .benchmarking.factorial import analyze_factorial_csv
 from .benchmarking.record_audit import audit_run_records
 from .benchmarking.sample_audit import audit_existing_samples
 from .benchmarking.publication_gate import audit_publication_readiness
@@ -220,6 +221,35 @@ def benchmark_summarize(
 ) -> None:
     """Aggregate metrics and paired bootstrap comparisons for one stage."""
     report = summarize_run(output_dir, stage)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("factorial-analyze")
+def benchmark_factorial_analyze(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+    metrics: str = typer.Option(
+        "primary_score,em,f1,evidence_recall,evidence_mrr,evidence_ndcg_at_10,retrieval_calls,provider_calls,total_tokens,wall_latency_ms",
+        help="Comma-separated per-question metrics to analyze.",
+    ),
+    iterations: int = typer.Option(10_000, min=100),
+    seed: int = typer.Option(27_182),
+    output: Optional[Path] = typer.Option(None, help="Directory for factorial JSON and CSV artifacts."),
+) -> None:
+    """Analyze the preregistered 2x3 grounding-retrieval factorial design."""
+    gate = audit_publication_readiness(output_dir, stage, require_trace=True)
+    if not gate["analysis_ready"]:
+        typer.echo(json.dumps(gate, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=2)
+    summary_dir = output_dir / "summaries" / stage
+    artifact_dir = output or summary_dir
+    report = analyze_factorial_csv(
+        summary_dir / "per_question.csv",
+        artifact_dir,
+        metrics=[item.strip() for item in metrics.split(",") if item.strip()],
+        iterations=iterations,
+        seed=seed,
+    )
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
