@@ -196,11 +196,13 @@ def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _frozen_plan_audit(
+def audit_frozen_plan_replays(
     output_dir: Path,
     stage: str,
-    records: list[dict[str, Any]],
+    records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if records is None:
+        records = load_records(output_dir, stage)
     snapshot_paths = sorted((output_dir / "plans" / stage).rglob("*.json")) if (output_dir / "plans" / stage).exists() else []
     snapshots: list[dict[str, Any]] = []
     invalid_snapshot_count = 0
@@ -951,7 +953,7 @@ def summarize_run(output_dir: Path, stage: str) -> dict[str, Any]:
     failures = failure_report(attempt_records)
     retrieval = _retrieval_report(summaries)
     validity = _validity_report(output_dir, stage, records, len(attempts))
-    frozen_plan_audit = _frozen_plan_audit(output_dir, stage, records)
+    frozen_plan_audit = audit_frozen_plan_replays(output_dir, stage, records)
     report = {
         "stage": stage,
         "record_count": len(records),

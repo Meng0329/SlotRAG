@@ -2,6 +2,7 @@ import hashlib
 import json
 
 from slotrag.benchmarking.publication_gate import audit_publication_readiness
+from slotrag.models import SlotPlan
 
 
 def _write_run(root, *, exact_upstream: bool, stage: str = "test", adapted: bool = False):
@@ -124,3 +125,53 @@ def test_gate_rejects_adapted_protocol_without_audit_file(tmp_path):
 
     assert report["publication_ready"] is False
     assert any(reason.startswith("adapted_protocol_invalid:") for reason in report["blocking_reasons"])
+
+
+def test_gate_rejects_replay_hash_not_backed_by_frozen_snapshot(tmp_path):
+    _write_run(tmp_path, exact_upstream=True)
+    source_plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Source", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    }).model_dump(mode="json")
+    raced_plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Raced", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    }).model_dump(mode="json")
+
+    def plan_hash(plan):
+        payload = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    item_path = tmp_path / "items" / "test" / "hotpotqa" / "hybrid" / "q1.json"
+    record = json.loads(item_path.read_text(encoding="utf-8"))
+    raced_hash = plan_hash(raced_plan)
+    record["result"].update({
+        "plan": raced_plan,
+        "metrics": {"frozen_plan_replays": 1},
+    })
+    record["plan_provenance"] = {
+        "status": "ok",
+        "source_method": "slotrag",
+        "plan_sha256": raced_hash,
+        "effective_plan_sha256": raced_hash,
+    }
+    item_path.write_text(json.dumps(record), encoding="utf-8")
+    attempt_path = tmp_path / "attempts" / "test" / "hotpotqa" / "hybrid" / "q1" / "attempt-0001.json"
+    attempt_path.write_text(json.dumps(record), encoding="utf-8")
+
+    snapshot_path = tmp_path / "plans" / "test" / "hotpotqa" / "q1.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(json.dumps({
+        "status": "ok",
+        "source_method": "slotrag",
+        "plan_sha256": plan_hash(source_plan),
+        "plan": source_plan,
+        "compiler_metrics": {},
+    }), encoding="utf-8")
+
+    report = audit_publication_readiness(tmp_path, "test", require_trace=True)
+
+    assert report["publication_ready"] is False
+    assert report["status"] == "blocked"
+    assert report["frozen_plan_audit"]["unknown_snapshot_hash_count"] == 1
+    assert "frozen_plan_unknown_snapshot_hash" in report["blocking_reasons"]

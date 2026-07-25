@@ -14,6 +14,7 @@ from typing import Any
 
 from .adapted_protocol import validate_adapter_audit
 from .record_audit import audit_run_records
+from .statistics import audit_frozen_plan_replays
 
 
 _BASELINE_METHODS = {"hybrid", "ircot", "planrag", "react", "srag", "graphrag"}
@@ -106,6 +107,7 @@ def audit_publication_readiness(
     adapter_audit = _read_json(output_dir / "adapter-audit.json")
     sample_audit = _read_json(output_dir / "sample-audit.json")
     record_audit = audit_run_records(output_dir, stage, require_trace=require_trace)
+    frozen_plan_audit = audit_frozen_plan_replays(output_dir, stage)
     expected_cells, matrix_errors = _expected_cells(output_dir, stage, manifest, matrix)
     observed_cells, ok_cells = _observed_cells(output_dir, stage)
 
@@ -123,6 +125,20 @@ def audit_publication_readiness(
             reasons.append("missing_or_invalid_sample_audit")
         elif int(sample_audit.get("all_overlap_count", -1)) != 0:
             reasons.append("ablation_sample_overlap")
+    frozen_plan_checks = {
+        "invalid_snapshot_count": "frozen_plan_invalid_snapshot",
+        "missing_provenance_count": "frozen_plan_missing_provenance",
+        "missing_result_plan_count": "frozen_plan_missing_result_plan",
+        "missing_effective_plan_hash_count": "frozen_plan_missing_effective_hash",
+        "plan_hash_mismatch_count": "frozen_plan_result_hash_mismatch",
+        "unknown_snapshot_hash_count": "frozen_plan_unknown_snapshot_hash",
+        "inconsistent_pair_count": "frozen_plan_inconsistent_pair",
+    }
+    if frozen_plan_audit["replay_record_count"] and not frozen_plan_audit["valid_snapshot_count"]:
+        reasons.append("frozen_plan_missing_valid_snapshot")
+    for key, reason in frozen_plan_checks.items():
+        if int(frozen_plan_audit[key]) > 0:
+            reasons.append(reason)
     reasons.extend(matrix_errors)
 
     cell_report: list[dict[str, Any]] = []
@@ -163,7 +179,17 @@ def audit_publication_readiness(
         "missing_or_invalid_manifest",
         "missing_or_invalid_matrix_manifest",
     }
-    analysis_ready = not [reason for reason in reasons if reason in analysis_blockers or reason.startswith(("cell_count_mismatch:", "unexpected_observed_cells:", "duplicate matrix cell:"))]
+    analysis_ready = not [
+        reason
+        for reason in reasons
+        if reason in analysis_blockers
+        or reason.startswith((
+            "cell_count_mismatch:",
+            "unexpected_observed_cells:",
+            "duplicate matrix cell:",
+            "frozen_plan_",
+        ))
+    ]
     publication_ready = analysis_ready and "smoke_stage_not_for_publication" not in reasons and (
         exact_upstream or not baseline_methods or (allow_adapted_protocol and adapted_valid)
     )
@@ -185,6 +211,7 @@ def audit_publication_readiness(
         "allow_adapted_protocol": allow_adapted_protocol,
         "require_trace": require_trace,
         "record_audit": record_audit,
+        "frozen_plan_audit": frozen_plan_audit,
         "baseline_execution": {
             "methods": baseline_methods,
             "exact_upstream_execution_verified": exact_upstream,
