@@ -43,6 +43,7 @@ METRICS = [
     "dual_query_expansions",
     "dual_query_skips",
     "dual_query_confidence_skips",
+    "dual_query_guard_fallbacks",
     "embedding_calls",
     "reranker_calls",
     "prompt_tokens",

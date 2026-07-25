@@ -210,6 +210,38 @@ def test_materializer_confidence_gate_expands_when_slot_result_is_weak():
     assert metrics.dual_query_confidence_skips == 0
 
 
+def test_materializer_evidence_guard_falls_back_when_question_results_are_weaker_and_disjoint():
+    class RecordingRetriever:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            if query.startswith("Who founded Alpha?"):
+                return [RetrievalResult(passage=Passage(id="question", text="Unrelated fact"), score=0.1)]
+            return [RetrievalResult(passage=Passage(id="slot", text="Weak but relevant fact"), score=0.2)]
+
+    retriever = RecordingRetriever()
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"company": "Alpha", "source_id": "slot"}]]),
+        retriever,
+        question_context="Who founded Alpha?",
+        dual_query_retrieval=True,
+        dual_query_confidence_threshold=0.75,
+        dual_query_evidence_guard=True,
+    )
+
+    _rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="Founded", arguments=["Ada", "?company"]),
+        {},
+    )
+
+    assert retriever.queries == ["Founded Ada ?company", "Who founded Alpha? Founded Ada ?company"]
+    assert [item.source_id for item in materializer.last_evidence] == ["slot"]
+    assert metrics.dual_query_expansions == 1
+    assert metrics.dual_query_guard_fallbacks == 1
+
+
 class SequenceExtractionClient:
     def __init__(self, rows):
         self.rows = list(rows)

@@ -57,6 +57,7 @@ class MethodSpec:
     dual_query_retrieval: bool = False
     dual_query_unbound_only: bool = False
     dual_query_confidence_threshold: float | None = None
+    dual_query_evidence_guard: bool = False
     description: str = ""
 
 
@@ -88,6 +89,7 @@ ABLATION_METHODS = [
     "slotrag-grounded-adaptive-dual-query-retrieval",
     "slotrag-confidence-gated-dual-query-0p5",
     "slotrag-confidence-gated-dual-query-0p75",
+    "slotrag-confidence-guarded-dual-query-0p5",
     "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5",
     "slotrag-grounded-adaptive-confidence-gated-dual-query-0p75",
     "slotrag-grounded-role-type-filter",
@@ -242,6 +244,15 @@ METHODS: dict[str, MethodSpec] = {
         dual_query_retrieval=True,
         dual_query_confidence_threshold=0.75,
         description="dual retrieval only when slot-only top reranker score is below 0.75",
+    ),
+    "slotrag-confidence-guarded-dual-query-0p5": MethodSpec(
+        "slotrag-confidence-guarded-dual-query-0p5",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_confidence_threshold=0.5,
+        dual_query_evidence_guard=True,
+        description="confidence-gated dual retrieval with evidence-support fallback",
     ),
     "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5": MethodSpec(
         "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5",
@@ -957,6 +968,8 @@ def _run_slotrag(
         materializer_options["dual_query_unbound_only"] = True
     if spec.dual_query_confidence_threshold is not None:
         materializer_options["dual_query_confidence_threshold"] = spec.dual_query_confidence_threshold
+    if spec.dual_query_evidence_guard:
+        materializer_options["dual_query_evidence_guard"] = True
     if spec.role_projected_extraction and protected_anchor_values:
         materializer_options.update({
             "role_projected_extraction": True,

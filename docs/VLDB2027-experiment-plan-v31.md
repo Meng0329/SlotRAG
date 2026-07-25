@@ -108,6 +108,14 @@ retrieval/provider/wall 增加；adaptive 变体在 HotpotQA/MuSiQue 失败较�
 attempt、完整失败分母和 paired bootstrap；若质量优势或成本节省不稳定，默认回退 plain SlotRAG。该轮
 所有产物在 `runs/slotrag-method-tune-v5-traced/summaries/method_tune/`。
 
+### v40 race-free held-out 门控复验（2026-07-25）
+
+`runs/slotrag-confidence-gate-replay-v1` 标记为不可投稿诊断：并发冻结计划创建竞态导致 6 个问题的 `unknown_snapshot_hash_count=6`、`inconsistent_pair_count=6`。代码提交 `2f398c2` 在快照存在性检查、编译、写入之间加入跨进程锁，`400e3ba` 将冻结计划哈希异常加入 gate 阻断条件；v1 原始 attempt/trace 保留，禁止回填或覆盖。
+
+干净复验使用 `configs/experiments/slotrag-confidence-gate-replay-v2.yaml` 与同 SHA 的不重叠 evaluation 样本，冻结计划从 v1 只读导入，1000 条 final/attempt/trace 全部完整。结果：995 `ok`、5 `budget_exceeded`；500/500 导入快照有效，`unknown_snapshot_hash=0`、`inconsistent_pair=0`、`plan_hash_mismatch=0`；records audit 和 gate 均为 ready。宏平均 plain/gated primary 为 `0.6382/0.6415`（+0.52%），但 EM `0.2940/0.2840`、F1 `0.4463/0.4398`，retrieval/provider/wall 分别 `+24.6%/+15.9%/+16.0%`；Holm 校正的五个 paired p 值全部为 `1.0`。这只能作为方法内部的 held-out adapted comparison，不能作为 exact upstream baseline 结果或显著优势。
+
+因此 `gated DQR 0.5` 撤回默认，plain SlotRAG 暂为默认。下一阶段先在 train/dev 做选择性双查询优化：按数据集/问题类型校准门控阈值；扩展后计算证据支持置信度，支持度下降则回退 slot-only 结果；设置每题额外检索上限并记录触发/回退/成本 telemetry。只有新、不重叠 held-out 复验在质量和成本上同时通过，才允许晋级主方法；所有结果继续写入本节和方法文档，禁止手工调整数值。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

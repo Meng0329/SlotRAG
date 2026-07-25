@@ -2495,6 +2495,28 @@ records audit 和 gate 均通过，仍属于 train-only 方法筛选。
 门控命中、质量、证据、失败分母、P50/P95/P99 和成本；若门控无法稳定降低 wall/provider 成本，则回退
 到 plain SlotRAG。完整记录在 `runs/slotrag-method-tune-v5-traced/summaries/method_tune/`。
 
+#### v40：race-free held-out confidence gate replay（2026-07-25）
+
+第一次 held-out 目录 `runs/slotrag-confidence-gate-replay-v1` 不进入投稿统计：并发 worker 在同一冻结计划尚不存在时同时编译，造成 6 个问题的 `unknown_snapshot_hash_count=6`、`inconsistent_pair_count=6`。该目录保留为不可变诊断证据，并写有 `INCOMPLETE_FOR_SUBMISSION.txt`；没有删除、覆盖或补造 trace。修复 `2f398c2` 将冻结计划的检查、创建和写入放入同一跨进程锁，修复 `400e3ba` 使上述审计异常直接阻断 publication gate。
+
+随后在同一组不重叠 evaluation 题目上运行 `runs/slotrag-confidence-gate-replay-v2`：五个数据集各 100 题，与 `runs/slotrag-grounded-adaptive-replay-v2` 的源样本重叠为 0；门控方法和 plain 方法共享 v1 最终冻结计划的只读导入快照。1000/1000 final、attempt、trace 完整，995 `ok`、5 `budget_exceeded`，无 failed；HotpotQA 门控为 99/100 `ok`，MuSiQue 为 96/100，其余 cell 为 100/100。500 个导入快照全部有效，`unknown_snapshot_hash=0`、`inconsistent_pair=0`、`plan_hash_mismatch=0`，records audit 与 gate 均通过。
+
+| 指标（宏平均） | plain SlotRAG | gated DQR 0.5 | 差值/相对变化 |
+|---|---:|---:|---:|
+| primary | 0.6382 | 0.6415 | +0.0033 / +0.52% |
+| EM | 0.2940 | 0.2840 | -0.0100 |
+| F1 | 0.4463 | 0.4398 | -0.0065 |
+| Evidence Recall/MRR/nDCG@10 | 0.7788/0.9485/0.7941 | 0.7825/0.9510/0.7987 | +0.0038/+0.0025/+0.0046 |
+| retrieval calls | 1.650 | 2.056 | +24.6% |
+| dual-query expansion / confidence skip | 0/0 | 0.476/1.104 | -- |
+| total tokens | 2629.2 | 2385.8 | -9.3% |
+| provider calls | 5.360 | 6.212 | +15.9% |
+| wall latency (mean) | 42.33 s | 49.09 s | +16.0% |
+
+逐数据集 primary（plain → gated，门控 OK/100）为：2Wiki `0.6634→0.6568 (100)`、DROP `0.5672→0.5759 (100)`、HotpotQA `0.6875→0.6757 (99)`、MuSiQue `0.3927→0.4091 (96)`、StrategyQA `0.8800→0.8900 (100)`。五个 paired bootstrap 的 95% CI 均跨 0，Holm 校正 p 值全部为 `1.0`；因此不能声称显著提升，更不能声称超过 baseline 或达到 10% 优势。完整 EM/F1、DROP EM/F1、Evidence R/P/MRR/nDCG@1/5/10、P50/P95/P99、token/provider/索引/计划/失败分类和逐题结果分别见 `runs/slotrag-confidence-gate-replay-v2/summaries/confidence_gate_replay/{summary.json,metrics.csv,per_question.csv,stratified_metrics.csv,retrieval_metrics.csv,paired_bootstrap.csv,failure_report.csv}`。
+
+决策：撤回 `gated DQR 0.5` 的默认资格，保留为消融记录。当前 held-out 结果说明仅按首条重排得分触发第二路检索会增加 retrieval/provider/wall 成本，并轻微损伤 EM/F1。下一轮只在 train/dev 上优化“选择性双查询”：按数据集/问题类型校准阈值，扩展后用证据支持置信度做安全回退（支持度下降则保留 slot-only 排序），并设每题额外查询上限；仍需 frozen-plan paired、完整失败分母和 Holm 校正。未通过 held-out 前保持 plain SlotRAG 为默认，不调整本轮数值、不删除失败记录。
+
 # 11. 关键消融
 
 必须包含：

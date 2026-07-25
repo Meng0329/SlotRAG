@@ -1128,6 +1128,7 @@ class SlotMaterializer:
         dual_query_retrieval: bool = False,
         dual_query_unbound_only: bool = False,
         dual_query_confidence_threshold: float | None = None,
+        dual_query_evidence_guard: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1145,6 +1146,7 @@ class SlotMaterializer:
         self.dual_query_retrieval = dual_query_retrieval
         self.dual_query_unbound_only = dual_query_unbound_only
         self.dual_query_confidence_threshold = dual_query_confidence_threshold
+        self.dual_query_evidence_guard = dual_query_evidence_guard
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1292,6 +1294,7 @@ class SlotMaterializer:
         )
         use_dual_query = False
         dual_query_confidence_skip = False
+        dual_query_guard_fallback = False
         if dual_query_requested:
             question_query = f"{self.question_context} {slot_query}"
             slot_ranked = self.retriever.search(slot_query)
@@ -1305,7 +1308,8 @@ class SlotMaterializer:
                 retrieved_passages = slot_ranked[:self.max_passages]
                 query = slot_query
             else:
-                ranked_lists = [slot_ranked, self.retriever.search(question_query)]
+                question_ranked = self.retriever.search(question_query)
+                ranked_lists = [slot_ranked, question_ranked]
                 retrieval_calls = 2
                 use_dual_query = True
                 query = f"{slot_query} || {question_query}"
@@ -1325,6 +1329,16 @@ class SlotMaterializer:
                         key=lambda item: (-rrf_scores[item], -representatives[item].score, item),
                     )[:self.max_passages]
                 ]
+                if self.dual_query_evidence_guard and slot_ranked and question_ranked:
+                    slot_ids = {result.passage.id for result in slot_ranked[:self.max_passages]}
+                    question_ids = {result.passage.id for result in question_ranked[:self.max_passages]}
+                    confidence = lambda result: result.rerank_score if result.rerank_score is not None else result.score
+                    slot_confidence = max(confidence(result) for result in slot_ranked[:self.max_passages])
+                    question_confidence = max(confidence(result) for result in question_ranked[:self.max_passages])
+                    if not slot_ids.intersection(question_ids) and question_confidence < slot_confidence:
+                        retrieved_passages = slot_ranked[:self.max_passages]
+                        query = slot_query
+                        dual_query_guard_fallback = True
         else:
             if self.question_context and not self.dual_query_retrieval:
                 query = f"{self.question_context} {slot_query}"
@@ -1401,6 +1415,7 @@ class SlotMaterializer:
             dual_query_expansions=int(use_dual_query),
             dual_query_skips=int(dual_query_skipped),
             dual_query_confidence_skips=int(dual_query_confidence_skip),
+            dual_query_guard_fallbacks=int(dual_query_guard_fallback),
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
             typed_extraction_contracts=int(bool(boolean_fields and passages)),
@@ -2074,6 +2089,7 @@ class AdaptiveExecutor:
                 "dual_query_expansions": metrics.dual_query_expansions + slot_metrics.dual_query_expansions,
                 "dual_query_skips": metrics.dual_query_skips + slot_metrics.dual_query_skips,
                 "dual_query_confidence_skips": metrics.dual_query_confidence_skips + slot_metrics.dual_query_confidence_skips,
+                "dual_query_guard_fallbacks": metrics.dual_query_guard_fallbacks + slot_metrics.dual_query_guard_fallbacks,
                 "prompt_tokens": metrics.prompt_tokens + slot_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + slot_metrics.completion_tokens,
                 "compilation_llm_calls": metrics.compilation_llm_calls + slot_metrics.compilation_llm_calls,
