@@ -2556,6 +2556,49 @@ strict 和 relaxed 各执行 9 次 guard check，但 fallback 均为 `0`；relax
 
 unbound-only 相比原 gated 将 retrieval/provider/wall 约降至 `-8.7%/-6.6%/-15.9%`，但相对 plain 仍为 `+10.5%/+6.3%/+7.2%`，且 primary 相对 plain `-3.88%`，EM/F1 为 `-0.0400/-0.0284`。逐数据集 paired bootstrap 的 Holm 校正 p 值全部为 `1.0`；因此它只说明减少重复扩展的成本方向，不能作为质量提升或投稿默认。plain SlotRAG 继续保留为默认，gated/unbound-only/strict guard 均降级为内部消融；下一步不再扩张双查询分支，转做 plain 主路径的证据召回与答案稳定性优化。
 
+#### v44：grounded-adaptive 冻结计划公平确认（2026-07-26）
+
+为确认 v37 中最强的 `slotrag-grounded-adaptive-dual-query-retrieval` 是否在 v41 的 100 条 train
+样本上仍能复现，先从 `runs/slotrag-selective-guard-train-v1` 的最终 SlotRAG 记录构建 100 个只读
+frozen-plan imports，再用 `configs/experiments/slotrag-grounded-adaptive-frozen-train-v1.yaml` 在完全
+相同问题、证据语料、计划、预算和答案提取器下比较 plain、grounded-adaptive DQR 及其 0.5/0.75
+confidence gate。运行代码版本为 `6a4c4fe`，Qwen3.6-27B、Qwen3-Embedding-0.6B 和
+BGE-reranker-v2-m3 共享 provider RPM 30 / operational RPM 20，组件最大并发 64、matrix workers 16。
+
+本轮 400/400 final、400/400 immutable attempts、400/400 trace 完整，状态为 `385 ok + 15
+budget_exceeded`，无 provider/解析失败和 retry；100/100 imported snapshots 有效，387 条 replay 的
+missing provenance、unknown snapshot、result/effective hash mismatch、inconsistent pair 和 effective-plan
+variant 均为 0。records audit 为 `complete=true`，own-method publication gate 为
+`publication_ready=true`。该 gate 只证明内部方法比较记录可审计；split 仍是 train，不能替代 held-out。
+
+| 指标（五数据集宏平均） | plain | grounded adaptive gated 0.5 | grounded adaptive gated 0.75 | grounded adaptive DQR |
+|---|---:|---:|---:|---:|
+| primary | 0.6533 | 0.6730 | 0.7080 | **0.7330** |
+| EM / F1 | 0.4700 / 0.5023 | 0.4700 / 0.5020 | 0.5100 / 0.5486 | **0.5200 / 0.5636** |
+| StrategyQA accuracy | 0.7500 | **0.8500** | 0.8000 | **0.8500** |
+| DROP EM / F1 | **0.7000 / 0.7130** | 0.6500 / 0.6630 | 0.6500 / 0.6630 | 0.6500 / 0.6630 |
+| Evidence Recall / MRR / nDCG@10 | 0.7813 / 0.9500 / 0.8135 | 0.7813 / 0.9500 / 0.8105 | 0.8313 / **1.0000** / 0.8605 | **0.8625 / 1.0000 / 0.8922** |
+| retrieval calls | **1.450** | 1.580 | 1.760 | 2.450 |
+| dual expansion / confidence skip | 0 / 0 | 0.220 / 0.730 | 0.290 / 0.700 | 1.000 / 0 |
+| provider calls | **4.850** | 5.010 | 5.440 | 6.770 |
+| total tokens | 2239.3 | **2000.8** | 2266.6 | 2208.7 |
+| wall latency（并发矩阵均值） | 84.51 s | 75.29 s | **73.58 s** | 88.38 s |
+
+grounded-adaptive DQR 相对 plain 的 train primary 为 `+0.0797`（相对 `+12.20%`），EM/F1
+为 `+0.0500/+0.0612`，但 retrieval/provider/wall 分别为 `+69.0%/+39.6%/+4.6%`。逐数据集
+primary 差值（candidate 减 plain）为 2Wiki `+0.1000`、DROP `-0.0500`、HotpotQA
+`+0.0484`、MuSiQue `+0.2000`、StrategyQA `+0.1000`；100 个同题比较中为 11 win / 87 tie /
+2 loss。MuSiQue 的未校正 95% bootstrap CI 为 `[+0.05,+0.40]`，但全 15 个比较经 Holm
+校正后 `p_holm=0.3528`，其余 full-candidate 比较也均不显著。
+
+必须同时报告既有独立 evaluation 证据：v37 的五数据集各 100 题上，同一 full candidate 的宏
+primary 仅从 `0.6656` 提升到 `0.7012`，相对 `+5.36%`，五个数据集 Holm 校正均不显著；
+retrieval/provider/wall 分别增加 `60.7%/35.7%/28.2%`。因此 v44 只把 full candidate 保留为
+因子消融对象，不证明 10% held-out 提升，也不改变 plain 的投稿默认地位。下一轮固定这 100 个
+train 问题与计划，运行 `grounding {off,on} × retrieval {slot-only,always-DQR,unbound-only-DQR}`
+的 2×3 因子消融，分离 grounding、查询扩展及交互贡献；完整原始数据与统计位于
+`runs/slotrag-grounded-adaptive-frozen-train-v1/`。
+
 # 11. 关键消融
 
 必须包含：

@@ -136,6 +136,25 @@ attempt、完整失败分母和 paired bootstrap；若质量优势或成本节�
 
 选择结论：unbound-only 只保留为成本消融，plain 仍是默认；下一轮停止扩展双查询变体，转向 plain 主路径的 evidence recall、答案稳定性和失败预算优化。任何主方法晋级仍需新不重叠 evaluation 的 frozen-plan paired 复验。
 
+### v44 grounded-adaptive 冻结计划确认（2026-07-26）
+
+`configs/experiments/slotrag-grounded-adaptive-frozen-train-v1.yaml` 在 v41 的五数据集各 20 条 train
+问题上，对 plain、grounded-adaptive DQR、0.5 gate 和 0.75 gate 做共享 frozen-plan 的四路比较。
+400 final/attempt/trace 完整，`385 ok + 15 budget_exceeded`；100/100 imported snapshots 有效，
+所有 provenance/hash/pair/variant 异常为 0，records audit 和 own-method gate 通过。
+
+宏 primary 为 `0.6533/0.7330/0.6730/0.7080`（按 plain/full/0.5/0.75 排列）；full 相对
+plain 为 `+12.20%`，EM/F1 为 `+0.0500/+0.0612`，证据 Recall/MRR/nDCG@10 为
+`+0.0813/+0.0500/+0.0787`，但 retrieval/provider/wall 增加 `69.0%/39.6%/4.6%`。full 的
+100 个同题比较为 11 win / 87 tie / 2 loss；逐数据集 Holm 校正均未显著。DROP primary 下降
+`0.0500`，不能声称全数据集一致领先。
+
+该结果必须与 v37 的独立 evaluation 一起解释：v37 同一 full candidate 仅相对提升 `5.36%`，
+且五数据集 CI 均跨 0、成本显著增加。因此不晋级默认，不再搜索更多 confidence threshold。下一阶段
+是预先指定的 2×3 因子消融：`grounding {off,on} × retrieval {slot-only,always-DQR,
+unbound-only-DQR}`；继续使用 v44 的 100 个 train 问题和只读计划，报告主效应、交互、逐题
+bootstrap、Holm 校正、失败分母和完整成本。只有先定位正贡献模块，才允许设计下一版方法。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
