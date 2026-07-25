@@ -2540,6 +2540,22 @@ records audit 和 gate 均通过，仍属于 train-only 方法筛选。
 
 strict 和 relaxed 各执行 9 次 guard check，但 fallback 均为 `0`；relaxed 的宏 primary=`0.6144`、EM=`0.4000`、F1=`0.4507`，plain 为 `0.6144/0.4400/0.4907`，该小样本不提供质量优势，paired p 值也全部为 `1.0`。因此 relaxed 版本不进入默认或主消融表，仅保留为诊断实现；严格 guard 只作为保守安全回退，不声称有质量贡献。下一轮转向 `unbound-only` 门控，验证多槽位计划是否可以在不重复扩展已绑定槽位的情况下保留 MuSiQue 的潜在收益并降低成本。
 
+#### v43：unbound-only confidence gate train 筛选（2026-07-25）
+
+使用 `configs/experiments/slotrag-unbound-gate-train-v1.yaml` 在新 seed 的 train 样本上比较 plain、原 `gated DQR 0.5` 和 `slotrag-confidence-gated-unbound-dual-query-0p5`：五个数据集各 10 题，共 150 条 final/attempt/trace，records audit 为 `150/150`，状态为 `147 ok + 3 budget_exceeded`，没有 provider 连接或限流错误。50 个冻结计划快照全部有效，147 条 replay 的 plan hash/provenance 异常全为 0；完整摘要在 `runs/slotrag-unbound-gate-train-v1/summaries/method_tune/`。
+
+| 指标（宏平均） | plain | gated DQR 0.5 | unbound-only gated |
+|---|---:|---:|---:|
+| primary | **0.7328** | 0.6893 | 0.7043 |
+| EM / F1 | **0.5600 / 0.5928** | 0.5200 / 0.5493 | 0.5200 / 0.5643 |
+| retrieval calls | 1.520 | 1.840 | 1.680 |
+| dual-query expansions / confidence skips | 0 / 0 | 0.440 / 0.960 | 0.260 / 0.720 |
+| provider calls | 5.040 | 5.740 | 5.360 |
+| wall latency (mean) | 62.56 s | 79.69 s | 67.04 s |
+| total tokens | 2592.3 | 1986.1 | 2180.0 |
+
+unbound-only 相比原 gated 将 retrieval/provider/wall 约降至 `-8.7%/-6.6%/-15.9%`，但相对 plain 仍为 `+10.5%/+6.3%/+7.2%`，且 primary 相对 plain `-3.88%`，EM/F1 为 `-0.0400/-0.0284`。逐数据集 paired bootstrap 的 Holm 校正 p 值全部为 `1.0`；因此它只说明减少重复扩展的成本方向，不能作为质量提升或投稿默认。plain SlotRAG 继续保留为默认，gated/unbound-only/strict guard 均降级为内部消融；下一步不再扩张双查询分支，转做 plain 主路径的证据召回与答案稳定性优化。
+
 # 11. 关键消融
 
 必须包含：

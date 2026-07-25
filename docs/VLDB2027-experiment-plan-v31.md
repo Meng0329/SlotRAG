@@ -130,6 +130,12 @@ attempt、完整失败分母和 paired bootstrap；若质量优势或成本节�
 
 结论：relaxed guard 不晋级；strict guard 仅保留为安全回退 telemetry，不写成质量提升。下一轮测试 confidence gate + `dual_query_unbound_only`，专门验证多槽位计划的重复扩展成本与质量变化。
 
+### v43 unbound-only confidence gate 筛选（2026-07-25）
+
+新 seed 的 train 筛选使用 `configs/experiments/slotrag-unbound-gate-train-v1.yaml`：五个数据集各 10 题，plain、gated DQR 0.5、unbound-only gated 共 150 条 final/attempt/trace，`147 ok + 3 budget_exceeded`；50 个 frozen-plan 快照有效，147 条 replay 无哈希/provenance 异常。宏 primary 为 `0.7328/0.6893/0.7043`，EM/F1 为 `0.5600/0.5928`、`0.5200/0.5493`、`0.5200/0.5643`；unbound-only 的 retrieval/provider/wall 为 `1.680/5.360/67.04s`，低于原 gated 的 `1.840/5.740/79.69s`，但仍高于 plain 成本且质量未恢复。Holm 校正 p 值全部为 `1.0`。
+
+选择结论：unbound-only 只保留为成本消融，plain 仍是默认；下一轮停止扩展双查询变体，转向 plain 主路径的 evidence recall、答案稳定性和失败预算优化。任何主方法晋级仍需新不重叠 evaluation 的 frozen-plan paired 复验。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
