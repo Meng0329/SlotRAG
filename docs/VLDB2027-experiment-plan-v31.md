@@ -116,6 +116,14 @@ attempt、完整失败分母和 paired bootstrap；若质量优势或成本节�
 
 因此 `gated DQR 0.5` 撤回默认，plain SlotRAG 暂为默认。下一阶段先在 train/dev 做选择性双查询优化：按数据集/问题类型校准门控阈值；扩展后计算证据支持置信度，支持度下降则回退 slot-only 结果；设置每题额外检索上限并记录触发/回退/成本 telemetry。只有新、不重叠 held-out 复验在质量和成本上同时通过，才允许晋级主方法；所有结果继续写入本节和方法文档，禁止手工调整数值。
 
+### v41 selective guard train 筛选（2026-07-25）
+
+新增 `slotrag-confidence-guarded-dual-query-0p5`，与 plain、`slotrag-confidence-gated-dual-query-0p5` 在 `configs/experiments/slotrag-selective-guard-train-v1.yaml` 的同题同计划协议下运行：五个数据集各 20 题，300 条 final/attempt/trace 全部落盘，`291 ok + 9 budget_exceeded`，records/trace audit 完整。100 个冻结计划快照全部有效，293 条 replay 的计划哈希和 provenance 审计全为 0 异常；完整产物在 `runs/slotrag-selective-guard-train-v1/summaries/method_tune/`。
+
+训练宏平均 primary 为 plain `0.6930`、gated `0.7042`、guarded `0.6995`；相对 plain 分别 `+1.62%`、`+0.95%`，但 gated/guarded 的 EM/F1 均下降，Holm 校正的逐数据集 paired p 值全部为 `1.0`。gated 的 retrieval/provider/wall 成本为 `+20.4%/+14.9%/+31.3%`，guarded 为 `+15.1%/+14.9%/+13.9%`；total tokens 分别 `-14.0%/-17.7%`。三者 evidence Recall/MRR/nDCG@10 宏平均均为 `0.8313/1.0000/0.8635`，且 guard fallback 触发数为 0，故没有证据证明新模块贡献。
+
+选择结论：plain 仍是默认；gated/guarded 仅作消融，不得写成外部 baseline 或显著优势。下一轮只做 guard 触发率、证据支持置信度校准与相关性诊断；若继续为 0 或不改善质量/成本，则删除 guard 复杂度。不得根据训练差值修改 held-out 结果，任何晋级必须经过新的不重叠 frozen-plan paired evaluation。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

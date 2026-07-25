@@ -2517,6 +2517,23 @@ records audit 和 gate 均通过，仍属于 train-only 方法筛选。
 
 决策：撤回 `gated DQR 0.5` 的默认资格，保留为消融记录。当前 held-out 结果说明仅按首条重排得分触发第二路检索会增加 retrieval/provider/wall 成本，并轻微损伤 EM/F1。下一轮只在 train/dev 上优化“选择性双查询”：按数据集/问题类型校准阈值，扩展后用证据支持置信度做安全回退（支持度下降则保留 slot-only 排序），并设每题额外查询上限；仍需 frozen-plan paired、完整失败分母和 Holm 校正。未通过 held-out 前保持 plain SlotRAG 为默认，不调整本轮数值、不删除失败记录。
 
+#### v41：selective guard train 筛选（2026-07-25）
+
+为验证 v40 提出的证据支持回退，新增方法 `slotrag-confidence-guarded-dual-query-0p5`，并在同一批 train 题目、同一冻结 SlotRAG 计划上与 plain 和 `slotrag-confidence-gated-dual-query-0p5` 做三路 paired 筛选。配置为 `configs/experiments/slotrag-selective-guard-train-v1.yaml`，五个数据集各 20 题，共 300 条 final/attempt/trace；records audit 为 `300/300`，trace 缺失为 0，状态为 `291 ok + 9 budget_exceeded`，没有 provider 429/5xx/连接失败。100 个冻结计划快照全部有效，293 条 replay 记录的 `unknown_snapshot_hash`、`inconsistent_pair`、`plan_hash_mismatch` 和 effective-plan variant 均为 0；gate 只证明本轮内部分析记录完整，不改变外部 baseline 未 exact 执行的限制。
+
+| 数据集 | plain primary / EM / F1 | gated DQR 0.5 | guarded DQR 0.5 |
+|---|---:|---:|---:|
+| HotpotQA | 0.8000 / 0.8000 / 0.8000 (20/20) | 0.8000 / 0.8000 / 0.8000 (20/20) | 0.8000 / 0.8000 / 0.8000 (20/20) |
+| 2WikiMultiHopQA | 0.7750 / 0.7000 / 0.7750 (20/20) | 0.7750 / 0.7000 / 0.7750 (20/20) | 0.7550 / 0.7000 / 0.7550 (20/20) |
+| MuSiQue | 0.3768 / 0.3000 / 0.3768 (19/20) | 0.4330 / 0.3500 / 0.4330 (16/20) | 0.3796 / 0.3000 / 0.3796 (16/20) |
+| StrategyQA | 0.8000 / 0.0500 / 0.0500 (20/20) | 0.8500 / 0.0000 / 0.0000 (20/20) | 0.8500 / 0.0000 / 0.0000 (20/20) |
+| DROP | 0.7130 / 0.7000 / 0.7083 (20/20) | 0.6630 / 0.6500 / 0.6583 (20/20) | 0.7130 / 0.7000 / 0.7083 (20/20) |
+| 宏平均 | **0.6930 / 0.5100 / 0.5420** | **0.7042 / 0.5000 / 0.5333** | **0.6995 / 0.5000 / 0.5286** |
+
+相对 plain，gated 的 primary 为 `+0.01125`（`+1.62%`），但 EM/F1 分别 `-0.0100/-0.00875`；retrieval/provider/wall 分别为 `+20.4%/+14.9%/+31.3%`，total tokens `-14.0%`。guarded 的 primary 为 `+0.00657`（`+0.95%`），EM/F1 为 `-0.0100/-0.01343`；retrieval/provider/wall 分别为 `+15.1%/+14.9%/+13.9%`，total tokens `-17.7%`。宏平均 evidence Recall/MRR/nDCG@10 三种方法均为 `0.8313/1.0000/0.8635`（只在 120 条有 gold evidence 的记录上统计）；gated 与 guarded 的 `dual_query_guard_fallbacks` 都是 `0.0`，证据回退在本批数据上没有实际触发。逐数据集 paired bootstrap 的 Holm 校正 p 值均为 `1.0`，不能宣称显著提升或达到 10% 优势。
+
+决策：plain SlotRAG 继续作为默认；gated 和 guarded 均只保留为内部消融，guarded 不晋级。当前证据回退实现有单元测试但触发条件过窄，不能用“未触发”冒充模块贡献。下一轮 train/dev 只做 guard 触发率与阈值校准诊断（增加触发/不触发的分层 telemetry，先验证证据支持分数是否与答案正确性相关），若仍无触发或无质量收益则删除该模块，避免为投稿保留零贡献复杂度。完整数据、失败记录、trace、摘要和审计在 `runs/slotrag-selective-guard-train-v1/{items,attempts,traces,summaries/method_tune,records-audit.json,publication-gate.json}`。
+
 # 11. 关键消融
 
 必须包含：
