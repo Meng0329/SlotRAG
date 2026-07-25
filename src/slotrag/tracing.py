@@ -55,6 +55,10 @@ def provider_trace(
         yield
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Materialize the trace file even when the guarded operation times out
+    # before the first provider event. This keeps zero-event attempts
+    # auditable without inventing a provider request.
+    path.touch(exist_ok=True)
     token = _TRACE_SETTINGS.set({"path": path, "include_payloads": include_payloads})
     try:
         yield
@@ -115,4 +119,3 @@ def trace_metadata(path: Path | None) -> dict[str, Any]:
         "path": str(path),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
-

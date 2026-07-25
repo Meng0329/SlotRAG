@@ -55,6 +55,8 @@ class MethodSpec:
     evidence_surface_grounding_repair: bool = False
     question_grounded_retrieval: bool = False
     dual_query_retrieval: bool = False
+    dual_query_unbound_only: bool = False
+    dual_query_confidence_threshold: float | None = None
     description: str = ""
 
 
@@ -81,7 +83,13 @@ ABLATION_METHODS = [
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
     "slotrag-dual-query-retrieval",
+    "slotrag-adaptive-dual-query-retrieval",
     "slotrag-grounded-dual-query-retrieval",
+    "slotrag-grounded-adaptive-dual-query-retrieval",
+    "slotrag-confidence-gated-dual-query-0p5",
+    "slotrag-confidence-gated-dual-query-0p75",
+    "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5",
+    "slotrag-grounded-adaptive-confidence-gated-dual-query-0p75",
     "slotrag-grounded-role-type-filter",
     "slotrag-anchor-window-projection",
     "slotrag-normalized-anchor-window-projection",
@@ -190,6 +198,14 @@ METHODS: dict[str, MethodSpec] = {
         dual_query_retrieval=True,
         description="RRF fusion of slot-only and original-question augmented retrieval",
     ),
+    "slotrag-adaptive-dual-query-retrieval": MethodSpec(
+        "slotrag-adaptive-dual-query-retrieval",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_unbound_only=True,
+        description="RRF dual retrieval only for unbound slots; bound slots use slot-only retrieval",
+    ),
     "slotrag-grounded-dual-query-retrieval": MethodSpec(
         "slotrag-grounded-dual-query-retrieval",
         "slotrag",
@@ -199,6 +215,57 @@ METHODS: dict[str, MethodSpec] = {
         question_grounded_retrieval=True,
         dual_query_retrieval=True,
         description="grounded role projection with dual-query RRF retrieval",
+    ),
+    "slotrag-grounded-adaptive-dual-query-retrieval": MethodSpec(
+        "slotrag-grounded-adaptive-dual-query-retrieval",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_unbound_only=True,
+        description="grounded role projection with dual retrieval only for unbound slots",
+    ),
+    "slotrag-confidence-gated-dual-query-0p5": MethodSpec(
+        "slotrag-confidence-gated-dual-query-0p5",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_confidence_threshold=0.5,
+        description="dual retrieval only when slot-only top reranker score is below 0.5",
+    ),
+    "slotrag-confidence-gated-dual-query-0p75": MethodSpec(
+        "slotrag-confidence-gated-dual-query-0p75",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_confidence_threshold=0.75,
+        description="dual retrieval only when slot-only top reranker score is below 0.75",
+    ),
+    "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5": MethodSpec(
+        "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_unbound_only=True,
+        dual_query_confidence_threshold=0.5,
+        description="grounded adaptive dual retrieval gated at top slot-only reranker score 0.5",
+    ),
+    "slotrag-grounded-adaptive-confidence-gated-dual-query-0p75": MethodSpec(
+        "slotrag-grounded-adaptive-confidence-gated-dual-query-0p75",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        direct_grounded_anchor_projection=True,
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_unbound_only=True,
+        dual_query_confidence_threshold=0.75,
+        description="grounded adaptive dual retrieval gated at top slot-only reranker score 0.75",
     ),
     "slotrag-grounded-role-type-filter": MethodSpec(
         "slotrag-grounded-role-type-filter",
@@ -886,6 +953,10 @@ def _run_slotrag(
         materializer_options["question_context"] = question.question
     if spec.dual_query_retrieval:
         materializer_options["dual_query_retrieval"] = True
+    if spec.dual_query_unbound_only:
+        materializer_options["dual_query_unbound_only"] = True
+    if spec.dual_query_confidence_threshold is not None:
+        materializer_options["dual_query_confidence_threshold"] = spec.dual_query_confidence_threshold
     if spec.role_projected_extraction and protected_anchor_values:
         materializer_options.update({
             "role_projected_extraction": True,

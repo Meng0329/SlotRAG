@@ -28,3 +28,10 @@ def test_provider_trace_is_noop_when_not_enabled(tmp_path):
         record_provider_event(service="embedding", url="http://provider/v1/embeddings", request={}, response={})
     assert not trace_path.exists()
 
+
+def test_provider_trace_materializes_zero_event_trace(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    with provider_trace(trace_path):
+        pass
+    assert trace_path.exists()
+    assert trace_path.read_text(encoding="utf-8") == ""

@@ -1126,6 +1126,8 @@ class SlotMaterializer:
         evidence_surface_grounding_repair: bool = False,
         question_context: str | None = None,
         dual_query_retrieval: bool = False,
+        dual_query_unbound_only: bool = False,
+        dual_query_confidence_threshold: float | None = None,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1141,6 +1143,8 @@ class SlotMaterializer:
         self.evidence_surface_grounding_repair = evidence_surface_grounding_repair
         self.question_context = question_context.strip() if question_context else None
         self.dual_query_retrieval = dual_query_retrieval
+        self.dual_query_unbound_only = dual_query_unbound_only
+        self.dual_query_confidence_threshold = dual_query_confidence_threshold
         self.last_evidence: list[EvidenceRecord] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
@@ -1275,29 +1279,54 @@ class SlotMaterializer:
         slot_query = slot.query_text(bindings)
         retrieval_calls = 1
         query = slot_query
-        if self.question_context and self.dual_query_retrieval:
+        dual_query_requested = bool(
+            self.question_context
+            and self.dual_query_retrieval
+            and (not self.dual_query_unbound_only or not bindings)
+        )
+        dual_query_skipped = bool(
+            self.question_context
+            and self.dual_query_retrieval
+            and self.dual_query_unbound_only
+            and bindings
+        )
+        use_dual_query = False
+        dual_query_confidence_skip = False
+        if dual_query_requested:
             question_query = f"{self.question_context} {slot_query}"
-            ranked_lists = [self.retriever.search(slot_query), self.retriever.search(question_query)]
-            retrieval_calls = 2
-            query = f"{slot_query} || {question_query}"
-            rrf_scores: dict[str, float] = {}
-            representatives: dict[str, RetrievalResult] = {}
-            for ranked in ranked_lists:
-                for rank, result in enumerate(ranked, start=1):
-                    passage_id = result.passage.id
-                    rrf_scores[passage_id] = rrf_scores.get(passage_id, 0.0) + 1.0 / (60 + rank)
-                    current = representatives.get(passage_id)
-                    if current is None or result.score > current.score:
-                        representatives[passage_id] = result
-            retrieved_passages = [
-                representatives[passage_id].model_copy(update={"score": rrf_scores[passage_id]})
-                for passage_id in sorted(
-                    representatives,
-                    key=lambda item: (-rrf_scores[item], -representatives[item].score, item),
-                )[:self.max_passages]
-            ]
+            slot_ranked = self.retriever.search(slot_query)
+            if self.dual_query_confidence_threshold is not None and slot_ranked:
+                top_confidence = max(
+                    result.rerank_score if result.rerank_score is not None else result.score
+                    for result in slot_ranked
+                )
+                dual_query_confidence_skip = top_confidence >= self.dual_query_confidence_threshold
+            if dual_query_confidence_skip:
+                retrieved_passages = slot_ranked[:self.max_passages]
+                query = slot_query
+            else:
+                ranked_lists = [slot_ranked, self.retriever.search(question_query)]
+                retrieval_calls = 2
+                use_dual_query = True
+                query = f"{slot_query} || {question_query}"
+                rrf_scores: dict[str, float] = {}
+                representatives: dict[str, RetrievalResult] = {}
+                for ranked in ranked_lists:
+                    for rank, result in enumerate(ranked, start=1):
+                        passage_id = result.passage.id
+                        rrf_scores[passage_id] = rrf_scores.get(passage_id, 0.0) + 1.0 / (60 + rank)
+                        current = representatives.get(passage_id)
+                        if current is None or result.score > current.score:
+                            representatives[passage_id] = result
+                retrieved_passages = [
+                    representatives[passage_id].model_copy(update={"score": rrf_scores[passage_id]})
+                    for passage_id in sorted(
+                        representatives,
+                        key=lambda item: (-rrf_scores[item], -representatives[item].score, item),
+                    )[:self.max_passages]
+                ]
         else:
-            if self.question_context:
+            if self.question_context and not self.dual_query_retrieval:
                 query = f"{self.question_context} {slot_query}"
             retrieved_passages = self.retriever.search(query)[:self.max_passages]
         self.accessed_passage_ids.update(result.passage.id for result in retrieved_passages)
@@ -1369,6 +1398,9 @@ class SlotMaterializer:
         }
         metrics = RunMetrics(
             retrieval_calls=retrieval_calls,
+            dual_query_expansions=int(use_dual_query),
+            dual_query_skips=int(dual_query_skipped),
+            dual_query_confidence_skips=int(dual_query_confidence_skip),
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
             typed_extraction_contracts=int(bool(boolean_fields and passages)),
@@ -1632,6 +1664,9 @@ class SlotMaterializer:
                 "documents_accessed": metrics.documents_accessed + current_metrics.documents_accessed,
                 "passages_processed": metrics.passages_processed + current_metrics.passages_processed,
                 "retrieval_calls": metrics.retrieval_calls + current_metrics.retrieval_calls,
+                "dual_query_expansions": metrics.dual_query_expansions + current_metrics.dual_query_expansions,
+                "dual_query_skips": metrics.dual_query_skips + current_metrics.dual_query_skips,
+                "dual_query_confidence_skips": metrics.dual_query_confidence_skips + current_metrics.dual_query_confidence_skips,
                 "llm_calls": metrics.llm_calls + current_metrics.llm_calls,
                 "prompt_tokens": metrics.prompt_tokens + current_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + current_metrics.completion_tokens,
@@ -2036,6 +2071,9 @@ class AdaptiveExecutor:
                 "passages_processed": metrics.passages_processed + slot_metrics.passages_processed,
                 "llm_calls": metrics.llm_calls + slot_metrics.llm_calls,
                 "retrieval_calls": metrics.retrieval_calls + slot_metrics.retrieval_calls,
+                "dual_query_expansions": metrics.dual_query_expansions + slot_metrics.dual_query_expansions,
+                "dual_query_skips": metrics.dual_query_skips + slot_metrics.dual_query_skips,
+                "dual_query_confidence_skips": metrics.dual_query_confidence_skips + slot_metrics.dual_query_confidence_skips,
                 "prompt_tokens": metrics.prompt_tokens + slot_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + slot_metrics.completion_tokens,
                 "compilation_llm_calls": metrics.compilation_llm_calls + slot_metrics.compilation_llm_calls,

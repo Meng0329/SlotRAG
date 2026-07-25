@@ -250,6 +250,9 @@ class RunMetrics(StrictModel):
     unique_passages_accessed: int = 0
     llm_calls: int = 0
     retrieval_calls: int = 0
+    dual_query_expansions: int = 0
+    dual_query_skips: int = 0
+    dual_query_confidence_skips: int = 0
     embedding_calls: int = 0
     reranker_calls: int = 0
     prompt_tokens: int = 0

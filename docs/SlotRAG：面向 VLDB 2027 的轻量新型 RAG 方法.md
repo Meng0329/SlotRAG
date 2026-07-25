@@ -2368,6 +2368,89 @@ question IDs 和冻结计划，比较 `slotrag`、`slotrag-dual-query-retrieval`
 和服务 doctor 均在 run 目录保存；待 1500 条记录完成 records audit、gate、bootstrap 后再写入
 held-out 质量和失败率结论。
 
+#### v36：冻结计划 replay 完成、严格门禁通过（2026-07-25）
+
+`runs/slotrag-final-candidate-replay-v1` 已完成 5 个公开数据集、3 个 SlotRAG 方法、每个
+cell 100 题，共 1500/1500 final、1500/1500 immutable attempts 和 1500/1500 trace。
+状态分母为 1420 `ok`、77 `budget_exceeded`、3 `failed`；失败没有从 final 或统计中删除。
+500 个 imported frozen-plan snapshots 全部有效，1423 条记录实际完成 plan replay，source/effective
+plan hash mismatch、未知 snapshot、跨方法不一致和 effective-plan variant 均为 0。最初有 9 条
+零 provider 事件的超时记录没有落盘 trace，已通过 `tools/backfill_zero_event_traces.py` 以
+`event_count=0` 的可审计空 trace 修复；没有伪造 provider 请求。最终 `records-audit.json`
+为 `complete=true`，`gate.json` 为 `status=publication_ready`。这里的 publication-ready 只表示
+方法内部 replay 的记录、审计和分析条件满足；`comparison_validity.exact_upstream_execution_verified`
+仍为 `false`，因此不能据此宣称击败外部 baseline。
+
+| 方法 | primary 宏平均 | EM | F1 | Evidence Recall | Evidence MRR | nDCG@10 | OK/500 | retrieval calls | total tokens | provider calls | wall latency |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.6545 | 0.3260 | 0.4660 | 0.7550 | 0.9239 | 0.7712 | 489 | 1.538 | 2377.0 | 5.086 | 60.22 s |
+| DQR | 0.6468 | 0.3100 | 0.4563 | 0.7438 | 0.8960 | 0.7686 | 461 | 2.712 | 1962.5 | 7.590 | 105.50 s |
+| Grounded-DQR | **0.6610** | **0.3280** | **0.4693** | **0.7788** | **0.9285** | **0.7995** | 470 | 2.804 | 2186.9 | 7.754 | 105.00 s |
+
+Grounded-DQR 相对本次 replay plain 的 primary 宏平均只提升 `+0.0064`（约 `+0.98%`），
+DQR 反而下降 `-0.0077`（约 `-1.18%`）；额外检索使调用数和 wall latency 约翻倍。证据
+指标只在 2WikiMultiHopQA 与 HotpotQA 报告，其余数据集严格为 `N/A`。逐数据集 primary/失败
+分母如下：
+
+| 数据集 | SlotRAG | DQR | Grounded-DQR | OK（Slot/DQR/G-DQR） |
+|---|---:|---:|---:|---:|
+| 2WikiMultiHopQA | 0.6760 | 0.6574 | 0.6774 | 99/93/94 |
+| DROP | 0.6065 | **0.6287** | 0.5765 | 99/100/94 |
+| HotpotQA | 0.6579 | 0.6733 | **0.7169** | 94/90/95 |
+| MuSiQue | 0.4822 | 0.4445 | **0.4940** | 98/83/91 |
+| StrategyQA | **0.8500** | 0.8300 | 0.8400 | 99/95/96 |
+
+同题 paired bootstrap（每个 dataset 100 题，Holm 校正）没有发现 DQR 或 Grounded-DQR 相对
+plain 的显著差异；Grounded-DQR 的 primary 差值（Grounded-DQR 减 plain）为 2Wiki `+0.0014`
+（95% CI `[-0.0841, 0.0877]`，p=`0.981`）、DROP `+0.0300`（`[-0.0880, 0.0253]`，p=`0.296`）、
+HotpotQA `+0.0590`（`[-0.0112, 0.1298]`，p=`0.0976`）、MuSiQue `+0.0118`
+（`[-0.0659, 0.0884]`，p=`0.7708`）和 StrategyQA `+0.0100`（`[-0.0900, 0.0700]`，p=`0.9102`）。
+与冻结的 adapted 主实验 SlotRAG 逐题比较时，500 题宏差值为 plain `-0.0174`、DQR `-0.0251`、
+Grounded-DQR `-0.0110`；各数据集 CI 均跨 0，不能声称质量领先。完整 130+ 指标、P50/P95/P99
+延迟、证据 P/R/MRR/nDCG、阶段 token、计划复杂度、失败分类、逐题记录和原始 trace 分别保存在
+`summaries/final_candidate_replay/{summary.json,metrics.csv,macro_metrics.csv,per_question.csv,paired_bootstrap.csv,failure_report.csv}`
+以及 `summaries/final_candidate_replay/fixed_baseline_comparison/`。
+
+该轮的工程审计通过 `codegraph sync .` 重建了代码图（1764 个变更文件，22368 个节点），并核对了
+`_run_slotrag → SlotMaterializer → materialize`、冻结计划导入和 `record_audit → publication_gate`
+调用链。根据 held-out 结果，Grounded-DQR 只保留为实验候选，不设为默认方法；下一轮只优化两个已
+定位瓶颈：超时/失败率和双查询的额外 wall latency，并在不重抽题、不改变冻结计划的前提下做小规模
+消融后再验证。当前没有达到“远超其他方法 10%”的证据，后续文稿不得使用该表支持这一表述。
+
+#### v37：自适应双查询冻结配对复现（2026-07-25）
+
+上一轮自适应 replay 的 v1 启动命令漏传 `QWEN36_API_KEY`，Qwen3.6 请求返回 HTTP 401；该目录
+`runs/slotrag-grounded-adaptive-replay-v1` 已标记 `INCOMPLETE_FOR_SUBMISSION`，其中的部分记录只作
+配置故障审计，不能进入统计。修正密钥映射后，以相同的 500 个 imported frozen-plan snapshots、相同
+问题样本 SHA-256 和相同 10 steps / 12 retrieval calls 预算重跑 `runs/slotrag-grounded-adaptive-replay-v2`，
+直接配对 `slotrag` 与 `slotrag-grounded-adaptive-dual-query-retrieval`，没有重编译或重抽题。
+
+v2 共 1000/1000 final、1000/1000 immutable attempts、1000/1000 trace，records audit 为
+`complete=true` 且缺失 trace/attempt 为 0；最终状态为 991 `ok`、7 `budget_exceeded`、2 `failed`。
+500 个 imported snapshots 全部有效，完成 993 次 plan replay，source/effective/result hash、跨方法
+不一致和 effective-plan variant 均为 0。Qwen3.6、embedding、reranker 在修正映射后均 HTTP 200。
+gate 为 `publication_ready`，但 `exact_upstream_execution_verified=false`，因此这仍是 SlotRAG 内部
+方法候选的 controlled adapted replay，不是外部 baseline exact reproduction。
+
+| 方法 | primary 宏平均 | EM | F1 | Evidence Recall | Evidence MRR | nDCG@10 | OK/500 | retrieval calls | dual expansion/skip | total tokens | provider calls | wall latency |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.6656 | 0.3300 | 0.4740 | 0.7788 | 0.9489 | 0.7938 | 495 | 1.564 | 0/0 | 2390.4 | 5.110 | 46.77 s |
+| Grounded adaptive DQR | **0.7012** | **0.3500** | **0.4988** | **0.8388** | **0.9735** | **0.8516** | 496 | 2.514 | 0.998/0.518 | 2367.8 | 6.936 | 59.96 s |
+
+Grounded adaptive DQR 相对同轮 plain 的 primary 宏平均差值为 `+0.0357`（相对 `+5.36%`），EM/F1
+分别为 `+0.0200/+0.0248`，证据 Recall/MRR/nDCG 分别为 `+0.0600/+0.0246/+0.0578`。五个数据集
+的 primary 差值（adaptive 减 plain）为 2Wiki `+0.0562`、DROP `+0.0096`、HotpotQA `+0.0390`、
+MuSiQue `+0.0236`、StrategyQA `+0.0500`；但同题 paired bootstrap 的 95% CI 均跨 0，Holm 校正后
+`p_holm` 分别为 `0.487/1.000/0.6876/1.000/0.6408`。因此不能声称显著优势，更不能声称达到
+“远超其他方法 10%”。
+
+成本侧自适应候选的 retrieval calls 增加 `60.7%`、provider calls 增加 `35.7%`、wall latency 增加
+`28.2%`；total tokens 略降 `0.95%`，但尚未抵消服务调用和长尾延迟。决策是：保留 Grounded adaptive
+DQR 作为下一轮候选消融，不设为默认方法；下一轮只在不重叠 train/dev 题目上研究 evidence-confidence
+门控、查询扩展缓存和长尾超时控制，再以同样 frozen-plan paired protocol 复核。所有原始记录、失败
+attempt、trace、130+ 指标、P50/P95/P99、逐题 bootstrap 和 frozen-plan audit 位于
+`runs/slotrag-grounded-adaptive-replay-v2/summaries/adaptive_candidate_replay/`。
+
 # 11. 关键消融
 
 必须包含：
