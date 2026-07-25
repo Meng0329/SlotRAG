@@ -143,6 +143,32 @@ def test_gate_rejects_ablation_with_invalid_existing_sample_audit(tmp_path):
     assert "invalid_sample_audit" in report["blocking_reasons"]
 
 
+def test_gate_rejects_question_deadline_timeout_as_infrastructure_failure(tmp_path):
+    _write_run(tmp_path, exact_upstream=True)
+    item_path = tmp_path / "items" / "test" / "hotpotqa" / "hybrid" / "q1.json"
+    attempt_path = tmp_path / "attempts" / "test" / "hotpotqa" / "hybrid" / "q1" / "attempt-0001.json"
+    record = json.loads(item_path.read_text(encoding="utf-8"))
+    record["result"] = {
+        "status": "budget_exceeded",
+        "error": "question timeout exceeded (300s)",
+    }
+    item_path.write_text(json.dumps(record), encoding="utf-8")
+    attempt_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report = audit_publication_readiness(tmp_path, "test", require_trace=True)
+
+    assert report["analysis_ready"] is False
+    assert report["publication_ready"] is False
+    assert report["status"] == "blocked"
+    assert report["infrastructure_failures"] == {
+        "question_timeout_count": 1,
+        "question_timeout_cells": [
+            {"dataset": "hotpotqa", "method": "hybrid", "count": 1},
+        ],
+    }
+    assert "infrastructure_question_timeouts:1" in report["blocking_reasons"]
+
+
 def test_gate_rejects_replay_hash_not_backed_by_frozen_snapshot(tmp_path):
     _write_run(tmp_path, exact_upstream=True)
     source_plan = SlotPlan.model_validate({

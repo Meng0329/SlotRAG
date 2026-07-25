@@ -93,6 +93,32 @@ def _observed_cells(output_dir: Path, stage: str) -> tuple[Counter[tuple[str, st
     return final, status
 
 
+def _infrastructure_failures(output_dir: Path, stage: str) -> dict[str, Any]:
+    root = output_dir / "items" / stage
+    question_timeouts: Counter[tuple[str, str]] = Counter()
+    if root.exists():
+        for path in sorted(root.rglob("*.json")):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            result = record.get("result") or {}
+            error = str(result.get("error") or "").casefold()
+            if "question timeout exceeded" not in error:
+                continue
+            relative = path.relative_to(root).parts
+            dataset = str(record.get("dataset") or relative[0])
+            method = str(record.get("method_label") or record.get("method") or relative[1])
+            question_timeouts[(dataset, method)] += 1
+    return {
+        "question_timeout_count": sum(question_timeouts.values()),
+        "question_timeout_cells": [
+            {"dataset": dataset, "method": method, "count": count}
+            for (dataset, method), count in sorted(question_timeouts.items())
+        ],
+    }
+
+
 def audit_publication_readiness(
     output_dir: Path,
     stage: str,
@@ -110,6 +136,7 @@ def audit_publication_readiness(
     frozen_plan_audit = audit_frozen_plan_replays(output_dir, stage)
     expected_cells, matrix_errors = _expected_cells(output_dir, stage, manifest, matrix)
     observed_cells, ok_cells = _observed_cells(output_dir, stage)
+    infrastructure_failures = _infrastructure_failures(output_dir, stage)
 
     reasons: list[str] = []
     if not manifest:
@@ -118,6 +145,10 @@ def audit_publication_readiness(
         reasons.append("missing_or_invalid_matrix_manifest")
     if not record_audit["complete"]:
         reasons.append("record_audit_incomplete")
+    if infrastructure_failures["question_timeout_count"]:
+        reasons.append(
+            f"infrastructure_question_timeouts:{infrastructure_failures['question_timeout_count']}"
+        )
     if "smoke" in stage.casefold():
         reasons.append("smoke_stage_not_for_publication")
     if "ablation" in stage.casefold():
@@ -193,6 +224,7 @@ def audit_publication_readiness(
             "unexpected_observed_cells:",
             "duplicate matrix cell:",
             "frozen_plan_",
+            "infrastructure_question_timeouts:",
         ))
     ]
     publication_ready = analysis_ready and "smoke_stage_not_for_publication" not in reasons and (
@@ -216,6 +248,7 @@ def audit_publication_readiness(
         "allow_adapted_protocol": allow_adapted_protocol,
         "require_trace": require_trace,
         "record_audit": record_audit,
+        "infrastructure_failures": infrastructure_failures,
         "frozen_plan_audit": frozen_plan_audit,
         "baseline_execution": {
             "methods": baseline_methods,
