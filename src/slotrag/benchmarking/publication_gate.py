@@ -132,6 +132,8 @@ def audit_publication_readiness(
     matrix = _read_json(output_dir / "matrix-manifest.json")
     adapter_audit = _read_json(output_dir / "adapter-audit.json")
     sample_audit = _read_json(output_dir / "sample-audit.json")
+    stage_config = ((manifest.get("suite") or {}).get("stages") or {}).get(stage) or {}
+    data_split = str(stage_config.get("split") or "").casefold() or None
     record_audit = audit_run_records(output_dir, stage, require_trace=require_trace)
     frozen_plan_audit = audit_frozen_plan_replays(output_dir, stage)
     expected_cells, matrix_errors = _expected_cells(output_dir, stage, manifest, matrix)
@@ -149,6 +151,8 @@ def audit_publication_readiness(
         reasons.append(
             f"infrastructure_question_timeouts:{infrastructure_failures['question_timeout_count']}"
         )
+    if data_split == "train":
+        reasons.append("training_split_not_for_publication")
     if "smoke" in stage.casefold():
         reasons.append("smoke_stage_not_for_publication")
     if "ablation" in stage.casefold():
@@ -227,10 +231,15 @@ def audit_publication_readiness(
             "infrastructure_question_timeouts:",
         ))
     ]
-    publication_ready = analysis_ready and "smoke_stage_not_for_publication" not in reasons and (
-        exact_upstream or not baseline_methods or (allow_adapted_protocol and adapted_valid)
+    publication_ready = (
+        analysis_ready
+        and "smoke_stage_not_for_publication" not in reasons
+        and "training_split_not_for_publication" not in reasons
+        and (exact_upstream or not baseline_methods or (allow_adapted_protocol and adapted_valid))
     )
-    if analysis_ready and not publication_ready and (allow_diagnostic_adapters or "smoke" in stage.casefold()):
+    if analysis_ready and "training_split_not_for_publication" in reasons:
+        status = "analysis_ready_nonpublication"
+    elif analysis_ready and not publication_ready and (allow_diagnostic_adapters or "smoke" in stage.casefold()):
         status = "diagnostic_complete"
     elif publication_ready:
         status = "publication_ready_adapted_protocol" if adapted_valid else "publication_ready"
@@ -239,6 +248,7 @@ def audit_publication_readiness(
     return {
         "schema_version": 1,
         "stage": stage,
+        "data_split": data_split,
         "output_dir": str(output_dir),
         "status": status,
         "analysis_ready": analysis_ready,

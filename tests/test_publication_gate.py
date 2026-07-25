@@ -89,6 +89,23 @@ def test_gate_allows_exact_upstream_run(tmp_path):
     assert report["status"] == "publication_ready"
 
 
+def test_gate_keeps_training_split_available_for_analysis_but_not_publication(tmp_path):
+    _write_run(tmp_path, exact_upstream=True)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["suite"]["stages"]["test"]["split"] = "train"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = audit_publication_readiness(tmp_path, "test", require_trace=True)
+
+    assert report["analysis_ready"] is True
+    assert report["publication_ready"] is False
+    assert report["publication_claim_allowed"] is False
+    assert report["status"] == "analysis_ready_nonpublication"
+    assert report["data_split"] == "train"
+    assert "training_split_not_for_publication" in report["blocking_reasons"]
+
+
 def test_gate_labels_smoke_as_diagnostic_even_without_baselines(tmp_path):
     _write_run(tmp_path, exact_upstream=False, stage="main_comparison_smoke")
     report = audit_publication_readiness(tmp_path, "main_comparison_smoke", require_trace=True, allow_diagnostic_adapters=True)
