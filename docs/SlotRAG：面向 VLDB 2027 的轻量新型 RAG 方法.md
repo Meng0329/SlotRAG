@@ -2566,10 +2566,13 @@ confidence gate。运行代码版本为 `6a4c4fe`，Qwen3.6-27B、Qwen3-Embeddin
 BGE-reranker-v2-m3 共享 provider RPM 30 / operational RPM 20，组件最大并发 64、matrix workers 16。
 
 本轮 400/400 final、400/400 immutable attempts、400/400 trace 完整，状态为 `385 ok + 15
-budget_exceeded`，无 provider/解析失败和 retry；100/100 imported snapshots 有效，387 条 replay 的
+budget_exceeded`，无 provider/解析失败和 retry；事后精确分类表明其中 `13` 条是
+`question timeout exceeded (300s)`，只有 `2` 条是真实 retrieval budget 超限。100/100 imported
+snapshots 有效，387 条 replay 的
 missing provenance、unknown snapshot、result/effective hash mismatch、inconsistent pair 和 effective-plan
-variant 均为 0。records audit 为 `complete=true`，own-method publication gate 为
-`publication_ready=true`。该 gate 只证明内部方法比较记录可审计；split 仍是 train，不能替代 held-out。
+variant 均为 0。records audit 为 `complete=true`；但在提交 `c3b5356` 增加基础设施超时硬门后，
+publication gate 已更正为 `analysis_ready=false / publication_ready=false`，阻断原因为
+`infrastructure_question_timeouts:13`。下表仅保留为被超时污染的历史描述值，不能用于因果归因或方法晋级。
 
 | 指标（五数据集宏平均） | plain | grounded adaptive gated 0.5 | grounded adaptive gated 0.75 | grounded adaptive DQR |
 |---|---:|---:|---:|---:|
@@ -2591,13 +2594,40 @@ primary 差值（candidate 减 plain）为 2Wiki `+0.1000`、DROP `-0.0500`、Ho
 2 loss。MuSiQue 的未校正 95% bootstrap CI 为 `[+0.05,+0.40]`，但全 15 个比较经 Holm
 校正后 `p_holm=0.3528`，其余 full-candidate 比较也均不显著。
 
-必须同时报告既有独立 evaluation 证据：v37 的五数据集各 100 题上，同一 full candidate 的宏
-primary 仅从 `0.6656` 提升到 `0.7012`，相对 `+5.36%`，五个数据集 Holm 校正均不显著；
+必须同时报告既有独立 evaluation 历史记录：v37 的五数据集各 100 题上，同一 full candidate 的宏
+primary 从 `0.6656` 到 `0.7012`，相对 `+5.36%`，五个数据集 Holm 校正均不显著；新门禁
+反查又发现该目录含 `7` 个 300 秒 question timeout 和 `2` 个计划/连接失败，因此这个差值同样不是干净的 held-out 证据；
 retrieval/provider/wall 分别增加 `60.7%/35.7%/28.2%`。因此 v44 只把 full candidate 保留为
 因子消融对象，不证明 10% held-out 提升，也不改变 plain 的投稿默认地位。下一轮固定这 100 个
 train 问题与计划，运行 `grounding {off,on} × retrieval {slot-only,always-DQR,unbound-only-DQR}`
 的 2×3 因子消融，分离 grounding、查询扩展及交互贡献；完整原始数据与统计位于
 `runs/slotrag-grounded-adaptive-frozen-train-v1/`。
+
+#### v45/v46：2×3 因子消融超时审计与干净复现预注册（2026-07-26）
+
+v45 使用 `configs/experiments/slotrag-grounding-retrieval-factorial-v1.yaml`，在 v44 同一 100 题、
+同一批只读计划上运行 `grounding {off,on} × retrieval {slot-only,always-DQR,
+unbound-only-DQR}` 六个单元。600/600 final、attempt 和 trace 完整，sample audit 为
+100 题、0 overlap/duplicate/missing/metadata mismatch，100/100 imported snapshots 有效，计划
+hash/provenance/pair/variant 异常均为 0。
+
+但 v45 的 `541 ok + 59 budget_exceeded` 中，`49` 条是 300 秒 question timeout，只有
+`10` 条是 retrieval budget 超限；超时且在六个单元间严重不均。受污染的宏 primary
+描述值为 off-slot/off-always/off-unbound=`0.6828/0.5643/0.5845`，on-slot/on-always/
+on-unbound=`0.7078/0.7130/0.6430`；不允许由此计算 grounding 主效应或交互。同一 plain
+单元在 v44→v45 的 100 题中为 4 win / 93 tie / 3 loss，宏 primary 变化 `+0.02949`，
+这个运行间变化也必须进入稳定性报告。新 gate 已将 v45 更正为
+`blocked`，原因 `infrastructure_question_timeouts:49`；原 final/attempt/trace 不删除、不覆盖。
+
+v46 预注册为 `configs/experiments/slotrag-grounding-retrieval-factorial-v2.yaml` 与
+`runs/slotrag-grounding-retrieval-factorial-v2/`；相对 v45 只将单题 deadline 从 300 秒改为
+900 秒，数据、seed、六方法、计划来源、max steps/LLM/retrieval budget、provider 与
+matrix workers 均不变，并且全量重跑 600 条，不只重跑失败题。硬门为
+`question_timeout_count=0`、records/sample/frozen-plan audits 全通过；真实 retrieval budget 失败
+仍保留在分母。预先固定五个 primary 对比：grounding 主效应、always-vs-slot 主效应、
+unbound-vs-slot 主效应、grounding×always 和 grounding×unbound 差中之差。使用同题
+10,000 次 bootstrap、seed 27182、95% CI 和五对比 Holm 校正；EM/F1、evidence 和全部成本为
+次要指标，不允许看到 v46 后改变对比定义。
 
 # 11. 关键消融
 

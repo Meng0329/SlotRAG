@@ -155,6 +155,28 @@ plain 为 `+12.20%`，EM/F1 为 `+0.0500/+0.0612`，证据 Recall/MRR/nDCG@10 �
 unbound-only-DQR}`；继续使用 v44 的 100 个 train 问题和只读计划，报告主效应、交互、逐题
 bootstrap、Holm 校正、失败分母和完整成本。只有先定位正贡献模块，才允许设计下一版方法。
 
+### v45/v46 2×3 因子消融基础设施修正（2026-07-26）
+
+v45 的 600 条 final/attempt/trace 和 100 个只读 plan snapshot 全部落盘，sample、records、
+plan hash/provenance 审计均完整。但 59 个 `budget_exceeded` 中有 49 个是
+`question timeout exceeded (300s)`，只有 10 个是真实 retrieval budget 超限；超时在单元间
+不均。提交 `c3b5356` 使 publication gate 对 question timeout 硬阻断，v45 现为
+`analysis_ready=false / publication_ready=false`，历史结果只能用于基础设施诊断。同一 plain
+单元 v44→v45 宏 primary 变化 `+0.02949`（4 win / 93 tie / 3 loss），后续必须显式报告
+运行间稳定性。v44 也反查到 13 个同类超时，v37 有 7 个，两者的原始增益数值不再用于晋级。
+
+v46 使用 `configs/experiments/slotrag-grounding-retrieval-factorial-v2.yaml`，新目录为
+`runs/slotrag-grounding-retrieval-factorial-v2/`。它与 v45 的唯一协议差异是将单题 deadline
+从 300 秒提高到 900 秒；数据、seed、冻结计划、六个单元、三项计数预算和并发协议均不变。
+必须全量执行 600 条，禁止只挑 v45 失败题补跑。硬门为 question timeout=0，真实
+retrieval budget 失败保留在分母。
+
+在调用前固定五个 primary contrast：`G`（grounding 主效应）、`A`（always-slot）、
+`U`（unbound-slot）、`G×A`、`G×U`。每题先在六单元内计算 contrast，再做 10,000 次
+paired bootstrap（seed 27182）、95% CI、双侧置换/Bootstrap p 值与五对比 Holm 校正；
+同时报告逐数据集效应、EM/F1、evidence Recall/MRR/nDCG@10、retrieval/provider/tokens/wall、
+失败类型与 v44/v45/v46 plain 稳定性。不得在观察 v46 后增删主 contrast。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
