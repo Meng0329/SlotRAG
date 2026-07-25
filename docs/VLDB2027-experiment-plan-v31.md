@@ -177,6 +177,23 @@ paired bootstrap（seed 27182）、95% CI、双侧置换/Bootstrap p 值与五�
 同时报告逐数据集效应、EM/F1、evidence Recall/MRR/nDCG@10、retrieval/provider/tokens/wall、
 失败类型与 v44/v45/v46 plain 稳定性。不得在观察 v46 后增删主 contrast。
 
+v46 运行中已出现至少 1 个 900 秒 question timeout，因此本轮必定无法通过
+推断硬门；仍按预注册完成 600 条，只作基础设施诊断。该超时的 12 个 provider
+事件均为 HTTP 200、0 retry，总服务延迟 2.4666 秒，与 900.0007 秒题级 wall
+不符。根因为旧文件 RPM 限流器的同步唤醒抢锁导致 waiter 饥饿，而不是 provider
+服务超时。
+
+提交 `f88b95f` 已改为原子预约 `next_available_at` 后单次等待的 schema-2 限流，
+并保持对 schema 1 的兼容。专项测试 6/6、全套件 `236 passed, 1 skipped`。v47 固定
+`configs/experiments/slotrag-grounding-retrieval-factorial-v3.yaml` 与
+`runs/slotrag-grounding-retrieval-factorial-v3/`，在 v46 所有 worker 退出后才启动。它与 v46 使用
+完全相同的题目/计划、seed、六单元、6/64/6 预算、900 秒 deadline、16 个 matrix
+worker、provider 30 allowed/20 operational RPM 与服务并发上限 64；唯一运行时功能
+差异是公平限流实现。仍必须全量重跑 600 条，不允许定点重跑；通过条件是
+question timeout=0 及 records/sample/frozen-plan audits 全部完整。五个 primary contrasts、
+10,000 次分层 paired bootstrap、双侧 sign-flip 置换与 Holm 校正保持不变。
+v47 仍是 train 模块选择试验，不得因干净 gate 通过而标为投稿主证据。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

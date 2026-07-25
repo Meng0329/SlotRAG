@@ -2629,6 +2629,32 @@ unbound-vs-slot 主效应、grounding×always 和 grounding×unbound 差中之�
 10,000 次 bootstrap、seed 27182、95% CI 和五对比 Holm 校正；EM/F1、evidence 和全部成本为
 次要指标，不允许看到 v46 后改变对比定义。
 
+#### v46 调度根因与 v47 公平限流复现预注册（2026-07-26）
+
+v46 按执行版本 `9f64ce149a5...`、`code_dirty=false` 启动，五个数据集的样本
+SHA-256 与 v45 逐个一致，sample audit 为 0 overlap/missing/duplicate/metadata
+mismatch。运行期间已观察到至少 1 条 900 秒题级超时：HotpotQA 的
+`5a899a6e55429946c8d6e94d` 在 off/always 单元中产生 12 个 provider trace 事件，全部 HTTP 200、
+0 retry/服务错误，事件延迟合计仅 2.4666 秒，而题级 wall 为 900.0007 秒。
+因此超时并非模型或网络请求本身耗尽 deadline，而是旧 `FileRateLimiter` 的竞争式
+唤醒使部分 waiter 反复抢锁失败、长时间排队。v46 因此已触发硬门，仍必须完成
+600 条并作为不可变诊断记录保留，不进行 900 秒失败题的选择性回填。
+
+提交 `f88b95f` 将共享 RPM 限流改为单锁时间槽预约：请求在释放锁前原子写入
+`last_acquired_at`/`next_available_at`，然后只 sleep 一次；状态 schema 升为 2，并兼容读取
+schema 1。六并发预约、预约后睡眠及最小间隔测试均通过，全套件为
+`236 passed, 1 skipped`。这一修改会浪费崩溃 waiter 已预约的一个时间槽，但不会
+突破 20 RPM，也不再存在同一 waiter 无界重新竞争的路径。
+
+v47 预注册为 `configs/experiments/slotrag-grounding-retrieval-factorial-v3.yaml` 与
+`runs/slotrag-grounding-retrieval-factorial-v3/`。相对 v46 的唯一运行时功能变化是上述
+公平限流器；题目 ID/样本 SHA、seed 27182、六个因子单元、只读计划、6/64/6 计数预算、
+900 秒 deadline、matrix workers=16、provider 允许/实际 RPM=30/20、服务级并发
+上限 64 及五个 primary contrasts 均不变。v47 仅在 v46 全量结束、旧 worker 全部
+退出后启动，再次全量执行 600 条；硬门仍为题级超时 0 且全部记录/样本/计划
+审计通过。该 split 为 train，即使干净通过也只能用于模块选择，不标记为
+`publication_ready`，也不支撑“领先10%”或投稿主结论。
+
 # 11. 关键消融
 
 必须包含：
