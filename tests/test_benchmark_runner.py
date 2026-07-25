@@ -2,6 +2,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from pathlib import Path
 from threading import Barrier
 
 import pytest
@@ -121,6 +122,42 @@ def test_runner_merges_concurrent_manifest_requests(tmp_path, monkeypatch):
         ("hybrid",),
         ("graphrag",),
     }
+
+
+def test_runner_rejects_manifest_provenance_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config, **_kwargs: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    revision = {"value": "revision-a"}
+    fingerprint = {"value": "fingerprint-a"}
+    repository_root = Path.cwd()
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner._git_revision",
+        lambda path: revision["value"] if path == repository_root else "baseline-revision",
+    )
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner._source_fingerprint",
+        lambda _root: fingerprint["value"],
+    )
+    monkeypatch.setattr("slotrag.benchmarking.runner._git_dirty", lambda _root: False)
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(split="train", sample_size=1, methods=["hybrid", "graphrag"])},
+    )
+    output_dir = tmp_path / "run"
+    runner = BenchmarkRunner(suite, _app_config(), output_dir)
+    runner._write_manifest("test", ["hotpotqa"], ["hybrid"])
+
+    revision["value"] = "revision-b"
+    fingerprint["value"] = "fingerprint-b"
+    with pytest.raises(RuntimeError, match="provenance mismatch"):
+        runner._write_manifest("test", ["hotpotqa"], ["graphrag"])
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["code_revision"] == "revision-a"
+    assert [request["methods"] for request in manifest["run_requests"]] == [["hybrid"]]
 
 
 def test_runner_recomputes_global_progress_from_all_persisted_shards(tmp_path, monkeypatch):

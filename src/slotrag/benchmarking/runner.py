@@ -814,7 +814,21 @@ class BenchmarkRunner:
         }
 
         def merge_manifest(current: dict[str, Any] | None) -> dict[str, Any]:
-            manifest = initial_manifest if current is None else current
+            if current is None:
+                manifest = initial_manifest
+            else:
+                provenance_fields = ("code_revision", "code_dirty", "source_fingerprint_sha256")
+                mismatches = [
+                    field
+                    for field in provenance_fields
+                    if current.get(field) != initial_manifest[field]
+                ]
+                if mismatches:
+                    raise RuntimeError(
+                        "run manifest provenance mismatch; refusing to append a cell after "
+                        f"code drift in: {', '.join(mismatches)}"
+                    )
+                manifest = current
             stages = manifest.setdefault("stages_requested", [])
             requests = manifest.setdefault("run_requests", [])
             if stage_name not in stages:
