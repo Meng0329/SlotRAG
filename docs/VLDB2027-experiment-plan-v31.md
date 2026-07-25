@@ -124,6 +124,12 @@ attempt、完整失败分母和 paired bootstrap；若质量优势或成本节�
 
 选择结论：plain 仍是默认；gated/guarded 仅作消融，不得写成外部 baseline 或显著优势。下一轮只做 guard 触发率、证据支持置信度校准与相关性诊断；若继续为 0 或不改善质量/成本，则删除 guard 复杂度。不得根据训练差值修改 held-out 结果，任何晋级必须经过新的不重叠 frozen-plan paired evaluation。
 
+### v42 guard trigger telemetry 诊断（2026-07-25）
+
+提交 `3c48c52` 增加 `dual_query_guard_checks`，并新增 overlap-tolerant relaxed guard。75 条 train diagnostic（每数据集 5 题、三方法）final/attempt/trace 完整，`records audit` 通过；25 个冻结计划快照、75 条 replay 均无哈希/provenance 异常。strict/relaxed 各有 9 次 guard check，但 fallback 均为 0；relaxed 的宏 primary=`0.6144`，与 plain 相同，EM/F1 更低，不能证明模块贡献。
+
+结论：relaxed guard 不晋级；strict guard 仅保留为安全回退 telemetry，不写成质量提升。下一轮测试 confidence gate + `dual_query_unbound_only`，专门验证多槽位计划的重复扩展成本与质量变化。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

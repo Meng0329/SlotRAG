@@ -2534,6 +2534,12 @@ records audit 和 gate 均通过，仍属于 train-only 方法筛选。
 
 决策：plain SlotRAG 继续作为默认；gated 和 guarded 均只保留为内部消融，guarded 不晋级。当前证据回退实现有单元测试但触发条件过窄，不能用“未触发”冒充模块贡献。下一轮 train/dev 只做 guard 触发率与阈值校准诊断（增加触发/不触发的分层 telemetry，先验证证据支持分数是否与答案正确性相关），若仍无触发或无质量收益则删除该模块，避免为投稿保留零贡献复杂度。完整数据、失败记录、trace、摘要和审计在 `runs/slotrag-selective-guard-train-v1/{items,attempts,traces,summaries/method_tune,records-audit.json,publication-gate.json}`。
 
+#### v42：guard trigger telemetry diagnostic（2026-07-25）
+
+为排除“严格不重叠条件过窄”的假设，提交 `3c48c52` 增加 `dual_query_guard_checks` telemetry，并注册 overlap-tolerant 的 `slotrag-confidence-guarded-dual-query-0p5-relaxed`。在 `configs/experiments/slotrag-guard-trigger-diagnostic-v1.yaml` 上用五个数据集各 5 条 train 题、plain/strict/relaxed 三方法共 75 条记录；records audit 为 `75/75`、trace 缺失为 0、每方法 MuSiQue 各 1 条 `budget_exceeded`。25 个冻结计划快照全部有效，75 条 replay 的计划哈希/provenance 异常全为 0。
+
+strict 和 relaxed 各执行 9 次 guard check，但 fallback 均为 `0`；relaxed 的宏 primary=`0.6144`、EM=`0.4000`、F1=`0.4507`，plain 为 `0.6144/0.4400/0.4907`，该小样本不提供质量优势，paired p 值也全部为 `1.0`。因此 relaxed 版本不进入默认或主消融表，仅保留为诊断实现；严格 guard 只作为保守安全回退，不声称有质量贡献。下一轮转向 `unbound-only` 门控，验证多槽位计划是否可以在不重复扩展已绑定槽位的情况下保留 MuSiQue 的潜在收益并降低成本。
+
 # 11. 关键消融
 
 必须包含：
