@@ -127,6 +127,22 @@ def test_gate_rejects_adapted_protocol_without_audit_file(tmp_path):
     assert any(reason.startswith("adapted_protocol_invalid:") for reason in report["blocking_reasons"])
 
 
+def test_gate_rejects_ablation_with_invalid_existing_sample_audit(tmp_path):
+    stage = "component_ablation"
+    _write_run(tmp_path, exact_upstream=True, stage=stage)
+    (tmp_path / "sample-audit.json").write_text(json.dumps({
+        "schema_version": 1,
+        "valid": False,
+        "all_overlap_count": 0,
+        "all_missing_from_source_count": 1,
+    }), encoding="utf-8")
+
+    report = audit_publication_readiness(tmp_path, stage, require_trace=True)
+
+    assert report["publication_ready"] is False
+    assert "invalid_sample_audit" in report["blocking_reasons"]
+
+
 def test_gate_rejects_replay_hash_not_backed_by_frozen_snapshot(tmp_path):
     _write_run(tmp_path, exact_upstream=True)
     source_plan = SlotPlan.model_validate({

@@ -125,6 +125,8 @@ def audit_publication_readiness(
             reasons.append("missing_or_invalid_sample_audit")
         elif int(sample_audit.get("all_overlap_count", -1)) != 0:
             reasons.append("ablation_sample_overlap")
+        elif sample_audit.get("valid") is False:
+            reasons.append("invalid_sample_audit")
     frozen_plan_checks = {
         "invalid_snapshot_count": "frozen_plan_invalid_snapshot",
         "missing_provenance_count": "frozen_plan_missing_provenance",
@@ -178,6 +180,9 @@ def audit_publication_readiness(
         "record_audit_incomplete",
         "missing_or_invalid_manifest",
         "missing_or_invalid_matrix_manifest",
+        "missing_or_invalid_sample_audit",
+        "ablation_sample_overlap",
+        "invalid_sample_audit",
     }
     analysis_ready = not [
         reason

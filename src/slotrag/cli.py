@@ -10,8 +10,9 @@ from .config import AppConfig
 from .baseline import run_whole_question_baseline
 from .benchmarking.config import BenchmarkSuite
 from .benchmarking.baselines import audit_baselines
-from .benchmarking.datasets import audit_suite
+from .benchmarking.datasets import DATASETS, audit_suite
 from .benchmarking.record_audit import audit_run_records
+from .benchmarking.sample_audit import audit_existing_samples
 from .benchmarking.publication_gate import audit_publication_readiness
 from .benchmarking.runner import BenchmarkRunner
 from .benchmarking.statistics import summarize_run
@@ -87,6 +88,44 @@ def benchmark_audit(
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(payload + "\n", encoding="utf-8")
     typer.echo(payload)
+
+
+@benchmark_app.command("sample-audit")
+def benchmark_sample_audit(
+    stage: str = typer.Argument(...),
+    suite: Path = typer.Option(Path("configs/experiments/pilot.yaml"), exists=True, readable=True),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+    exclude_sample_dir: Optional[list[Path]] = typer.Option(
+        None,
+        "--exclude-sample-dir",
+        help="Prior sample directory to exclude; repeatable.",
+    ),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON report path"),
+) -> None:
+    """Audit persisted samples against their declared dataset split without rewriting them."""
+    cfg = load_benchmark_suite(suite)
+    stage_cfg = cfg.stage(stage)
+    report = {
+        "suite": str(suite),
+        "stage": stage,
+        **audit_existing_samples(
+            benchmark_root=cfg.benchmark_root,
+            dataset_specs=DATASETS,
+            datasets=cfg.datasets,
+            split=stage_cfg.split,
+            expected_size=stage_cfg.sample_size,
+            seed=cfg.seed,
+            sample_dir=output_dir / "samples" / stage,
+            excluded_sample_dirs=exclude_sample_dir or (),
+        ),
+    }
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    target = output or output_dir / "sample-audit.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload + "\n", encoding="utf-8")
+    typer.echo(payload)
+    if not report["valid"]:
+        raise typer.Exit(code=2)
 
 
 @benchmark_app.command("baseline-audit")
