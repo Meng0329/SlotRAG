@@ -2633,12 +2633,35 @@ unbound-vs-slot 主效应、grounding×always 和 grounding×unbound 差中之�
 
 v46 按执行版本 `9f64ce149a5...`、`code_dirty=false` 启动，五个数据集的样本
 SHA-256 与 v45 逐个一致，sample audit 为 0 overlap/missing/duplicate/metadata
-mismatch。运行期间已观察到至少 1 条 900 秒题级超时：HotpotQA 的
-`5a899a6e55429946c8d6e94d` 在 off/always 单元中产生 12 个 provider trace 事件，全部 HTTP 200、
-0 retry/服务错误，事件延迟合计仅 2.4666 秒，而题级 wall 为 900.0007 秒。
-因此超时并非模型或网络请求本身耗尽 deadline，而是旧 `FileRateLimiter` 的竞争式
-唤醒使部分 waiter 反复抢锁失败、长时间排队。v46 因此已触发硬门，仍必须完成
-600 条并作为不可变诊断记录保留，不进行 900 秒失败题的选择性回填。
+mismatch。最终 600/600 item、attempt、trace 和 100/100 plan snapshot 落盘；
+records audit 为 `complete=true`，missing/non-contiguous attempt、missing/invalid trace、
+plan hash/provenance/pair/variant 异常均为 0。状态为 `582 ok + 18 budget_exceeded`：
+其中 13 条是真实 retrieval-call budget，5 条是 900 秒 question timeout。超时分布为
+2Wiki off-unbound 1 条、HotpotQA off-always/on-always/on-unbound 各 1 条、MuSiQue
+on-slot 1 条；单元级状态计数保存在 `failure_report.csv`，完整题目 ID 与失败子类保存在
+不可变 item/attempt 中。
+
+HotpotQA `5a899a6e55429946c8d6e94d` 的 off-always 超时含 12 个 provider trace 事件，
+全部 HTTP 200、0 retry/服务错误，事件延迟合计仅 2.4666 秒，而题级 wall 为
+900.0007 秒；`5ab838a855429934fafe6d1d` 的 on-always 同样只有 3.5700 秒 provider
+延迟而题级 wall 为 900.0009 秒。因此这些失败并非 provider 请求本身耗尽 deadline，
+而是旧 `FileRateLimiter` 的竞争式唤醒使部分 waiter 反复抢锁失败、长时间排队。
+
+v46 还暴露出运行 provenance 缺口：矩阵于北京时间约 02:40 启动，但限流源码在
+03:22 修改、`f88b95f` 于 03:26 提交；矩阵只并发启动 16/30 个 cell，后续排队的
+DROP cell 因而加载了新限流实现，而 `manifest.json` 仍只记录首个 cell 的
+`9f64ce1/code_dirty=false`。所以 v46 不仅有 5 个不均匀超时，还是混合运行时；
+禁止运行因子显著性分析或用它选择模块。
+
+为完整保留诊断数据，通用汇总仍写出 `macro_metrics.csv`（6×145）、
+`metrics.csv`（30×182）、`per_question.csv`（600×170）、`retrieval_metrics.csv`
+（30×74）、`stratified_metrics.csv`（96×183）与 `failure_report.csv`（42×6）。
+受污染的宏 primary 描述值为 off-slot/off-always/off-unbound=
+`0.7134/0.6957/0.6730`，on-slot/on-always/on-unbound=
+`0.6980/0.7138/0.7186`，对应成功数为 `99/95/97/98/95/98`（每单元 100 条）。
+plain 在 v44/v45/v46 的宏 primary 为 `0.6533/0.6828/0.7134`；v44→v46 为
+7 win / 93 tie / 0 loss、`+0.06017`，但三个 plain 单元分别含 4/1/0 个 question
+timeout，因此这只是运行稳定性诊断，不是方法改善。
 
 提交 `f88b95f` 将共享 RPM 限流改为单锁时间槽预约：请求在释放锁前原子写入
 `last_acquired_at`/`next_available_at`，然后只 sleep 一次；状态 schema 升为 2，并兼容读取
@@ -2646,12 +2669,19 @@ schema 1。六并发预约、预约后睡眠及最小间隔测试均通过，全
 `236 passed, 1 skipped`。这一修改会浪费崩溃 waiter 已预约的一个时间槽，但不会
 突破 20 RPM，也不再存在同一 waiter 无界重新竞争的路径。
 
+提交 `5cc1537` 进一步在每个 cell 写 manifest 前比较 `code_revision`、`code_dirty`
+和 `source_fingerprint_sha256`；任一字段与运行目录首个 cell 不同就拒绝续跑且不修改
+原 manifest。红灯测试先复现了静默混合，修复后 benchmark runner 12/12、全套件
+`237 passed, 1 skipped`。该保护不改变静态代码下的题目执行，只阻止 v46 这类
+运行中代码漂移再次进入同一目录。
+
 v47 预注册为 `configs/experiments/slotrag-grounding-retrieval-factorial-v3.yaml` 与
-`runs/slotrag-grounding-retrieval-factorial-v3/`。相对 v46 的唯一运行时功能变化是上述
-公平限流器；题目 ID/样本 SHA、seed 27182、六个因子单元、只读计划、6/64/6 计数预算、
+`runs/slotrag-grounding-retrieval-factorial-v3/`。相对 v46 的基础设施变化仅为上述
+公平限流器和 immutable-provenance 硬保护；题目 ID/样本 SHA、seed 27182、六个因子单元、
+只读计划、6/64/6 计数预算、
 900 秒 deadline、matrix workers=16、provider 允许/实际 RPM=30/20、服务级并发
-上限 64 及五个 primary contrasts 均不变。v47 仅在 v46 全量结束、旧 worker 全部
-退出后启动，再次全量执行 600 条；硬门仍为题级超时 0 且全部记录/样本/计划
+上限 64 及五个 primary contrasts 均不变。v47 从单一干净提交和新目录启动，并在运行期间
+冻结代码，再次全量执行 600 条；硬门仍为题级超时 0 且全部记录/样本/计划
 审计通过。该 split 为 train，即使干净通过也只能用于模块选择，不标记为
 `publication_ready`，也不支撑“领先10%”或投稿主结论。
 

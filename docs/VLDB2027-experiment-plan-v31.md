@@ -177,19 +177,29 @@ paired bootstrap（seed 27182）、95% CI、双侧置换/Bootstrap p 值与五�
 同时报告逐数据集效应、EM/F1、evidence Recall/MRR/nDCG@10、retrieval/provider/tokens/wall、
 失败类型与 v44/v45/v46 plain 稳定性。不得在观察 v46 后增删主 contrast。
 
-v46 运行中已出现至少 1 个 900 秒 question timeout，因此本轮必定无法通过
-推断硬门；仍按预注册完成 600 条，只作基础设施诊断。该超时的 12 个 provider
+v46 已按预注册完成 600/600 item、attempt、trace 和 100/100 plan snapshot；
+records audit 完整，最终为 `582 ok + 18 budget_exceeded`，其中 13 条为真实
+retrieval budget、5 条为 900 秒 question timeout。代表性超时的 12 个 provider
 事件均为 HTTP 200、0 retry，总服务延迟 2.4666 秒，与 900.0007 秒题级 wall
-不符。根因为旧文件 RPM 限流器的同步唤醒抢锁导致 waiter 饥饿，而不是 provider
-服务超时。
+不符；另一条只有 3.5700 秒 provider 延迟而 wall 为 900.0009 秒。根因为旧文件
+RPM 限流器的同步唤醒抢锁导致 waiter 长时间饥饿，而不是 provider 服务超时。
+
+该轮还有独立的 provenance 污染：矩阵约 02:40 启动，限流源码在 03:22 修改，
+但 16-worker 调度器会在前序 cell 完成后才启动后续 14 个 cell，故部分 DROP cell
+加载了新实现，首个 manifest 却仍记录 `9f64ce1/code_dirty=false`。v46 因而只作
+不可变基础设施诊断，不运行 factorial analyzer。通用汇总保留完整的 145 列宏指标、
+182 列 cell 指标、170 列逐题指标、74 列检索指标、183 列分层指标和失败分母；
+所有描述数值均不得用于模块晋级。
 
 提交 `f88b95f` 已改为原子预约 `next_available_at` 后单次等待的 schema-2 限流，
-并保持对 schema 1 的兼容。专项测试 6/6、全套件 `236 passed, 1 skipped`。v47 固定
+并保持对 schema 1 的兼容。提交 `5cc1537` 又使后续 cell 的 revision、dirty 状态或
+源指纹与首个 cell 不一致时直接拒绝续跑。专项限流测试 6/6、benchmark runner 12/12、
+全套件 `237 passed, 1 skipped`。v47 固定
 `configs/experiments/slotrag-grounding-retrieval-factorial-v3.yaml` 与
-`runs/slotrag-grounding-retrieval-factorial-v3/`，在 v46 所有 worker 退出后才启动。它与 v46 使用
+`runs/slotrag-grounding-retrieval-factorial-v3/`，从单一干净提交启动并冻结运行时代码。它与 v46 使用
 完全相同的题目/计划、seed、六单元、6/64/6 预算、900 秒 deadline、16 个 matrix
-worker、provider 30 allowed/20 operational RPM 与服务并发上限 64；唯一运行时功能
-差异是公平限流实现。仍必须全量重跑 600 条，不允许定点重跑；通过条件是
+worker、provider 30 allowed/20 operational RPM 与服务并发上限 64；基础设施差异仅为
+公平限流和 provenance 硬保护。仍必须全量重跑 600 条，不允许定点重跑；通过条件是
 question timeout=0 及 records/sample/frozen-plan audits 全部完整。五个 primary contrasts、
 10,000 次分层 paired bootstrap、双侧 sign-flip 置换与 Holm 校正保持不变。
 v47 仍是 train 模块选择试验，不得因干净 gate 通过而标为投稿主证据。
