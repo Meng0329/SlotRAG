@@ -90,6 +90,7 @@ ABLATION_METHODS = [
     "slotrag-grounded-adaptive-dual-query-retrieval",
     "slotrag-confidence-gated-dual-query-0p5",
     "slotrag-confidence-gated-dual-query-0p75",
+    "slotrag-confidence-gated-unbound-dual-query-0p5",
     "slotrag-confidence-guarded-dual-query-0p5",
     "slotrag-confidence-guarded-dual-query-0p5-relaxed",
     "slotrag-grounded-adaptive-confidence-gated-dual-query-0p5",
@@ -246,6 +247,15 @@ METHODS: dict[str, MethodSpec] = {
         dual_query_retrieval=True,
         dual_query_confidence_threshold=0.75,
         description="dual retrieval only when slot-only top reranker score is below 0.75",
+    ),
+    "slotrag-confidence-gated-unbound-dual-query-0p5": MethodSpec(
+        "slotrag-confidence-gated-unbound-dual-query-0p5",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        dual_query_unbound_only=True,
+        dual_query_confidence_threshold=0.5,
+        description="confidence-gated dual retrieval only for unbound slots",
     ),
     "slotrag-confidence-guarded-dual-query-0p5": MethodSpec(
         "slotrag-confidence-guarded-dual-query-0p5",
