@@ -2451,6 +2451,50 @@ DQR 作为下一轮候选消融，不设为默认方法；下一轮只在不重�
 attempt、trace、130+ 指标、P50/P95/P99、逐题 bootstrap 和 frozen-plan audit 位于
 `runs/slotrag-grounded-adaptive-replay-v2/summaries/adaptive_candidate_replay/`。
 
+#### v38：自适应双查询 v4 train 筛选（2026-07-25）
+
+在不重叠 train split 上运行 `configs/experiments/slotrag-method-tuning-v4.yaml`，5 个方法、5 个数据集、
+每 cell 10 题，共 250 条 final/attempt。`runs/slotrag-method-tune-v4` 的 records audit 为
+`complete=true`、250/250 trace 齐全；状态为 231 `ok`、19 `budget_exceeded`。这是方法内部训练筛选，
+不是外部 baseline exact reproduction；gate 的 `exact_upstream_execution_verified=false` 保持不变。
+
+| 方法 | primary | EM | F1 | Evidence Recall/MRR/nDCG | OK/50 | retrieval calls | dual expansion/skip | total tokens | provider calls | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.6694 | 0.4800 | 0.5293 | 0.8000/0.9500/0.8198 | 48 | 1.300 | 0/0 | 2915.8 | 5.020 | 88.57 s |
+| DQR | 0.6794 | 0.4800 | 0.5393 | 0.6500/0.8750/0.6936 | 47 | 2.480 | 1.24/0 | 2675.4 | 7.280 | 99.52 s |
+| adaptive DQR | 0.6094 | 0.4200 | 0.4693 | 0.6500/0.9000/0.7014 | 46 | 2.320 | 0.94/0.44 | 3155.2 | 7.340 | 90.80 s |
+| grounded DQR | 0.6394 | 0.4400 | 0.4993 | 0.6500/0.9000/0.7028 | 47 | 2.760 | 1.38/0 | 3230.4 | 7.940 | 81.18 s |
+| grounded adaptive DQR | 0.6230 | 0.4400 | 0.4830 | 0.6250/0.8500/0.6710 | 43 | 1.880 | 0.86/0.16 | 2475.0 | 6.580 | 118.52 s |
+
+v4 没有支持把 adaptive DQR 设为默认：相对 plain 的 DQR primary 仅高 `+1.49%`，但 retrieval/provider/wall
+均增加；adaptive 反而低于 plain，且 HotpotQA/MuSiQue 预算失败集中。所有逐题 bootstrap 的 Holm 校正均未显著，
+所以只保留双查询实现用于下一轮门控实验。完整 JSON/CSV/trace 在
+`runs/slotrag-method-tune-v4/summaries/method_tune/`。
+
+#### v39：置信度门控双查询 train 筛选（2026-07-25）
+
+门控实现先执行 slot-only 检索；仅当首条重排得分低于阈值时才发起原问题扩展并做 RRF。新增
+`dual_query_confidence_skips` telemetry，不改变计划、抽取和评分协议。第一次 v5 启动因继承
+`trace.enabled=false`，虽完成 250 条但没有 trace，已在 `runs/slotrag-method-tune-v5/INCOMPLETE_FOR_SUBMISSION.txt`
+标记为诊断目录，未用空 trace 回填。随后以显式 `SLOTRAG_TRACE_ENABLED=true` 重跑同一配置到
+`runs/slotrag-method-tune-v5-traced`；该目录 250/250 final、attempt、trace 完整，236 `ok`、14 `budget_exceeded`，
+records audit 和 gate 均通过，仍属于 train-only 方法筛选。
+
+| 方法 | primary | EM | F1 | Evidence Recall/MRR/nDCG | OK/50 | retrieval calls | expansion/skip/conf-skip | total tokens | provider calls | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.6612 | 0.4800 | 0.5413 | 0.7875/0.8500/0.7962 | 46 | 1.360 | 0/0/0 | 3072.0 | 5.620 | 103.38 s |
+| gated DQR 0.5 | **0.7479** | **0.5600** | **0.6080** | **0.8625/0.9500/0.8808** | 48 | 1.660 | 0.36/0/0.94 | 3232.4 | 6.160 | 103.49 s |
+| gated DQR 0.75 | 0.6879 | 0.5000 | 0.5480 | 0.8625/0.9500/0.8768 | 46 | 1.600 | 0.38/0/0.84 | 2903.4 | 6.360 | 112.33 s |
+| grounded adaptive gated 0.5 | 0.7212 | 0.5200 | 0.5813 | 0.8125/0.9000/0.8268 | 47 | 1.700 | 0.30/0.46/0.64 | 3321.5 | 6.380 | 115.26 s |
+| grounded adaptive gated 0.75 | **0.7512** | 0.5400 | **0.6113** | **0.8625/0.9500/0.8728** | 49 | 1.740 | 0.28/0.48/0.70 | 3947.3 | 6.340 | 107.41 s |
+
+按质量/成本折中，下一次新 held-out 优先验证 `gated DQR 0.5`：相对本轮 plain primary `+0.0867`
+（相对 `+13.1%`），retrieval `+22.1%`、provider `+9.6%`、wall 近似不变、tokens `+5.2%`。这是
+训练筛选差值，5 个数据集 paired bootstrap 的 Holm 校正仍全未显著，不能写成投稿优势，更不能把它
+外推到 v2 冻结评测。下一步必须使用新的、不重叠的 held-out 题目和 frozen-plan paired gate，同时报告
+门控命中、质量、证据、失败分母、P50/P95/P99 和成本；若门控无法稳定降低 wall/provider 成本，则回退
+到 plain SlotRAG。完整记录在 `runs/slotrag-method-tune-v5-traced/summaries/method_tune/`。
+
 # 11. 关键消融
 
 必须包含：

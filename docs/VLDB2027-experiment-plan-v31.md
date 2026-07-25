@@ -77,6 +77,37 @@ confidence 门控、查询扩展缓存和长尾 timeout 控制；任何改动都
 并同时报告质量、证据、成本、延迟、失败分母和 Holm 校正结果。完整 CSV/JSON/trace 在
 `runs/slotrag-grounded-adaptive-replay-v2/summaries/adaptive_candidate_replay/`。
 
+### v38 自适应双查询 v4 train 筛选（2026-07-25）
+
+`configs/experiments/slotrag-method-tuning-v4.yaml` 在 train split 运行 5 个方法 × 5 个数据集 × 10 题，
+共 250 final/attempt。`runs/slotrag-method-tune-v4` records audit 为 `complete=true`，状态 231 `ok`、
+19 `budget_exceeded`，trace 完整。宏平均如下：plain SlotRAG primary `0.6694`、DQR `0.6794`、adaptive DQR
+`0.6094`、grounded DQR `0.6394`、grounded adaptive DQR `0.6230`。DQR 相对 plain 仅约 `+1.49%`，但
+retrieval/provider/wall 增加；adaptive 变体在 HotpotQA/MuSiQue 失败较多。逐题 bootstrap Holm 校正均未显著，
+该轮只能用于训练筛选，不能进入投稿主表或外部 baseline 结论。完整 summary/CSV/trace 在
+`runs/slotrag-method-tune-v4/summaries/method_tune/`。
+
+### v39 置信度门控双查询 train 筛选（2026-07-25）
+
+新增门控：先执行 slot-only 检索，首条重排分数达到阈值时跳过原问题扩展，否则执行第二路并做 RRF；
+`dual_query_confidence_skips` 作为独立成本指标写入 RunMetrics。第一次 v5 运行继承 `trace.enabled=false`，
+已标记 `runs/slotrag-method-tune-v5/INCOMPLETE_FOR_SUBMISSION.txt`，不回填伪 trace。显式开启 trace 后在
+`runs/slotrag-method-tune-v5-traced` 重跑同一 250 条 train 矩阵，records audit/gate 均通过，236 `ok`、14
+`budget_exceeded`。
+
+| 方法 | primary | EM | F1 | Evidence Recall/MRR/nDCG | OK/50 | retrieval | expansion/skip/conf-skip | tokens | provider | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG | 0.6612 | 0.4800 | 0.5413 | 0.7875/0.8500/0.7962 | 46 | 1.360 | 0/0/0 | 3072.0 | 5.620 | 103.38 s |
+| gated DQR 0.5 | **0.7479** | **0.5600** | **0.6080** | **0.8625/0.9500/0.8808** | 48 | 1.660 | 0.36/0/0.94 | 3232.4 | 6.160 | 103.49 s |
+| gated DQR 0.75 | 0.6879 | 0.5000 | 0.5480 | 0.8625/0.9500/0.8768 | 46 | 1.600 | 0.38/0/0.84 | 2903.4 | 6.360 | 112.33 s |
+| grounded adaptive gated 0.5 | 0.7212 | 0.5200 | 0.5813 | 0.8125/0.9000/0.8268 | 47 | 1.700 | 0.30/0.46/0.64 | 3321.5 | 6.380 | 115.26 s |
+| grounded adaptive gated 0.75 | **0.7512** | 0.5400 | **0.6113** | **0.8625/0.9500/0.8728** | 49 | 1.740 | 0.28/0.48/0.70 | 3947.3 | 6.340 | 107.41 s |
+
+质量/成本折中暂选择 `gated DQR 0.5` 作为下一次候选；相对本轮 plain primary `+13.1%` 只是 train
+筛选结果，Holm 校正未显著。下一步必须在新、不重叠 held-out 题目上复现，沿用 `--require-trace`、immutable
+attempt、完整失败分母和 paired bootstrap；若质量优势或成本节省不稳定，默认回退 plain SlotRAG。该轮
+所有产物在 `runs/slotrag-method-tune-v5-traced/summaries/method_tune/`。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
