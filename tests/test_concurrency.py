@@ -44,6 +44,28 @@ def test_file_rate_limiter_spaces_requests_at_operational_rpm(tmp_path):
     state = json.loads((tmp_path / "agnes.json").read_text(encoding="utf-8"))
     assert state["rpm"] == 20
     assert state["acquisitions"] == 2
+    assert state["schema_version"] == 2
+    assert state["next_available_at"] == pytest.approx(106.0)
+
+
+def test_file_rate_limiter_reserves_permit_before_sleeping(tmp_path):
+    path = tmp_path / "agnes.json"
+    now = [100.0]
+    limiter = FileRateLimiter(path, rpm=20, clock=lambda: now[0], sleeper=lambda _seconds: None)
+    assert limiter.acquire() == 0.0
+
+    observed = []
+
+    def sleep(seconds):
+        observed.append(json.loads(path.read_text(encoding="utf-8")))
+        now[0] += seconds
+
+    queued = FileRateLimiter(path, rpm=20, clock=lambda: now[0], sleeper=sleep)
+    assert queued.acquire() == pytest.approx(3.0)
+
+    assert observed[0]["acquisitions"] == 2
+    assert observed[0]["last_acquired_at"] == pytest.approx(103.0)
+    assert observed[0]["next_available_at"] == pytest.approx(106.0)
 
 
 def test_file_rate_limiter_serializes_concurrent_callers(tmp_path):
@@ -58,6 +80,25 @@ def test_file_rate_limiter_serializes_concurrent_callers(tmp_path):
     state = json.loads(limiter_path.read_text(encoding="utf-8"))
     assert state["acquisitions"] == 6
     assert state["rpm"] == 6000
+
+
+def test_file_rate_limiter_assigns_concurrent_callers_bounded_fifo_slots(tmp_path):
+    limiter_path = tmp_path / "shared.json"
+
+    def acquire(_index):
+        return FileRateLimiter(
+            limiter_path,
+            rpm=6000,
+            clock=lambda: 100.0,
+            sleeper=lambda _seconds: None,
+        ).acquire()
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        waits = list(executor.map(acquire, range(6)))
+
+    assert sorted(waits) == pytest.approx([0.0, 0.01, 0.02, 0.03, 0.04, 0.05])
+    state = json.loads(limiter_path.read_text(encoding="utf-8"))
+    assert state["next_available_at"] == pytest.approx(100.06)
 
 
 def test_file_concurrency_limiter_caps_inflight_requests(tmp_path):

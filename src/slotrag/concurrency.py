@@ -98,31 +98,33 @@ class FileRateLimiter:
         self._sleeper = sleeper
 
     def acquire(self) -> float:
-        waited = 0.0
-        while True:
-            delay = 0.0
-            with exclusive_file_lock(self.path):
-                if self.path.exists():
-                    state = json.loads(self.path.read_text(encoding="utf-8"))
-                else:
-                    state = {}
-                now = self._clock()
+        with exclusive_file_lock(self.path):
+            if self.path.exists():
+                state = json.loads(self.path.read_text(encoding="utf-8"))
+            else:
+                state = {}
+            now = self._clock()
+            if "next_available_at" in state:
+                next_available_at = float(state["next_available_at"])
+            else:
                 last_acquired_at = float(state.get("last_acquired_at", now - self.interval_seconds))
-                delay = max(last_acquired_at + self.interval_seconds - now, 0.0)
-                if delay <= 1e-9:
-                    atomic_write_json(
-                        self.path,
-                        {
-                            "schema_version": 1,
-                            "rpm": self.rpm,
-                            "minimum_interval_seconds": self.interval_seconds,
-                            "last_acquired_at": now,
-                            "acquisitions": int(state.get("acquisitions", 0)) + 1,
-                        },
-                    )
-                    return waited
+                next_available_at = last_acquired_at + self.interval_seconds
+            scheduled_at = max(now, next_available_at)
+            delay = scheduled_at - now
+            atomic_write_json(
+                self.path,
+                {
+                    "schema_version": 2,
+                    "rpm": self.rpm,
+                    "minimum_interval_seconds": self.interval_seconds,
+                    "last_acquired_at": scheduled_at,
+                    "next_available_at": scheduled_at + self.interval_seconds,
+                    "acquisitions": int(state.get("acquisitions", 0)) + 1,
+                },
+            )
+        if delay > 1e-9:
             self._sleeper(delay)
-            waited += delay
+        return delay
 
 
 class FileConcurrencyLimiter:
