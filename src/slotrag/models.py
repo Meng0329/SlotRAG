@@ -253,6 +253,7 @@ class RunMetrics(StrictModel):
     dual_query_expansions: int = 0
     dual_query_skips: int = 0
     dual_query_confidence_skips: int = 0
+    dual_query_guard_checks: int = 0
     dual_query_guard_fallbacks: int = 0
     embedding_calls: int = 0
     reranker_calls: int = 0
