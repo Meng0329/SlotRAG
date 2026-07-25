@@ -1,6 +1,8 @@
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from threading import Barrier
 
 import pytest
 
@@ -340,6 +342,63 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
 
     assert runner.run("test")["skipped"] == 2
     assert len(compiled) == 1
+
+
+def test_concurrent_runners_compile_one_shared_frozen_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner._question_deadline",
+        lambda _seconds: nullcontext(),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag", "slotrag-typed-extraction"],
+            frozen_plan_source="slotrag",
+        )},
+    )
+    output_dir = tmp_path / "run"
+    runners = [
+        BenchmarkRunner(suite, _app_config(), output_dir),
+        BenchmarkRunner(suite, _app_config(), output_dir),
+    ]
+    question = QuestionRecord(
+        id="q1",
+        question="What is named Alpha?",
+        passages=[Passage(id="p1", doc_id="d1", text="Alpha is the answer.")],
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "outputs": ["?answer"],
+    })
+    compile_calls = []
+
+    def compile_plan(*_args):
+        compile_calls.append(1)
+        time.sleep(0.05)
+        return plan, RunMetrics(compilation_llm_calls=1)
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.compile_slotrag_plan", compile_plan)
+    start = Barrier(2)
+
+    def load(runner):
+        start.wait()
+        return runner._load_or_create_frozen_plan("test", "hotpotqa", question, "slotrag")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(load, runners))
+
+    assert len(compile_calls) == 1
+    assert [outcome[0] for outcome in outcomes] == [plan, plan]
+    assert len({outcome[1]["plan_sha256"] for outcome in outcomes}) == 1
+    assert len(list((output_dir / "plans" / "test").rglob("*.json"))) == 1
+    assert len(list((output_dir / "plan_attempts" / "test").rglob("attempt-*.json"))) == 1
 
 
 def test_frozen_plan_attempts_are_immutable_and_stale_inputs_are_rejected(tmp_path, monkeypatch):

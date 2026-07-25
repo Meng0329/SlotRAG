@@ -290,6 +290,24 @@ class BenchmarkRunner:
         source_method: str,
     ) -> tuple[SlotPlan, dict[str, Any]]:
         snapshot_path = self._plan_snapshot_path(stage_name, dataset, question.id)
+        with exclusive_file_lock(snapshot_path):
+            return self._load_or_create_frozen_plan_locked(
+                stage_name,
+                dataset,
+                question,
+                source_method,
+                snapshot_path=snapshot_path,
+            )
+
+    def _load_or_create_frozen_plan_locked(
+        self,
+        stage_name: str,
+        dataset: str,
+        question: QuestionRecord,
+        source_method: str,
+        *,
+        snapshot_path: Path,
+    ) -> tuple[SlotPlan, dict[str, Any]]:
         relative_snapshot_path = snapshot_path.relative_to(self.output_dir).as_posix()
         compile_input = self._frozen_plan_input(stage_name, dataset, question, source_method)
         input_sha256 = _canonical_sha256(compile_input)
