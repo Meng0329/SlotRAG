@@ -56,6 +56,23 @@ def test_factorial_analysis_recovers_preregistered_main_and_interaction_effects(
     assert all(row["count"] == 4 for row in contrasts.values())
 
 
+def test_factorial_analysis_classifies_near_zero_contrasts_as_ties():
+    rows = _rows()
+    for row in rows:
+        row["primary_score"] = 1e-12 if row["base_method"].startswith("slotrag-grounded-") else 0.0
+
+    report = analyze_factorial_rows(rows, metrics=["primary_score"], iterations=100, seed=7)
+    grounding = next(
+        row
+        for row in report["contrasts"]
+        if row["scope"] == "overall" and row["contrast"] == "grounding_main"
+    )
+
+    assert grounding["wins"] == 0
+    assert grounding["ties"] == grounding["count"] == 4
+    assert grounding["losses"] == 0
+
+
 def test_factorial_analysis_rejects_duplicate_or_missing_cell_records():
     duplicate = _rows()
     duplicate.append(dict(duplicate[0]))
@@ -77,6 +94,7 @@ def test_factorial_analysis_writes_machine_readable_artifacts(tmp_path):
     report = analyze_factorial_csv(source, tmp_path / "analysis", metrics=["primary_score"], iterations=100, seed=7)
 
     assert report["input"]["sha256"]
+    assert report["analysis"]["implementation_sha256"]
     assert (tmp_path / "analysis" / "factorial_analysis.json").is_file()
     assert (tmp_path / "analysis" / "factorial_cell_means.csv").is_file()
     assert (tmp_path / "analysis" / "factorial_contrasts.csv").is_file()

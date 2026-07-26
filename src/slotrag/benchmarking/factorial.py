@@ -88,9 +88,10 @@ def _summary(
     estimate = float(np.mean([array.mean() for array in arrays]))
     count = sum(len(array) for array in arrays)
     values = np.concatenate(arrays)
-    wins = int(np.sum(values > 0))
-    ties = int(np.sum(np.isclose(values, 0.0)))
-    losses = int(len(values) - wins - ties)
+    is_tie = np.isclose(values, 0.0)
+    wins = int(np.sum((values > 0) & ~is_tie))
+    ties = int(np.sum(is_tie))
+    losses = int(np.sum((values < 0) & ~is_tie))
     if count < 2:
         ci_low = None
         ci_high = None
@@ -282,6 +283,10 @@ def analyze_factorial_csv(
     report["input"] = {
         "per_question_path": str(per_question_path),
         "sha256": hashlib.sha256(per_question_path.read_bytes()).hexdigest(),
+    }
+    report["analysis"] = {
+        "implementation": "slotrag.benchmarking.factorial",
+        "implementation_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
     (output_dir / "factorial_analysis.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
