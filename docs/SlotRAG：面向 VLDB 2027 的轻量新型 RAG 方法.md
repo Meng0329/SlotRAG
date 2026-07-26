@@ -2685,6 +2685,67 @@ v47 预注册为 `configs/experiments/slotrag-grounding-retrieval-factorial-v3.y
 审计通过。该 split 为 train，即使干净通过也只能用于模块选择，不标记为
 `publication_ready`，也不支撑“领先10%”或投稿主结论。
 
+#### v47：干净 2×3 因子消融与模块选择（2026-07-26）
+
+v47 已在冻结执行提交 `6686d818db3a240680a3ad3b039f62aef7a98074`上全量完成；
+manifest 记录 `code_dirty=false`、源码指纹
+`0d9d691754341dd07bfe740c533d652dbd18d74135c2f0605463ad936a384e27`。600 条
+final/attempt/trace 全部一一对应，100/100 个 frozen-plan snapshot 有效，plan
+hash/provenance/pair/variant 异常均为 0；sample audit 为 0
+overlap/missing/duplicate/metadata mismatch。最终状态为 `587 ok + 13 budget_exceeded`，
+13 条全是按协议保留在分母中的 retrieval-call budget，question timeout、provider
+错误和 trace error 均为 0。`records-audit.complete=true`；publication gate 为
+`analysis_ready_nonpublication`，唯一阻断项是 `training_split_not_for_publication`。
+
+| 2×3 单元（五数据集宏平均） | primary | EM | F1 | Evidence Recall/MRR/nDCG@10 | OK/100 | retrieval | provider | tokens | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| grounding off + slot | 0.6930 | 0.5100 | 0.5420 | 0.8188/1.0000/0.8539 | 99 | **1.520** | **4.940** | 2310.5 | **74.69 s** |
+| grounding off + always | 0.7054 | 0.5000 | 0.5360 | 0.8625/0.9750/0.8865 | 96 | 2.900 | 7.490 | **2005.0** | 132.62 s |
+| grounding off + unbound | 0.6830 | 0.4800 | 0.5136 | 0.8500/0.9750/0.8769 | 98 | 2.480 | 6.720 | 2133.5 | 113.91 s |
+| grounding on + slot | 0.7180 | **0.5300** | **0.5670** | 0.8188/1.0000/0.8508 | 99 | 1.530 | 5.010 | 2422.8 | 75.38 s |
+| grounding on + always | **0.7280** | 0.5200 | 0.5586 | 0.8500/0.9750/0.8769 | 96 | 2.900 | 7.560 | 2166.0 | 119.28 s |
+| grounding on + unbound | **0.7280** | 0.5200 | 0.5586 | **0.8750/1.0000/0.8999** | 99 | 2.510 | 6.860 | 2281.2 | 108.43 s |
+
+Evidence 宏平均只覆盖有 gold evidence 的 2Wiki/HotpotQA 40 题；其余数据集严格保持
+N/A，没有用 0 填补。五个预注册 primary contrast 均在题内先由六单元计算，再按
+dataset 等权分层做 10,000 次 paired bootstrap 和双侧 sign-flip：
+
+| primary contrast | effect | 95% CI | raw p | Holm p | win/tie/loss |
+|---|---:|---:|---:|---:|---:|
+| grounding 主效应 `G` | +0.03085 | [+0.00830,+0.05849] | 0.0306 | 0.1530 | 6/94/0 |
+| always - slot `A` | +0.01123 | [-0.03245,+0.05368] | 0.6454 | 1.0000 | 6/91/3 |
+| unbound - slot `U` | 0.00000 | [-0.03000,+0.03000] | 0.8746 | 1.0000 | 2/96/2 |
+| `G×A` | -0.00246 | [-0.03471,+0.02979] | 0.8738 | 1.0000 | 2/95/3 |
+| `G×U` | +0.02000 | [0.00000,+0.05000] | 0.4963 | 1.0000 | 2/98/0 |
+
+`G` 的逐数据集 primary 效应为 2Wiki `+0.01667`、DROP `0`、HotpotQA
+`+0.02482`、MuSiQue `+0.11275`、StrategyQA `0`，但五个单数据集 CI 均包含 0。
+因此未有任一 primary contrast 通过 Holm 0.05；`G` 是值得下一轮验证的稀疏正向
+信号，不是已建立的显著优势。
+
+事后审计曾发现因子分析器将接近 0 的浮点同时计为 win 和 tie，从而产生非法的
+`loss=-1`。提交 `8d45cae` 用互斥分类修复该问题，加入近零回归测试，并把分析器
+实现 SHA-256 写入产物。修复前后 effect/CI/p 完全不变，只将 `G` 的
+win/tie/loss 从非法计数更正为 `6/94/0`。干净重生产物的输入 SHA-256 为
+`88e0d905d79085b07aaddfa19fa7e708c8c61438b5f4d6473ce8decb7e8883f8`，分析器 SHA-256 为
+`76da527beb06a674aa3e9cbde0cb373eae8256ffb02f5ae84d4a4374e1055e8a`；完整测试为
+`238 passed, 1 skipped`。
+
+模块选择不取最高单点数字：grounding-on + slot 相对 plain 只提升 `+0.0250`
+（相对 `+3.61%`），但 EM/F1 同时提升 `+0.0200/+0.0250`，retrieval/provider/wall
+只增加 `0.7%/1.4%/0.9%`。两个最高单元相对 plain 也仅 `+5.05%`，却使
+retrieval/provider/wall 分别最多增加 `90.8%/53.0%/59.7%`，而 `A/U` 主效应均不
+显著。所以 always/unbound DQR 从默认候选中移除，只保留为消融；plain 继续作为
+冻结控制，`slotrag-grounded-role-projection` 作为下一轮唯一待验证架构候选。
+下一步先在这批 train 记录上完成 6 个非 tie 问题的机制级错误分析，只允许归纳无
+QID/gold 分支的通用修复；架构冻结后再在新的、不重叠的 dev/evaluation 问题上做
+plain-vs-grounding-only 配对确认。v44/v45/v47 plain primary 的
+`0.6533/0.6828/0.6930` 仍显示运行波动；前两轮有基础设施超时，不能用来放大
+v47 效应或计算投稿稳定性。全量机器记录位于
+`runs/slotrag-grounding-retrieval-factorial-v3/summaries/factorial_ablation/`，包含 6×145 宏指标、
+30×182 cell 指标、600×170 逐题、30×74 检索、96×183 分层、39×6 失败、
+306×7 因子单元与 255×13 因子对比表。
+
 # 11. 关键消融
 
 必须包含：

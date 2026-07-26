@@ -204,6 +204,37 @@ question timeout=0 及 records/sample/frozen-plan audits 全部完整。五个 p
 10,000 次分层 paired bootstrap、双侧 sign-flip 置换与 Holm 校正保持不变。
 v47 仍是 train 模块选择试验，不得因干净 gate 通过而标为投稿主证据。
 
+### v47 干净因子结果与下一轮决策（2026-07-26）
+
+v47 在执行提交 `6686d818db3a240680a3ad3b039f62aef7a98074`上完成 600/600
+final/attempt/trace，`587 ok + 13` 个真实 retrieval budget，question timeout=0。
+100/100 frozen plans 和全部 sample/record/trace/provenance 审计通过。Gate 为
+`analysis_ready_nonpublication`，唯一原因是 train split。六单元 primary 为
+off-slot/off-always/off-unbound=`0.6930/0.7054/0.6830`，on-slot/on-always/on-unbound=
+`0.7180/0.7280/0.7280`。
+
+预注册的 `G/A/U/G×A/G×U` effect 为
+`+0.03085/+0.01123/0.00000/-0.00246/+0.02000`，95% CI 分别为
+`[+0.00830,+0.05849]`、`[-0.03245,+0.05368]`、`[-0.03000,+0.03000]`、
+`[-0.03471,+0.02979]`、`[0.00000,+0.05000]`；Holm p 为 `0.1530/1/1/1/1`。
+没有 primary contrast 达到多重校正显著。分析后审计修正了近零浮点同时计入
+win/tie 的统计 bug；提交 `8d45cae` 加入互斥计数与分析器源码 SHA 记录，完整测试
+`238 passed, 1 skipped`。重生的统计输入/分析器 SHA-256 为
+`88e0d905d79085b07aaddfa19fa7e708c8c61438b5f4d6473ce8decb7e8883f8` /
+`76da527beb06a674aa3e9cbde0cb373eae8256ffb02f5ae84d4a4374e1055e8a`。
+
+架构选择为“轻量优先、等待外部确认”：`slotrag-grounded-role-projection` 相对 plain
+primary `+3.61%`、EM/F1 `+0.0200/+0.0250`，retrieval/provider/wall 仅
+`+0.7%/+1.4%/+0.9%`。always/unbound 最高仅相对 plain `+5.05%`，但明显增加
+检索、provider 和延迟，且 `A/U` 主效应不显著，因此两者不再作默认候选。
+
+后续顺序冻结为：
+
+1. 只在 v47 train 上审计 `G` 产生非零差异的 6 题，将改变归类为计划、抽取、连接、grounding 拒绝、fallback 和答案出口；保留原始 trace，禁止 QID/gold 特例。
+2. 若存在通用错误机制，只在 train/dev 实现和消融；不再增加双查询阈值变体。
+3. 冻结候选后，在新的、不重叠的 dev/evaluation 题上只比较 plain 与 grounding-only，使用 frozen-plan paired protocol、完整失败分母、trace、bootstrap 和 Holm 校正。
+4. 若新样本上质量优势不复现或成本恶化，回退 plain；不得追加重试、换 seed 或修改统计对比。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
