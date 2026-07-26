@@ -12,6 +12,8 @@ from .benchmarking.config import BenchmarkSuite
 from .benchmarking.baselines import audit_baselines
 from .benchmarking.datasets import DATASETS, audit_suite
 from .benchmarking.factorial import analyze_factorial_csv
+from .benchmarking.grounding_audit import audit_grounding_run
+from .benchmarking.paired import analyze_paired_csv
 from .benchmarking.record_audit import audit_run_records
 from .benchmarking.sample_audit import audit_existing_samples
 from .benchmarking.publication_gate import audit_publication_readiness
@@ -246,6 +248,62 @@ def benchmark_factorial_analyze(
     report = analyze_factorial_csv(
         summary_dir / "per_question.csv",
         artifact_dir,
+        metrics=[item.strip() for item in metrics.split(",") if item.strip()],
+        iterations=iterations,
+        seed=seed,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("grounding-mechanism-audit")
+def benchmark_grounding_mechanism_audit(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+) -> None:
+    """Index and classify every non-tie grounding-factor question."""
+    gate = audit_publication_readiness(output_dir, stage, require_trace=True)
+    if not gate["analysis_ready"]:
+        typer.echo(json.dumps(gate, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=2)
+    report = audit_grounding_run(output_dir, stage)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@benchmark_app.command("paired-analyze")
+def benchmark_paired_analyze(
+    stage: str = typer.Argument(...),
+    output_dir: Path = typer.Option(Path("runs/pilot-v1"), exists=True, file_okay=False),
+    comparison: list[str] = typer.Option(
+        [],
+        "--comparison",
+        help="Repeat name:treatment:reference for each preregistered method contrast.",
+    ),
+    metrics: str = typer.Option(
+        "primary_score,em,f1,retrieval_calls,provider_calls,total_tokens,wall_latency_ms",
+        help="Comma-separated per-question metrics to analyze.",
+    ),
+    iterations: int = typer.Option(10_000, min=100),
+    seed: int = typer.Option(27_182),
+    output: Optional[Path] = typer.Option(None, help="Directory for paired JSON and CSV artifacts."),
+) -> None:
+    """Analyze preregistered paired method contrasts with dataset-stratified inference."""
+    parsed = []
+    for value in comparison:
+        parts = value.split(":")
+        if len(parts) != 3 or not all(parts):
+            raise typer.BadParameter("comparisons must use name:treatment:reference")
+        parsed.append((parts[0], parts[1], parts[2]))
+    if not parsed:
+        raise typer.BadParameter("at least one --comparison is required")
+    gate = audit_publication_readiness(output_dir, stage, require_trace=True)
+    if not gate["analysis_ready"]:
+        typer.echo(json.dumps(gate, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=2)
+    summary_dir = output_dir / "summaries" / stage
+    report = analyze_paired_csv(
+        summary_dir / "per_question.csv",
+        output or summary_dir,
+        comparisons=parsed,
         metrics=[item.strip() for item in metrics.split(",") if item.strip()],
         iterations=iterations,
         seed=seed,
