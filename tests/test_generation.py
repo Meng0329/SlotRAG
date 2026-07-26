@@ -1,5 +1,5 @@
 from slotrag.generation import generate_answer_response
-from slotrag.models import EvidenceRecord, ExecutionResult
+from slotrag.models import EvidenceRecord, ExecutionResult, RunMetrics
 from slotrag.providers import ChatResult, ToolCall
 
 
@@ -75,3 +75,20 @@ def test_answer_generation_uses_structured_tool_and_disables_thinking():
     }
     assert client.kwargs["tools"][0]["function"]["name"] == "emit_final_answer"
     assert "If it is insufficient" not in client.messages[0]["content"]
+
+
+def test_answer_generation_keeps_hidden_thinking_for_joined_answers():
+    client = ToolAnswerClient()
+    answer, _ = generate_answer_response(
+        client,
+        "Which answer follows from both facts?",
+        ExecutionResult(
+            rows=[{"answer": "True"}],
+            metrics=RunMetrics(plan_slot_count=2, plan_join_count=1),
+        ),
+        answer_kind="short",
+        structured_output=True,
+    )
+
+    assert answer == "True"
+    assert client.kwargs["enable_thinking"] is True

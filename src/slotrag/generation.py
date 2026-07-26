@@ -10,6 +10,8 @@ def _answer_tool(answer_kind: str) -> dict[str, object]:
     answer_schema: dict[str, object] = {"type": "string"}
     if answer_kind == "boolean":
         answer_schema["enum"] = ["True", "False"]
+    elif answer_kind == "list":
+        answer_schema["description"] = "Return only the requested comma-separated answer list."
     return {
         "type": "function",
         "function": {
@@ -35,6 +37,11 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
     return (response.content or "").strip()
 
 
+def _structured_thinking_enabled(result: ExecutionResult) -> bool:
+    """Keep hidden reasoning for joined plans while simple answers stay direct."""
+    return result.metrics.plan_join_count > 0 or result.metrics.plan_slot_count > 1
+
+
 def generate_answer_response(
     client: AgnesClient,
     question: str,
@@ -56,6 +63,7 @@ def generate_answer_response(
     if structured_output:
         format_instruction = {
             "boolean": "The answer field must be exactly True or False.",
+            "list": "The answer field must contain only the requested comma-separated list.",
             "number": "The answer field must contain only the requested number or short span.",
         }.get(answer_kind, "The answer field must contain only a concise answer span.")
         system_instruction = (
@@ -92,7 +100,7 @@ def generate_answer_response(
                 tools=[_answer_tool(answer_kind)],
                 tool_choice={"type": "function", "function": {"name": "emit_final_answer"}},
                 temperature=0.0,
-                enable_thinking=False,
+                enable_thinking=_structured_thinking_enabled(result),
             )
         else:
             response = client.complete(messages, temperature=0.0)

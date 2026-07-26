@@ -1,0 +1,24 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+  - musique
+  - strategyqa
+  - drop
+seed: 173205
+random_seeds: [173205, 173206, 173207, 173208, 173209]
+budget:
+  max_steps: 10
+  max_llm_calls: 64
+  max_retrieval_calls: 12
+  question_timeout_seconds: 900
+stages:
+  adaptive_answer_contract_train_v2:
+    split: train
+    sample_size: 20
+    methods:
+      - slotrag
+      - slotrag-grounded-frontier-guard
+      - slotrag-grounded-frontier-answer-contract
+    frozen_plan_source: slotrag

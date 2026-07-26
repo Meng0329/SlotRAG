@@ -579,10 +579,12 @@ def _retrieval_result(items: list[RetrievalResult], *, slot_id: str, metrics: Ru
     )
 
 
-def _answer_kind(dataset: str) -> str:
+def _answer_kind(dataset: str, question: QuestionRecord | None = None) -> str:
     if dataset == "strategyqa":
         return "boolean"
     if dataset == "drop":
+        if question is not None and str(question.metadata.get("operation_type", "")).casefold() == "listing":
+            return "list"
         return "number"
     return "short"
 
@@ -713,7 +715,11 @@ def _finalize(
         client,
         question.question,
         result,
-        answer_kind=_answer_kind(dataset),
+        answer_kind=(
+            _answer_kind(dataset, question)
+            if structured_answer_contract
+            else _answer_kind(dataset)
+        ),
         structured_output=structured_answer_contract,
     )
     metrics = merge_metrics(
