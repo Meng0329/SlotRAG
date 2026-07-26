@@ -258,6 +258,29 @@ bootstrap/sign-flip、seed 27182、Holm-2；EM/F1、全检索质量、调用、t
 作为完整 secondary 指标。若 guard 丢失 v47 的任一 exact gain、产生 exact loss 或增加
 检索成本，则回退 old grounding；该 train 轮无论结果如何均不允许进入投稿主表。
 
+### v48 结果与 v49 固定 baseline 确认（2026-07-26）
+
+v48 完成 300/300 final/attempt/trace，297 `ok` + 3 个同题、三方法对称的
+retrieval-budget 终止，0 timeout/provider/retry；100/100 frozen plans 有效且所有哈希/
+provenance 检查通过。primary 宏平均为 plain `0.7030`、旧 grounding `0.7236`、
+guard `0.7330`。guard-plain=`+0.0300`，CI `[-0.0100,+0.0700]`；guard-old=
+`+0.00935`，CI `[-0.01065,+0.03500]`；Holm-2 两项均为 `0.7343`。guard 触发 2/100 题，
+其中 1 题保持 exact，1 题将 overlap-only 错答修复为 exact，无触发后 exact loss。
+决策为保留 guard 作为低频正确性保护，但因效果未显著且仅为 train，不写入投稿结论。
+
+v49 预注册为 fixed-sample adapted 确认：
+
+- 配置：`configs/experiments/slotrag-binding-guard-fixed-main-eval-v1.yaml`；
+- 输出：`runs/slotrag-binding-guard-fixed-main-eval-v1`；
+- 只执行 `slotrag-grounded-binding-guard`，不重跑已冻结 baseline；
+- 数据：复用 `vldb2027-adapted-main-v1/main_comparison` 五数据集×100 evaluation 题，seed 2040；
+- 计划：复用 `runs/slotrag-final-candidate-v2/plans/imported_main` 的 500 份 SlotRAG frozen plans；
+- 预算：与原主对比一致的 4 steps / 64 LLM / 4 retrieval / 300 s；
+- 完整性：500/500 final/attempt/trace，保留 timeout、empty、budget 和 provider 失败分母；
+- 分析：与旧 SlotRAG 逐题配对，并与旧 IRCoT*/ReAct*/Hybrid* 宏值作同样本诊断对照；
+- 边界：该样本已用于早期候选评估，且 baseline 不是 exact upstream，故不标记为全新
+  one-shot held-out 或投稿主表。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

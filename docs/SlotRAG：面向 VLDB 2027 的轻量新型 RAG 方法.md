@@ -2786,6 +2786,59 @@ Recall/MRR/nDCG@10、retrieval/provider/tokens/wall 和失败类型均完整报�
 Holm 家族。该轮仍是 train 机制消融：即使 guard 数值更高也不允许写成投稿主结论；若
 丢失任一已确认 exact gain、出现 exact loss、question timeout 或成本明显恶化，则不晋级。
 
+### v48：binding guard 配对消融完成（2026-07-26）
+
+`runs/slotrag-grounding-binding-guard-train-v1` 已完成五数据集×20题×三方法的
+300/300 final、300/300 immutable attempt 和 300/300 trace。结果为 297 `ok` + 3
+`budget_exceeded`；后者均来自同一道 5-slot MuSiQue 题，plain、旧 grounding 和 guard
+都在相同 6 次 retrieval 上限终止。question timeout、provider 错误、retry、缺失
+attempt/trace 均为 0。100/100 imported frozen plans 有效，计划哈希与 provenance
+异常均为 0。gate 正确返回 `analysis_ready_nonpublication`：记录可分析，但 train split
+不允许支撑投稿结论。
+
+| 方法（五数据集宏平均） | primary | EM | F1 | Evidence Recall/MRR/nDCG@10 | retrieval | provider | tokens | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| plain SlotRAG | 0.7030 | 0.5200 | 0.5520 | 0.8438/1.0000/0.8732 | 1.520 | 4.950 | 2330.7 | 63.45 s |
+| 旧 grounded role projection | 0.7236 | 0.5300 | 0.5727 | 0.8188/1.0000/0.8508 | 1.540 | 5.010 | 2378.9 | 63.29 s |
+| **grounded binding guard** | **0.7330** | **0.5500** | **0.5820** | 0.8313/1.0000/0.8585 | 1.540 | 5.010 | 2382.1 | 61.59 s |
+
+guard 相对 plain 的 overall primary 差为 `+0.0300`（相对 `+4.27%`），95% CI
+`[-0.0100,+0.0700]`，wins/ties/losses=`4/95/1`；相对旧 grounding 为 `+0.00935`，
+95% CI `[-0.01065,+0.03500]`，`2/96/2`。两个预注册 primary 对比的 Holm-2
+`p=0.7343`，均未显著。guard 相对旧 grounding 的 retrieval/provider/tokens 差分别为
+`0.000/0.000/+3.2`，未观察到额外检索成本；wall 差为 `-1.70 s`，但并发运行下
+不把该次要延迟差当作方法性质。
+
+机制 telemetry 中 guard 仅在 2/100 题触发。HotpotQA
+`5a899a6e55429946c8d6e94d` 触发 1 次但三方法都保持 exact；
+`5a8efb615542997ba9cb3163` 触发 5 次，将旧 grounding 的
+`Pakistan Movement`（EM=0/F1=0.5）修正为 `Khilafat Movement`（EM/F1=1）。
+没有观察到 guard 触发后的 exact loss，但支持样本仅 2 题；因此将其作为
+低频正确性保护保留，不把全部 `+3pp` 归因于该分支。
+
+完整摘要、逐题记录、配对统计和 gate 的 SHA-256 分别为
+`e773e916adcc745f63bb9b6d07659ddfa5a6a6beae9eab5923a2c39042dcf397`、
+`4e1f2524c489a005af8e6fb5e67f701503418b712ca6a4ed9ce8a5d4ed35ba45`、
+`0c5bfd394111d60b155ed81dfae595496c18a427539f0f517495ac0202d1a968` 和
+`eaa4938de1f13cdf4bf196f64fbd43c79ec7dc2213f112b4e5d3fa6a80d7fdab`。
+
+### v49：固定 adapted baseline 同样本确认预注册
+
+为回答新候选相对已冻结 baseline 的数值位置，v49 只运行
+`slotrag-grounded-binding-guard`，不重跑任何外部 baseline。配置为
+`configs/experiments/slotrag-binding-guard-fixed-main-eval-v1.yaml`，run 为
+`runs/slotrag-binding-guard-fixed-main-eval-v1`；复用 `runs/vldb2027-adapted-main-v1`
+`main_comparison` 的五数据集×100 evaluation 题、seed 2040、4/64/4 预算、300 s deadline
+和由该轮 SlotRAG 记录构建的 500 份冻结计划。
+
+在任何 provider 调用前必须确认五个 sample SHA 分别为
+`e25eff51...`、`1c8a2914...`、`61e5f2b8...`、`e9f5eae8...`、`420a672d...`，
+且 500 份 plan import 全部有效。所有 500 条 final/attempt/trace 必须保留，失败进入分母；
+运行后才查看质量均值。候选将与旧 `main_comparison/per_question.csv` 按 question ID
+配对，同时与已冻结的 IRCoT*/ReAct*/Hybrid* 宏平均对照。因 baseline 仍是 local adapter
+且该 500 题曾用于早期候选评估，该轮只能给出 fixed-sample adapted 诊断比较，
+不允许写成 exact-upstream 或全新 one-shot held-out 投稿结论。
+
 # 11. 关键消融
 
 必须包含：
