@@ -1,4 +1,4 @@
-# SlotRAG 实验交接（更新至 2026-07-27）
+# SlotRAG 实验交接（更新至 2026-07-27，v53 已完成）
 
 ## Task
 
@@ -40,9 +40,21 @@
   EM/F1 各 `+0.01`（CI `[0,+0.03]`），干预题 2/2 primary tie，无 gain/loss。gate 为
   `analysis_ready_nonpublication`，不晋级默认方法。跨 run 工件在
   `runs/slotrag-frontier-guard-train-v1/summaries/frontier_guard_train/frontier_vs_binding_guard/`。
-- v53 已预注册但尚未发起 provider run：`configs/experiments/slotrag-frontier-guard-train-v2.yaml`，
-  目标 run `runs/slotrag-frontier-guard-train-v2`，新 seed=`314159`、五数据集各 100 train，
-  排除 v48/v50 样本；只比较 old/new guard，共享 source frozen plans。
+- v53 已完成：`runs/slotrag-frontier-guard-train-v2`，五数据集各 100 train、两个 guard 方法，
+  1000/1000 final/attempt/trace，records audit 完整；binding guard 999 `ok` + 1 个 MuSiQue
+  `slot S1 has no join path`，frontier guard 同题为 `ok`，无 timeout/provider/retry。共享 frozen
+  plans 500/500 有效，sample 与 v48/v50 overlap=0，gate=`analysis_ready_nonpublication`。
+- v53 宏平均 binding/frontier primary=`0.746887/0.752679`、EM=`0.5160/0.5220`、
+  F1=`0.586086/0.593828`、evidence R@10=`0.86625/0.86625`、provider calls=`5.222/5.238`、
+  total tokens=`2466.934/2478.264`、wall=`40358.24/40063.48 ms`。Paired primary
+  Δ=`+0.005791`、CI=`[-0.006586,+0.018424]`、p=`0.3746`、胜/平/负=`7/487/6`；EM/F1
+  Δ=`+0.0060/+0.007742`，均未显著。frontier 触发 7 题，checks/interventions/pruned=`18/9/11`，
+  gain/tie/loss=`1/6/0`，无干预损失。结论是低成本安全模块，不是 10% 领先或投稿主表证据。
+- v53 关键工件：config SHA=`fe4843b5f598a6023ce70cb3fab2ec9fe5877e45a165f19ffc01097945954590`；
+  `summary.json=6ae729912cb2f1643b2845ea6ebad1e04f96385097b0859ad7b50d2a10415ec7`；
+  `per_question.csv=2f0748042697b1a9d916c16d228ecabdb939ae53935bc801e531f39b127d43ed`；
+  `paired_analysis.json=f55c3630da8c021a98f5bb1d767f9d3ae4a39dc48263cb63eeaeb510e51f1b6b`；
+  `frontier_selection_audit.json=25d838087477c6f70ed12a55e4921017a4bf31aecc85cf55d642853ab6678f5e`。
 
 ## Key decisions
 
@@ -87,11 +99,8 @@
 
    该工具只读取 immutable CSV/items，输出 145 指标的逐题 paired contrasts、整体/数据集
    分层 CI/p、Holm primary family 和 binding-guard 触发审计；不调用任何服务。
-4. 下一步运行 v53：先 prepare `frontier_guard_train_v2`，用 `--exclude-sample-dir` 排除 v48/v50
-   样本，确认新 sample SHA、source fingerprint 和共享 plan provenance；随后只运行
-   `slotrag-grounded-binding-guard` 与 `slotrag-grounded-frontier-guard`。结束后 records-audit、
-   gate、summarize，并用 10,000 次分层配对分析检查 primary CI、成本和所有干预题。不得把
-   v51 已见 evaluation 题纳入质量增益。
+4. v53 已完成，勿重复启动 provider；复核时只读取 immutable run 工件，保留 148 指标 paired
+   对比、frontier/protected-anchor audit 和失败分母。不得把 v51 已见 evaluation 题纳入质量增益。
 5. 新候选必须保留 `plain`、旧 grounding、guard 的 frozen-plan paired 对照，并报告
    质量、evidence、calls/tokens、wall P50/P95/P99、失败分母和机制计数。只有不重叠的
    held-out/test 样本才能进入投稿表。

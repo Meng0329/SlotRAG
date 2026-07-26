@@ -3114,6 +3114,50 @@ final/attempt/trace 且无新增 timeout/provider failure；primary CI 下界 �
 与 total tokens 均值增幅 ≤ 10%；所有干预题 primary 不得出现 loss。任一失败只保留为安全诊断，
 不进入 evaluation，也不改写 v52。
 
+#### v53 完成：500 题前沿保护 train 机制验证（2026-07-27）
+
+v53 按预注册完成 1000 条配对记录（五数据集各 100 题、两个方法），final/attempt/trace
+均为 1000/1000，records audit 完整，缺失 attempt/trace、非连续 attempt 和 trace error 均为
+0；无 timeout、provider failure 或 retry。旧 binding guard 有 1 条 MuSiQue `failed/other`
+（`2hop__650240_59201`，`slot S1 has no join path`），frontier guard 同题为 `ok`；因此全量
+记录为 999 `ok` + 1 `failed`，失败保留在分母。共享 source frozen-plan 审计为 500/500 有效、
+500 次 plan attempt 无失败、provenance/hash/variant 异常为 0，五个新 sample 与历史 v48/v50
+均无交集。gate=`analysis_ready_nonpublication`，`publication_ready=false`（train split）。
+
+宏平均（所有 500 题等权）如下：
+
+| 方法 | primary | EM | F1 | evidence R@10 | DROP EM/F1 | StrategyQA accuracy | provider calls | total tokens | wall ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| binding guard | 0.746887 | 0.5160 | 0.586086 | 0.86625 | 0.5500/0.6327 | 0.8600 | 5.222 | 2466.934 | 40358.24 |
+| frontier guard | 0.752679 | 0.5220 | 0.593828 | 0.86625 | 0.5600/0.6427 | 0.8500 | 5.238 | 2478.264 | 40063.48 |
+
+同题、同计划的 148 指标配对分析（10,000 次数据集分层 bootstrap/sign-flip，seed=`314159`）
+显示 primary `Δ=+0.005791`，95% CI `[-0.006586,+0.018424]`，`p=0.3746`，胜/平/负
+`7/487/6`；EM `Δ=+0.0060`（CI `[-0.0040,+0.0160]`），F1 `Δ=+0.007742`
+（CI `[-0.001703,+0.018538]`）。DROP EM/F1 各 `+0.0100`，StrategyQA accuracy
+`-0.0100`，均未显著。成本差为 provider calls `+0.016`（约 `+0.31%`）、total tokens
+`+11.33`（约 `+0.46%`，CI `[-6.82,+35.41]`），wall `-294.76 ms`（CI
+`[-1044.21,+460.84]`），均远低于 10% 成本门槛。
+
+前沿审计触发 7/500 题（HotpotQA 5、MuSiQue 2），checks/interventions/pruned 总和为
+`18/9/11`；触发子集严格 gain/tie/loss=`1/6/0`，满足“干预题无 primary loss”。其中
+MuSiQue `3hop1__131682_66618_440465` 为唯一 exact gain；旧策略的 join-path failure 题虽被
+frontier 修复为 `ok`，其最终 primary 仍为 0，因此不把修复错误地计作质量 gain。protected
+anchor 审计另有 7 题、25 次 rejection，gain/loss=`0/0`。结论：该模块在更大 train 门上保持
+低成本且无干预损失，并修复一个通用执行失败；质量增益未达到显著性或 10% 领先，暂保留为
+可选安全模块，不晋级为默认方法，也不进入 evaluation 主表。
+
+关键工件（完整 CSV/trace 保留在 run 目录）：config SHA=`fe4843b5f598a6023ce70cb3fab2ec9fe5877e45a165f19ffc01097945954590`；
+`summary.json=6ae729912cb2f1643b2845ea6ebad1e04f96385097b0859ad7b50d2a10415ec7`；
+`metrics.csv=901b3c6b5d1bdb5f9b05f45e5b9b0683ff7c11e6c3b180edbd14c02d2e10a03f`；
+`per_question.csv=2f0748042697b1a9d916c16d228ecabdb939ae53935bc801e531f39b127d43ed`；
+`records-audit.json=8f839b4ae204cdc60b263feced6afab2cdfc61e6edea32898f6ee93b6bd7d348`；
+`gate.json=7ab6a216f260da39158cabb1e17f96487c18348e0e9621ec8c47ccf37b2feebd`；
+`frontier_vs_binding_guard/paired_analysis.json=f55c3630da8c021a98f5bb1d767f9d3ae4a39dc48263cb63eeaeb510e51f1b6b`；
+`paired_contrasts.csv=f52ddbcd96bcece3a92ad06398b9025d346ee456d5bdea05aeb83a848ff2e44c`；
+`frontier_selection_audit.json=25d838087477c6f70ed12a55e4921017a4bf31aecc85cf55d642853ab6678f5e`；
+`protected_anchor_audit.json=dea523d177120944a75f39a9c16e7775ed140fbf044eaa7fd32e904b7c8bce72`。
+
 # 11. 关键消融
 
 必须包含：

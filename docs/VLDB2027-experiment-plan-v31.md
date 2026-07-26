@@ -462,6 +462,39 @@ evidence、calls/tokens、wall P50/P95/P99、失败分母和干预子集。晋�
 provider calls 和 total tokens 均值增幅 ≤`+10%`；所有干预题 primary 不得出现 loss。违反任一
 条件则保留为安全诊断，不进入 evaluation；无论结果如何不改写 v52。
 
+### v53 完成记录：500 题前沿保护机制门（2026-07-27）
+
+v53 完成 1000 条 paired final/attempt/trace（五数据集各 100 题、binding guard 与 frontier
+guard），records audit 完整，缺失/非连续 attempt、missing trace 和 trace error 均为 0；无
+timeout、provider failure 或 retry。binding guard 有 999 `ok` + 1 个 MuSiQue
+`failed/other`（`2hop__650240_59201`，`slot S1 has no join path`），frontier guard 同题为
+`ok`；该失败保留在分母。共享 source frozen plan 为 500/500 有效，plan attempt 500/500，
+provenance/effective-plan/hash/variant 异常均为 0；新 sample 与 v48/v50 overlap=0。gate 为
+`analysis_ready_nonpublication`，因为是 train split，`publication_ready=false`。
+
+| 方法 | primary | EM | F1 | evidence R@10 | DROP EM/F1 | StrategyQA acc. | provider calls | total tokens | wall ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| binding guard | 0.746887 | 0.5160 | 0.586086 | 0.86625 | 0.5500/0.6327 | 0.8600 | 5.222 | 2466.934 | 40358.24 |
+| frontier guard | 0.752679 | 0.5220 | 0.593828 | 0.86625 | 0.5600/0.6427 | 0.8500 | 5.238 | 2478.264 | 40063.48 |
+
+148 指标 paired（10,000 次 dataset-stratified bootstrap/sign-flip，seed=`314159`）得到 primary
+`Δ=+0.005791`，95% CI `[-0.006586,+0.018424]`，`p=0.3746`，胜/平/负=`7/487/6`；EM
+`+0.0060`（CI `[-0.0040,+0.0160]`），F1 `+0.007742`（CI `[-0.001703,+0.018538]`）。
+provider calls `+0.016`（约 +0.31%）、total tokens `+11.33`（约 +0.46%）、wall
+`-294.76 ms`，均通过成本门槛。frontier 触发 7 题，checks/interventions/pruned=`18/9/11`，
+触发子集 gain/tie/loss=`1/6/0`；唯一 exact gain 为 MuSiQue
+`3hop1__131682_66618_440465`。旧策略的 join-path failure 被新策略修复为 `ok`，但最终
+primary 仍为 0，不计为质量 gain。该轮支持保留 frontier 作为低成本安全模块，不支持显著质量
+增益、10% 领先或默认方法晋级；不得进入 evaluation 主表。
+
+关键 SHA：config=`fe4843b5f598a6023ce70cb3fab2ec9fe5877e45a165f19ffc01097945954590`；
+summary=`6ae729912cb2f1643b2845ea6ebad1e04f96385097b0859ad7b50d2a10415ec7`；
+per_question=`2f0748042697b1a9d916c16d228ecabdb939ae53935bc801e531f39b127d43ed`；
+records-audit=`8f839b4ae204cdc60b263feced6afab2cdfc61e6edea32898f6ee93b6bd7d348`；
+gate=`7ab6a216f260da39158cabb1e17f96487c18348e0e9621ec8c47ccf37b2feebd`；
+paired-analysis=`f55c3630da8c021a98f5bb1d767f9d3ae4a39dc48263cb63eeaeb510e51f1b6b`；
+frontier-audit=`25d838087477c6f70ed12a55e4921017a4bf31aecc85cf55d642853ab6678f5e`。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
