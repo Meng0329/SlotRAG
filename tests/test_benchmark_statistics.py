@@ -48,7 +48,11 @@ def test_statistics_include_macro_seed_variance_and_paired_comparisons():
     ]
     summaries = aggregate(records)
     assert any(row["method"] == "slotrag" and row["primary_score"] == 0.75 for row in summaries)
-    assert any(row["method"] == "slotrag" for row in macro_average(summaries))
+    macro = macro_average(summaries)
+    assert any(row["method"] == "slotrag" for row in macro)
+    assert "frontier_guard_checks" in macro[0]
+    assert "frontier_guard_interventions" in macro[0]
+    assert "frontier_candidates_pruned" in macro[0]
     variance = seed_variance(summaries)
     assert variance[0]["seed_count"] == 2
     comparisons = paired_bootstrap(records, iterations=100, seed=7)

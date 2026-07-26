@@ -73,3 +73,44 @@ def test_analyze_fixed_main_rejects_missing_cross_run_question(tmp_path):
             iterations=200,
             seed=7,
         )
+
+
+def test_analyze_fixed_main_backfills_only_new_counter_metrics_for_legacy_baseline(tmp_path):
+    candidate = tmp_path / "candidate.csv"
+    baseline = tmp_path / "baseline.csv"
+    candidate_rows = _rows("frontier", 2)
+    for row in candidate_rows:
+        row["frontier_guard_checks"] = "2"
+        row["frontier_guard_interventions"] = "1"
+        row["frontier_candidates_pruned"] = "3"
+    _write(candidate, candidate_rows)
+    _write(baseline, _rows("binding", 0))
+
+    report = analyze_fixed_main(
+        candidate,
+        baseline,
+        tmp_path / "analysis",
+        candidate_method="frontier",
+        baseline_methods=("binding",),
+        iterations=200,
+        seed=7,
+    )
+
+    counters = {
+        row["metric"]: row["estimate"]
+        for row in report["paired_analysis"]["contrasts"]
+        if row["scope"] == "overall"
+        and row["metric"] in {
+            "frontier_guard_checks",
+            "frontier_guard_interventions",
+            "frontier_candidates_pruned",
+        }
+    }
+    assert counters == {
+        "frontier_guard_checks": 2.0,
+        "frontier_guard_interventions": 1.0,
+        "frontier_candidates_pruned": 3.0,
+    }
+    assert report["frontier_selection_audit"]["triggered_question_count"] == 4
+    assert report["frontier_selection_audit"]["interventions_total"] == 4.0
+    assert report["frontier_selection_audit"]["candidates_pruned_total"] == 12.0

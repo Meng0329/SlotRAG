@@ -20,6 +20,13 @@ from slotrag.benchmarking.paired import analyze_paired_rows
 from slotrag.benchmarking.statistics import METRICS
 
 
+LEGACY_ZERO_METRICS = {
+    "frontier_guard_checks",
+    "frontier_guard_interventions",
+    "frontier_candidates_pruned",
+}
+
+
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
@@ -78,6 +85,9 @@ def _paired_rows(
         for method in baseline_methods:
             baseline_row = dict(baseline[method][key])
             baseline_row["base_method"] = method
+            for metric in LEGACY_ZERO_METRICS:
+                if metric not in baseline_row:
+                    baseline_row[metric] = "0"
             output.append(baseline_row)
     return output
 
@@ -103,9 +113,10 @@ def _load_trigger_audit(
     baseline_per_question: list[dict[str, str]],
     *,
     candidate_method: str,
+    baseline_method: str,
     candidate_items_dir: Path | None,
 ) -> list[dict[str, Any]]:
-    baseline_index = _index(baseline_per_question, "slotrag")
+    baseline_index = _index(baseline_per_question, baseline_method)
     rows: list[dict[str, Any]] = []
     for row in _selected(candidate_per_question, candidate_method):
         try:
@@ -141,6 +152,44 @@ def _load_trigger_audit(
             "baseline_em": baseline.get("em"),
             "baseline_f1": baseline.get("f1"),
             "item_path": item_path,
+        })
+    return rows
+
+
+def _load_frontier_audit(
+    candidate_per_question: list[dict[str, str]],
+    baseline_per_question: list[dict[str, str]],
+    *,
+    candidate_method: str,
+    baseline_method: str,
+) -> list[dict[str, Any]]:
+    baseline_index = _index(baseline_per_question, baseline_method)
+    rows: list[dict[str, Any]] = []
+    for row in _selected(candidate_per_question, candidate_method):
+        try:
+            intervention_count = float(row.get("frontier_guard_interventions") or 0.0)
+        except ValueError:
+            intervention_count = 0.0
+        if intervention_count <= 0:
+            continue
+        key = _key(row)
+        baseline = baseline_index[key]
+        rows.append({
+            "dataset": key[0],
+            "question_id": key[1],
+            "frontier_guard_checks": float(row.get("frontier_guard_checks") or 0.0),
+            "frontier_guard_interventions": intervention_count,
+            "frontier_candidates_pruned": float(row.get("frontier_candidates_pruned") or 0.0),
+            "candidate_status": row.get("status"),
+            "baseline_status": baseline.get("status"),
+            "candidate_prediction": row.get("prediction_scored"),
+            "baseline_prediction": baseline.get("prediction_scored"),
+            "candidate_primary_score": row.get("primary_score"),
+            "baseline_primary_score": baseline.get("primary_score"),
+            "candidate_em": row.get("em"),
+            "baseline_em": baseline.get("em"),
+            "candidate_f1": row.get("f1"),
+            "baseline_f1": baseline.get("f1"),
         })
     return rows
 
@@ -208,6 +257,7 @@ def analyze_fixed_main(
         candidate_rows,
         baseline_rows,
         candidate_method=candidate_method,
+        baseline_method=baseline_methods[0],
         candidate_items_dir=candidate_items_dir,
     )
     _write_csv(output_dir / "protected_anchor_audit.csv", trigger_rows)
@@ -231,6 +281,35 @@ def analyze_fixed_main(
     trigger_json = output_dir / "protected_anchor_audit.json"
     trigger_json.write_text(json.dumps({"summary": trigger_summary, "rows": trigger_rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    frontier_rows = _load_frontier_audit(
+        candidate_rows,
+        baseline_rows,
+        candidate_method=candidate_method,
+        baseline_method=baseline_methods[0],
+    )
+    _write_csv(output_dir / "frontier_selection_audit.csv", frontier_rows)
+    frontier_summary = {
+        "triggered_question_count": len(frontier_rows),
+        "checks_total": sum(float(row["frontier_guard_checks"]) for row in frontier_rows),
+        "interventions_total": sum(float(row["frontier_guard_interventions"]) for row in frontier_rows),
+        "candidates_pruned_total": sum(float(row["frontier_candidates_pruned"]) for row in frontier_rows),
+        "by_dataset": dict(Counter(row["dataset"] for row in frontier_rows)),
+        "exact_gain_count": sum(
+            float(row.get("candidate_em") or 0) == 1 and float(row.get("baseline_em") or 0) < 1
+            for row in frontier_rows
+        ),
+        "exact_loss_count": sum(
+            float(row.get("candidate_em") or 0) < 1 and float(row.get("baseline_em") or 0) == 1
+            for row in frontier_rows
+        ),
+        "exact_tie_count": sum(
+            float(row.get("candidate_em") or 0) == float(row.get("baseline_em") or 0)
+            for row in frontier_rows
+        ),
+    }
+    frontier_json = output_dir / "frontier_selection_audit.json"
+    frontier_json.write_text(json.dumps({"summary": frontier_summary, "rows": frontier_rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
     report = {
         "candidate_method": candidate_method,
         "baseline_methods": list(baseline_methods),
@@ -243,6 +322,11 @@ def analyze_fixed_main(
             "path": str(trigger_json),
             "sha256": _sha256(trigger_json),
             **trigger_summary,
+        },
+        "frontier_selection_audit": {
+            "path": str(frontier_json),
+            "sha256": _sha256(frontier_json),
+            **frontier_summary,
         },
     }
     (output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -276,6 +360,7 @@ def main() -> int:
         "paired_question_count": report["paired_question_count"],
         "paired_contrast_count": len(report["paired_analysis"]["contrasts"]),
         "protected_anchor_audit": report["protected_anchor_audit"],
+        "frontier_selection_audit": report["frontier_selection_audit"],
         "output_dir": str(args.output_dir),
     }, ensure_ascii=False, indent=2))
     return 0

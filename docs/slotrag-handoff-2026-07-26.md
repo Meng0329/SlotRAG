@@ -1,4 +1,4 @@
-# SlotRAG 实验交接（2026-07-26）
+# SlotRAG 实验交接（更新至 2026-07-27）
 
 ## Task
 
@@ -26,6 +26,23 @@
 - v51 primary=`0.6888553`，相对 v49 guard@4/4 `+0.0050136`，95% CI `[-0.0049578,+0.0161357]`，p=`0.3894`、Holm=`0.7787`，胜/平/负=`7/487/6`；六个 v49 budget failure 中五个转为 `ok`，一个转为 join-path failure。provider calls `+3.60%`、total tokens `+3.85%`，保留 10/12 预算但不宣称显著质量提升。
 - v51 对 adapted SlotRAG*/GraphRAG*/PlanRAG*/Hybrid*/ReAct*/IRCoT*/SRAG* 的 primary 差值依次为 `+0.0169/+0.0018/-0.0249/-0.0417/-0.0439/-0.0597/+0.0691`；Holm 后只保留对 IRCoT* 的劣势与对 SRAG* 的优势。完整 145 指标和 6,006 条 contrasts 在 v51 `fixed_main_analysis/`，baseline exact-upstream 仍为 false。
 - 全量测试在加入离线分析工具后为 `247 passed, 1 skipped`，包含 `tests/test_fixed_main_analysis.py`；`compileall` 与 `git diff --check` 通过。
+- v52 方法候选已实现：`ExecutionOptions.frontier_safe_selection` 将下一槽位限制在已物化子图
+  的显式 `JoinSpec` frontier；新方法 key 为 `slotrag-grounded-frontier-guard`，历史方法默认
+  关闭。三项审计指标为 `frontier_guard_checks/interventions/candidates_pruned`。
+- 五槽星形回归中旧策略复现 `S2 -> S3` join-path failure，新策略完成
+  `S2 -> S1 -> S3 -> S4 -> S5`；`tests/test_execution.py` 99/99、
+  `tests/test_benchmark_methods.py` 36/36 通过。该修复不含 QID/dataset/gold 特例。
+- manifest-based 离线扫描覆盖 4,841 个 plan 文件，得到 402 个唯一 train plan variants，
+  static frontier risk=0；因此先做与 v50 同题同计划的运行时零回归门，不从拓扑择优抽题。
+- v52 已完成：`runs/slotrag-frontier-guard-train-v1`，100/100 final/attempt/trace 且全部 `ok`，
+  100/100 imported plans 有效，sample 与 v50 完全一致。checks/interventions/pruned 总和为
+  `48/2/2`；与 v50 binding guard 的 148 指标配对 primary `Δ=0`、CI `[0,0]`、p=`1.0`，
+  EM/F1 各 `+0.01`（CI `[0,+0.03]`），干预题 2/2 primary tie，无 gain/loss。gate 为
+  `analysis_ready_nonpublication`，不晋级默认方法。跨 run 工件在
+  `runs/slotrag-frontier-guard-train-v1/summaries/frontier_guard_train/frontier_vs_binding_guard/`。
+- v53 已预注册但尚未发起 provider run：`configs/experiments/slotrag-frontier-guard-train-v2.yaml`，
+  目标 run `runs/slotrag-frontier-guard-train-v2`，新 seed=`314159`、五数据集各 100 train，
+  排除 v48/v50 样本；只比较 old/new guard，共享 source frozen plans。
 
 ## Key decisions
 
@@ -70,10 +87,11 @@
 
    该工具只读取 immutable CSV/items，输出 145 指标的逐题 paired contrasts、整体/数据集
    分层 CI/p、Holm primary family 和 binding-guard 触发审计；不调用任何服务。
-4. 下一步先在不重叠 train/dev 上审计 `slot S3 has no join path` 的通用成因，并设计计划验证/
-   安全退化候选；同时保留 MuSiQue/HotpotQA 抽取失败与 DROP/StrategyQA 单跳退化分层。
-   不要使用 v49/v51 evaluation gold 选择规则、阈值或 prompt；每个候选改动先写新的预注册
-   配置和停止门。
+4. 下一步运行 v53：先 prepare `frontier_guard_train_v2`，用 `--exclude-sample-dir` 排除 v48/v50
+   样本，确认新 sample SHA、source fingerprint 和共享 plan provenance；随后只运行
+   `slotrag-grounded-binding-guard` 与 `slotrag-grounded-frontier-guard`。结束后 records-audit、
+   gate、summarize，并用 10,000 次分层配对分析检查 primary CI、成本和所有干预题。不得把
+   v51 已见 evaluation 题纳入质量增益。
 5. 新候选必须保留 `plain`、旧 grounding、guard 的 frozen-plan paired 对照，并报告
    质量、evidence、calls/tokens、wall P50/P95/P99、失败分母和机制计数。只有不重叠的
    held-out/test 样本才能进入投稿表。

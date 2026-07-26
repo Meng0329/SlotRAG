@@ -3048,6 +3048,72 @@ plan audit 和 6,006 条 paired contrasts 位于
 针对通用 join-path/多跳执行失败建立 train/dev 机制门并先预注册；不得继续在这 500 个重复
 evaluation 题上试规则或择优重跑。
 
+#### v52 预注册：显式物化前沿保护（2026-07-27）
+
+v51 的 join-path failure 对应一个框架级判据不一致：自适应选择器原先把“当前结果中存在
+同名 binding”当作下一槽位可连接，而增量连接器只接受与任一已物化槽位存在显式
+`JoinSpec` 的槽位。星形计划若先物化一个叶槽，另一个共享同名变量的兄弟叶槽可能获得更高
+得分，但二者没有直接连接边，执行因此终止。计划自身仍通过连通性校验，所以这不是编译器
+断图，而是运行时调度没有保持“已物化子图 + 显式边界”的不变量。
+
+新增 `frontier_safe_selection` 执行策略开关和候选方法
+`slotrag-grounded-frontier-guard`。开关开启时，非初始选择先计算与已物化槽位显式相邻的
+frontier，再在 frontier 内应用原 adaptive score；只有当前 join component 已完成、需要进入
+由字段极值算子连接的独立分支时才允许回退到剩余候选。历史方法默认关闭，不改写 v49-v51。
+新增三项可审计指标：`frontier_guard_checks`、`frontier_guard_interventions`、
+`frontier_candidates_pruned`。
+
+回归测试使用通用五槽中心-叶计划，不含数据集/QID/gold 特例：旧策略稳定复现
+`S2 -> S3` failure，新策略执行 `S2 -> S1 -> S3 -> S4 -> S5` 并产出最终字段；执行器
+99/99、方法路由 36/36 测试通过。对现有 run manifest 可确认为 train 的 402 个唯一计划
+变体做离线静态审计，风险数为 0，说明实际触发依赖运行时 binding，不能通过计划拓扑择优
+抽题。
+
+第一层实验冻结为 `configs/experiments/slotrag-frontier-guard-train-v1.yaml`：复用 v50 的
+五数据集各 20 条 train 样本、100 个 imported frozen plans、seed=`27182` 和 10/12 预算，
+只运行新候选；旧 binding guard 读取 v50 immutable per-question 结果进行跨 run 同题配对，
+不重跑 baseline。主指标为数据集分层 paired primary，10,000 次 bootstrap/sign-flip；完整
+报告 EM/F1、任务指标、evidence、calls/tokens、wall 分位数、失败分母和前沿触发计数。晋级
+要求 primary CI 下界不低于 -2pp、无新增失败、provider calls 与 tokens 各不增加超过 10%。
+若 100 题零干预，本轮只记为无回归 smoke，随后预注册新 seed 的更大 train 样本；v51 已见
+evaluation 题不计入质量证据。
+
+#### v52 完成：前沿保护 train smoke（2026-07-27）
+
+v52 按预注册完成 100/100 final、attempt、trace，全部 `ok`，无 timeout/provider failure/retry；
+100/100 imported frozen plans 有效，provenance/effective-plan/hash/variant 异常均为 0，gate 为
+`analysis_ready_nonpublication`。样本五个 JSONL 与 v50 完全相同。
+
+候选宏平均为 primary `0.7429571`、EM `0.5500`、F1 `0.5820`、DROP EM/F1
+`0.7000/0.7130`、StrategyQA accuracy `0.8500`、evidence R@10 `0.8313`、provider calls
+`5.080`、total tokens `2434.58`、wall `21703.78 ms`。前沿计数总和为 checks/interventions/
+pruned=`48/2/2`。与 v50 binding guard 的 148 指标同题配对 primary 为 `Δ=0`、CI `[0,0]`、
+`p=1.0`、`0/100/0` 胜平负；EM/F1 各 `+0.01`、CI `[0,+0.03]`、`p=1.0`；total tokens
+`+16.59`、CI `[-14.03,+63.73]`，provider calls `+0.01`，wall `-92.21 ms`、CI
+`[-1343.82,+1227.19]`。两道干预题均来自 MuSiQue，candidate/reference 都 `ok` 且
+primary/EM/F1 tie，无 exact gain/loss。结论是安全性无回归，不是质量增益；不晋级默认方法。
+
+v52 工件位于 `runs/slotrag-frontier-guard-train-v1/summaries/frontier_guard_train/`：
+`summary.json=c70f55b6...47ff4`、`metrics.csv=212a8c03...d427`、
+`per_question.csv=a31712ff...d51b`；跨 run 目录 `frontier_vs_binding_guard/` 保存 148 指标
+paired、`frontier_selection_audit.{json,csv}`、binding-guard trigger audit 和 report。历史
+v50 工件未被修改，分析输入只对三个新计数器显式补零。
+
+#### v53 预注册：更大 train 机制验证（2026-07-27）
+
+为避免用 2 道干预题判断低频模块，v53 固定新 seed `314159`、五数据集各 100 条 train 题，
+排除 v48/v50 已用 sample 目录；配置为
+`configs/experiments/slotrag-frontier-guard-train-v2.yaml`，只比较
+`slotrag-grounded-binding-guard` 与 `slotrag-grounded-frontier-guard`，由同一 `slotrag`
+source 生成共享 frozen plans，不运行外部 baseline。预算 10/12、LLM 上限 64、timeout 900 s、
+30/20 RPM、并发 64、trace 开启且 payload 关闭保持不变。
+
+主检验是数据集等权 paired primary，10,000 次分层 bootstrap/sign-flip；报告 148 指标、任务
+质量、evidence、调用/token、wall 分位数、失败分母和干预子集。门槛预先固定为：500/500
+final/attempt/trace 且无新增 timeout/provider failure；primary CI 下界 ≥ -2pp；provider calls
+与 total tokens 均值增幅 ≤ 10%；所有干预题 primary 不得出现 loss。任一失败只保留为安全诊断，
+不进入 evaluation，也不改写 v52。
+
 # 11. 关键消融
 
 必须包含：
@@ -3073,6 +3139,9 @@ vs. 急切结构化抽取
 
 绑定传播
 vs. 无绑定的独立子查询
+
+显式物化前沿保护
+vs. 仅依据当前 binding 字段的候选选择
 
 类型化算子
 vs. 禁用类型化算子（依赖算子的计划显式记为 unsupported，不允许最终 LLM 代算）
