@@ -281,6 +281,57 @@ v49 预注册为 fixed-sample adapted 确认：
 - 边界：该样本已用于早期候选评估，且 baseline 不是 exact upstream，故不标记为全新
   one-shot held-out 或投稿主表。
 
+v49 已完成并固定以下结果与分析协议：500/500 final、attempt、trace，494 `ok`、6
+`budget_exceeded`（HotpotQA 2、MuSiQue 4），无 timeout/provider/retry；500/500 imported
+plans 有效，hash/provenance/variant 均为 0。guard 的 primary 宏平均为 `0.6838417`，旧
+SlotRAG* 为 `0.6719169`，整体差值 `+0.0119249`（`+1.775%`），分层 bootstrap 95% CI
+`[-0.0067178,+0.0306060]`，sign-flip `p=0.2059`，与七个固定适配器的 Holm p=`0.4524`。
+逐数据集 guard-old SlotRAG* 差值为 2Wiki `+0.0172`、DROP `-0.0113`、HotpotQA `+0.0232`、
+MuSiQue `+0.0404`、StrategyQA `-0.0100`，均未通过数据集级显著性。
+
+同题逐项比较的 adapted primary 为：guard-GraphRAG* `-0.0032` (Holm `0.8777`)、
+guard-PlanRAG* `-0.0299` (`0.4524`)、guard-Hybrid* `-0.0467` (`0.0884`)、guard-ReAct*
+`-0.0489` (`0.0555`)、guard-IRCoT* `-0.0647` (`0.0078`)、guard-SRAG* `+0.0641`
+(`0.0007`)。这些值只能作为同一 shared-provider local adapter 样本的诊断，不能转写成
+exact-upstream 论文结论；`baseline_execution.exact_upstream_execution_verified=false`。
+
+全指标分析使用仓库现有 `slotrag.benchmarking.paired`，145 个指标、数据集分层、10,000
+次 bootstrap/sign-flip、seed=`27182`，整体 primary 七比较做 Holm。机器报告和完整可用分母
+在 `runs/slotrag-binding-guard-fixed-main-eval-v1/summaries/binding_guard_fixed_main_eval/fixed_main_analysis/`
+（`paired_analysis.json`、`paired_contrasts.csv`、`paired_input.csv`、`report.json`）；
+guard 触发题审计在 `protected_anchor_audit.{json,csv}`，15/500 题、28 次拒绝、2 exact gain、
+0 exact loss、13 exact tie。分析入口 `tools/analyze_fixed_main.py` 的 SHA-256 为
+`81e5e6a5657d5738b12055d3e70af89b1be5cc2bb3833083dfc9d79bf79601e7`。
+
+v49 后不晋级 guard 为默认方法，也不以此轮 adapted 表支撑“领先 10%”或投稿结论。下一轮
+必须新建不重叠 train/dev 机制门，优先分析 MuSiQue/HotpotQA 的抽取失败与 6 个预算失败；
+任何修改都要先预注册，再用新的 held-out/test 样本验证。exact-upstream baseline 的执行阻塞
+仍保持不变，不能用本地 adapter 填补。
+
+### v50 预算敏感性 train 预注册（2026-07-26）
+
+v49 的 6 个 evaluation budget failure 中 5 个为 5/9-slot 计划，另 1 个为 4-slot 计划在
+4 次检索调用后耗尽；v48 train 的 6 次检索预算仍有 3 个 5-slot failure。v50 只回答“预算
+上限是否是主要阻塞”，不改变 SlotRAG 代码、prompt、答案解析或检索器：
+
+- 配置：`configs/experiments/slotrag-binding-guard-budget-train-v1.yaml`；run：
+  `runs/slotrag-binding-guard-budget-train-v1`；stage：`budget_sensitivity_train`；
+- 样本：与 v48 完全相同的五数据集×20 train 题，seed=`27182`，复用同一组 imported
+  SlotRAG frozen plans；只运行 guard（`slotrag` 仅作为 frozen-plan source）；
+- 唯一变量：预算从 v48 的 `max_steps=6/max_retrieval_calls=6` 改为
+  `max_steps=10/max_retrieval_calls=12`，LLM 上限 64；timeout 900 s；provider/operational
+  RPM 仍为 30/20，服务并发 64；
+- 预注册 primary：guard@12 - guard@6 的题内配对 primary，数据集等权，10,000 次
+  bootstrap/sign-flip，seed=`27182`；secondary 为 budget failure rate、EM/F1、evidence、
+  retrieval/provider/LLM calls、tokens、wall P50/P95/P99 和 145 个运行指标；
+- 晋级规则：只有 failure rate 明显下降且 primary 的 95% CI 下界不低于 `-0.020`，同时
+  provider calls 与 total tokens 的均值增幅分别不超过 `+50%`，才保留为执行配置候选；
+  否则记录为诊断并否决，不进入 evaluation/test；无论结果如何不得改写 v49。
+
+运行前必须完成 sample/frozen-plan/source fingerprint audit；运行后必须有 final/attempt/trace
+完整记录、失败分母、gate=`analysis_ready_nonpublication`，再由配对统计和完整成本报告决定
+是否需要新的计划压缩模块。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

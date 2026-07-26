@@ -2839,6 +2839,95 @@ guard 相对 plain 的 overall primary 差为 `+0.0300`（相对 `+4.27%`），9
 且该 500 题曾用于早期候选评估，该轮只能给出 fixed-sample adapted 诊断比较，
 不允许写成 exact-upstream 或全新 one-shot held-out 投稿结论。
 
+#### v49 完成：固定 adapted baseline 同样本结果与全指标审计（2026-07-26）
+
+v49 已按预注册配置完成，实际只执行 `slotrag-grounded-binding-guard`，没有重新运行任何
+外部 baseline。五个数据集各 100 题，共 500/500 final、attempt、trace；494 条 `ok`，
+6 条 `budget_exceeded`（HotpotQA 2、MuSiQue 4），无 timeout、provider failure、retry。
+500/500 frozen plan import 有效，plan hash/provenance/variant 均为 0，sample 与旧
+`main_comparison` 五个 SHA 一致，且与 v48 train overlap=0。运行 gate 的
+`status=publication_ready` 仅表示本方法的 evaluation 记录完整；其中
+`baseline_execution.exact_upstream_execution_verified=false`，所以不授权“击败发表方法”的
+投稿主张。
+
+固定样本的 adapted 宏平均如下；`*` 表示仓库内的 shared-provider local adapter，不能视为
+对应论文/仓库的 exact reproduction。`Evidence R@10` 只在有 gold evidence 的两个数据集上
+取等权平均，`Accuracy` 只对 StrategyQA，DROP F1 只对 DROP。
+
+| 方法 | Primary | EM | F1 | Accuracy | DROP F1 | Evidence R@10 | LLM calls | Total tokens | Provider calls | Wall ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG-grounded-binding-guard | **0.6838** | 0.3480 | 0.5001 | 0.8500 | 0.6065 | 0.7838 | 1.926 | 2,462.5 | 4.946 | 18,629.5 |
+| SlotRAG* | 0.6719 | 0.3360 | 0.4805 | 0.8600 | 0.6178 | 0.7750 | 2.820 | 3,819.0 | 5.884 | 22,356.0 |
+| GraphRAG* | 0.6871 | 0.4920 | 0.6494 | 0.8700 | 0.7094 | 1.0000 | 1.000 | 2,077.7 | 1.000 | 17,440.4 |
+| PlanRAG* | 0.7137 | 0.5200 | 0.6796 | 0.8600 | 0.6944 | 0.9450 | 1.938 | 2,364.5 | 6.706 | 36,962.9 |
+| Hybrid* | 0.7305 | 0.5300 | 0.6919 | 0.8800 | 0.7195 | 0.9975 | 1.000 | 2,002.6 | 3.000 | 19,328.3 |
+| ReAct* | 0.7328 | 0.5260 | 0.6978 | 0.8700 | 0.7078 | 1.0000 | 4.864 | 5,186.5 | 12.436 | 51,826.8 |
+| IRCoT* | 0.7485 | 0.5440 | 0.7044 | 0.8900 | 0.7195 | 1.0000 | 4.996 | 5,255.7 | 12.984 | 51,352.0 |
+| SRAG* | 0.6197 | 0.2960 | 0.4299 | 0.8800 | 0.5639 | 0.7713 | 3.292 | 4,774.6 | 6.308 | 40,921.1 |
+
+因此 guard 只高于旧 SlotRAG `+1.1925pp`（相对 `+1.775%`）和 SRAG*，略低于 GraphRAG*，
+明显低于 PlanRAG*/Hybrid*/ReAct*/IRCoT*。全量 145 个可记录指标的 candidate/reference
+逐题差值、可用分母和分数据集结果在
+`runs/slotrag-binding-guard-fixed-main-eval-v1/summaries/binding_guard_fixed_main_eval/fixed_main_analysis/paired_contrasts.csv`；
+主摘要仍以 `macro_metrics.csv`、`metrics.csv`、`retrieval_metrics.csv`、
+`stratified_metrics.csv` 和 `failure_report.csv` 为准。
+v49 核心工件 SHA-256：`summary.json=b71df4bc9b01cbf99fb33ccf89065b9d0e5bec025394e81c061b5d55fb28e099`、
+`per_question.csv=e8341d4952f8f4a1abd95d6c39378a08fe28c6c369644b3c22864c15b0325cff`、
+`macro_metrics.csv=c137834d9ffda690b988071fb6be319d67da71581023562c07f67d8dc9a01ff8`、
+`metrics.csv=b79441aa647b06921aa7d7e2e878c028d1281cf9b9b3e8fdadb598f3b066baa9`、
+`stratified_metrics.csv=8191381f631db50c8c85321341f0a9375e53e5a5bbf37db19d2b9d51abd1062c`、
+`failure_report.csv=f7614a3cd7bb7b810a010129c29a17c0923ff8ffe013d1d37ce6f94e07bc5b89`、
+`gate.json=0c6c9893fc284e792ba4c6005fbf1d4387b13cbebbef8f76323084fe297dbc5b`。
+paired 分析工件 SHA 为 `paired_input.csv=a8740701a23fae1faa8b37275f83e9ec7bc92a50ca5cda045d05962a4ab7c906`、
+`paired_analysis.json=8633c163132bd8991cf7aab956b3e970c8db59503d50ffe7f57e195a32730a5d`、
+`paired_contrasts.csv=add83ee21af032fef33f4303f20b269d1df284662427d05a5b400d94da9d76ef`、
+`protected_anchor_audit.json=89da96e146b817d3d1f27778ecd40cf6fd8f5747822de49f26b32cf14454e059`。
+
+七个固定适配器的整体 primary 配对统计（每题同 ID、数据集等权、10,000 次分层 bootstrap
+和 sign-flip，seed=`27182`，Holm 家族为七个整体 primary 对比）如下：
+
+| 对比（guard - reference） | Δ Primary | 95% CI | sign-flip p | Holm p | 胜/平/负 |
+|---|---:|---|---:|---:|---:|
+| SlotRAG* | +0.0119 | [-0.0067, +0.0306] | 0.2059 | 0.4524 | 22/463/15 |
+| GraphRAG* | -0.0032 | [-0.0433, +0.0357] | 0.8777 | 0.8777 | 73/350/77 |
+| PlanRAG* | -0.0299 | [-0.0711, +0.0103] | 0.1508 | 0.4524 | 60/355/85 |
+| Hybrid* | -0.0467 | [-0.0861, -0.0070] | 0.0221 | 0.0884 | 54/361/85 |
+| ReAct* | -0.0489 | [-0.0885, -0.0104] | 0.0111 | 0.0555 | 54/358/88 |
+| IRCoT* | -0.0647 | [-0.1036, -0.0258] | 0.0013 | 0.0078 | 50/356/94 |
+| SRAG* | +0.0641 | [+0.0357, +0.0926] | 0.0001 | 0.0007 | 63/412/25 |
+
+Holm 后只有 SRAG* 与 IRCoT* 对比跨过 0.05；这不是 exact-upstream 的统计结论，而是同一
+shared-provider adapted 样本内的诊断。guard 对旧 SlotRAG 的五个数据集差值分别为：
+2Wiki `+0.0172`、DROP `-0.0113`、HotpotQA `+0.0232`、MuSiQue `+0.0404`、StrategyQA
+`-0.0100`，各自 CI 均覆盖 0，未形成数据集级显著增益。
+
+触发机制审计显示 `protected_anchor_rejections>0` 的题为 15/500、累计拒绝 28 次（HotpotQA
+5、MuSiQue 10）。与同题旧 SlotRAG 对比，2 题 exact gain、0 题 exact loss、13 题 exact
+tie；这只能支持“低频安全保护”而不能支持宏观质量归因。逐题 gold、预测、EM/F1、触发计数
+和 item 路径保存在 `fixed_main_analysis/protected_anchor_audit.{json,csv}`。
+
+本轮结论：保留 guard 作为候选的低频正确性保护，但不把它升级为默认方法、不宣称领先
+10%，也不把 adapted 对比写成 VLDB 投稿主表。下一轮只能在全新、不重叠 train/dev 题上
+分析多跳抽取/预算失败机制；不得根据这 500 个重复 evaluation 题调参后回填结果。配对分析
+工具为 `tools/analyze_fixed_main.py`（SHA-256=`81e5e6a5657d5738b12055d3e70af89b1be5cc2bb3833083dfc9d79bf79601e7`），
+输入和报告 hash 记录在 `fixed_main_analysis/report.json`。
+
+### v50：预算敏感性 train 预注册
+
+v49 的 6 个 budget failure 中 5 个来自 5/9-slot 计划，另 1 个在 4-slot 计划的 4 次检索
+上限耗尽；v48 train 的 6 次上限仍有 3 个 5-slot failure。为区分“预算阻塞”和“方法机制
+缺陷”，v50 只在与 v48 相同的 train 题和 imported frozen plans 上运行 guard，将唯一变量
+设为 `max_steps=10`、`max_retrieval_calls=12`；不改代码、prompt、检索器、解析协议或
+evaluation 数值。配置为 `configs/experiments/slotrag-binding-guard-budget-train-v1.yaml`，
+输出为 `runs/slotrag-binding-guard-budget-train-v1`，stage=`budget_sensitivity_train`。
+
+预注册 primary 为 guard@12 - guard@6 的 dataset-stratified paired primary（10,000 次
+bootstrap/sign-flip，seed=`27182`）；同时记录失败率、EM/F1、evidence、所有 calls/tokens、
+wall P50/P95/P99 及 145 个运行指标。只有失败率明显下降、primary CI 下界不低于 `-0.020`、
+provider calls 和 total tokens 均值增幅不超过 `+50%` 时，才保留该预算作为候选；否则只作
+诊断并否决，不进入 evaluation/test。运行前后均需保存 sample/plan/source audit 和完整
+failure denominator，不能用结果回写 v49。
+
 # 11. 关键消融
 
 必须包含：
