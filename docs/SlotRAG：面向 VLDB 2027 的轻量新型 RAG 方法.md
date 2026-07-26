@@ -2746,6 +2746,46 @@ v47 效应或计算投稿稳定性。全量机器记录位于
 30×182 cell 指标、600×170 逐题、30×74 检索、96×183 分层、39×6 失败、
 306×7 因子单元与 255×13 因子对比表。
 
+#### v47 机制审计与 v48 非自反绑定保护预注册（2026-07-26）
+
+新增的 `grounding-mechanism-audit` 只读取 v47 的 600 条 final/attempt/trace，按与
+factorial analyzer 相同的题内 `grounding_main` 公式定位 6 道非 tie 题，并为每个
+单元写入 final、attempt、trace 的相对路径和 SHA-256。产物为
+`runs/slotrag-grounding-retrieval-factorial-v3/summaries/factorial_ablation/grounding_mechanism_audit.json`，
+其 SHA-256 为 `a7752b31c42afc31f6e348a3ff630206c161bf8331a81885da86662fccaad3c5`；
+输入 `per_question.csv` SHA-256 仍为
+`88e0d905d79085b07aaddfa19fa7e708c8c61438b5f4d6473ce8decb7e8883f8`。
+
+对下一轮候选 `grounding-on + slot` 而言，6 题中只有 2 题是 EM/F1 同时从 0 到 1
+的 exact gain，3 题只在其他 retrieval 单元变化，候选本身不变；剩余 HotpotQA
+题 `5a8efb615542997ba9cb3163` 的预测从 `Insufficient` 变为题面已知输入
+`Pakistan Movement`，EM 仍为 0，但因参考答案 `Khilafat Movement` 的 token 重叠得到
+0.5 F1。这是 overlap-only 的指标伪增益，不是语义正确翻转。其计划第二槽为
+`alsoKnownAs(?movement, ?otherMovement)`：role projection 已把 `movement=Pakistan Movement`
+作为已知输入，但旧验证器只保护问题根常量 `Johar Town`，没有阻止模型把当前已知输入
+复制到另一个未绑定角色。
+
+据此新增独立方法 `slotrag-grounded-binding-guard`，不修改 v47 的旧方法：仅当
+role-projected extraction 激活时，把当前 slot 的 effective binding values 与原问题根
+常量共同列为受保护输入；若未绑定输出与任一受保护输入规范化后相同，则拒绝该行并走
+既有一次结构修复。该规则不读取 question ID、gold answer 或数据集标签，且不增加检索。
+
+v48 在观察任何新调用结果前冻结为
+`configs/experiments/slotrag-grounding-binding-guard-train-v1.yaml`，输出目录固定为
+`runs/slotrag-grounding-binding-guard-train-v1/`。它复用 v47 的 train seed 27182、
+五数据集各 20 题、同一 imported frozen plan、6/64/6 预算和 900 秒题级 deadline，
+只运行 `slotrag`、`slotrag-grounded-role-projection`、
+`slotrag-grounded-binding-guard` 三个方法，共 300 个题-方法记录。运行前必须验证五个
+sample SHA-256 与 v47 完全一致；每题只允许一个不可变 attempt，所有失败留在分母，
+question timeout 必须为 0。
+
+预注册 primary 对比只有两个：`guard - plain` 与 `guard - old-grounding`。统计先在题内
+求差，再按 dataset 等权，使用 seed 27182 的 10,000 次 paired bootstrap 95% CI 与
+双侧 sign-flip p 值，仅对这两个 overall primary p 值作 Holm 校正。EM/F1、evidence
+Recall/MRR/nDCG@10、retrieval/provider/tokens/wall 和失败类型均完整报告，但不加入 primary
+Holm 家族。该轮仍是 train 机制消融：即使 guard 数值更高也不允许写成投稿主结论；若
+丢失任一已确认 exact gain、出现 exact loss、question timeout 或成本明显恶化，则不晋级。
+
 # 11. 关键消融
 
 必须包含：

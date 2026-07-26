@@ -235,6 +235,29 @@ primary `+3.61%`、EM/F1 `+0.0200/+0.0250`，retrieval/provider/wall 仅
 3. 冻结候选后，在新的、不重叠的 dev/evaluation 题上只比较 plain 与 grounding-only，使用 frozen-plan paired protocol、完整失败分母、trace、bootstrap 和 Holm 校正。
 4. 若新样本上质量优势不复现或成本恶化，回退 plain；不得追加重试、换 seed 或修改统计对比。
 
+### v47 机制审计与 v48 binding guard 预注册（2026-07-26）
+
+`grounding-mechanism-audit` 已将 v47 的 6 道非 tie 题固化为机器可读索引；每个六单元
+记录都附 final/attempt/trace SHA-256。候选 grounding-only 的分类为 2 个
+`candidate_exact_gain`、1 个 `candidate_overlap_only_gain`、3 个
+`factor_only_no_candidate_change`。其中 overlap-only 题把已知输入
+`Pakistan Movement` 复制为 `otherMovement`，EM=0，仅因与 gold 共享 `Movement`
+得到 0.5 F1，不能算正确收益。
+
+v48 冻结配置为 `configs/experiments/slotrag-grounding-binding-guard-train-v1.yaml`，run 为
+`runs/slotrag-grounding-binding-guard-train-v1/`。新变体
+`slotrag-grounded-binding-guard` 只增加通用的 known-binding 非自反输出保护，不含 QID、
+gold 或 dataset 分支；旧 grounding 方法保持不变。矩阵固定五数据集 × 20 题 ×
+`plain/old-grounding/guard` 三方法，同 v47 seed、sample、frozen plan、预算和 deadline。
+
+运行前停止规则：五个 sample SHA 必须逐一等于 v47；代码提交、dirty 状态和源码指纹在
+全部 cell 间一致。运行后必须有 300/300 final、attempt、trace，question timeout=0，
+records/sample/frozen-plan audit 全通过。预注册 overall primary 家族仅含
+`guard-plain` 与 `guard-old-grounding` 两项，按 dataset 等权、题内配对，10,000 次
+bootstrap/sign-flip、seed 27182、Holm-2；EM/F1、全检索质量、调用、token、延迟和失败
+作为完整 secondary 指标。若 guard 丢失 v47 的任一 exact gain、产生 exact loss 或增加
+检索成本，则回退 old grounding；该 train 轮无论结果如何均不允许进入投稿主表。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计
