@@ -581,6 +581,68 @@ def test_grounded_role_projection_routes_direct_anchor_without_changing_plan(mon
     assert result.answer == "Isabel Marshal"
 
 
+def test_grounded_binding_guard_routes_known_binding_protection(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "namesakeOf", "arguments": ["Johar Town", "?movement"]},
+            {"id": "S2", "predicate": "alsoKnownAs", "arguments": ["?movement", "?otherMovement"]},
+        ],
+        "joins": [["S1.movement", "S2.movement"]],
+        "outputs": ["?otherMovement"],
+    })
+    materializer_options = []
+
+    class Materializer:
+        accessed_document_ids = set()
+        accessed_passage_ids = set()
+
+        def __init__(self, *_args, **kwargs):
+            materializer_options.append(kwargs)
+
+    class Executor:
+        def __init__(self, _materializer, *_args, **_kwargs):
+            pass
+
+        def execute(self, effective, *, strategy):
+            assert effective == plan
+            return ExecutionResult(rows=[{"otherMovement": "Khilafat Movement"}], order=["S1", "S2"])
+
+    monkeypatch.setattr(methods, "SlotMaterializer", Materializer)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-grounded-binding-guard"],
+        "hotpotqa",
+        QuestionRecord(
+            id="q",
+            question="What was the movement the namesake of Johar Town known as besides the Pakistan Movement?",
+        ),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+        frozen_plan=plan,
+    )
+
+    assert materializer_options == [{
+        "max_passages": 5,
+        "typed_extraction_contracts": False,
+        "role_projected_extraction": True,
+        "protected_anchor_values": {"Johar Town"},
+        "protect_known_binding_values": True,
+    }]
+    assert result.answer == "Khilafat Movement"
+
+
 def test_lean_grounded_role_projection_routes_phase_controls_only_when_triggered(monkeypatch):
     plan = SlotPlan.model_validate({
         "slots": [

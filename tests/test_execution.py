@@ -1555,6 +1555,35 @@ def test_role_projected_materializer_rejects_copied_anchor_then_repairs_relation
     assert metrics.structured_output_repairs == 1
 
 
+def test_role_projected_materializer_rejects_known_binding_copied_into_output_when_guarded():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"otherMovement": "Pakistan Movement", "source_id": "Mohammad Ali Jouhar#0"}],
+            [{"otherMovement": "Khilafat Movement", "source_id": "Mohammad Ali Jouhar#0"}],
+        ]),
+        StaticRetriever(Passage(
+            id="Mohammad Ali Jouhar#0",
+            doc_id="Mohammad Ali Jouhar",
+            text="Mohammad Ali Jouhar was a leader of the Khilafat Movement and Pakistan Movement.",
+        )),
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="alsoKnownAs", arguments=["?movement", "?otherMovement"]),
+        {"movement": "Pakistan Movement"},
+    )
+
+    assert [row.bindings for row in rows] == [{
+        "movement": "Pakistan Movement",
+        "otherMovement": "Khilafat Movement",
+    }]
+    assert metrics.protected_anchor_rejections == 1
+    assert metrics.structured_output_failures == 1
+    assert metrics.structured_output_repairs == 1
+
+
 def test_typed_boolean_materializer_emits_canonical_supported_rows():
     materializer = SlotMaterializer(
         SequenceExtractionClient([[{"answer": "no", "source_id": "p"}]]),

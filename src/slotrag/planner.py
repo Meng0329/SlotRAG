@@ -1118,6 +1118,7 @@ class SlotMaterializer:
         typed_extraction_contracts: bool = False,
         role_projected_extraction: bool = False,
         protected_anchor_values: set[str] | None = None,
+        protect_known_binding_values: bool = False,
         extraction_enable_thinking: bool | None = None,
         bound_role_signatures: bool = False,
         semantic_role_type_filter: bool = False,
@@ -1137,6 +1138,7 @@ class SlotMaterializer:
         self.typed_extraction_contracts = typed_extraction_contracts
         self.role_projected_extraction = role_projected_extraction
         self.protected_anchor_values = set(protected_anchor_values or ())
+        self.protect_known_binding_values = protect_known_binding_values
         self.extraction_enable_thinking = extraction_enable_thinking
         self.bound_role_signatures = bound_role_signatures
         self.semantic_role_type_filter = semantic_role_type_filter
@@ -1362,6 +1364,9 @@ class SlotMaterializer:
             if key.lstrip("?") in slot.variables
         }
         effective_bindings = {**constraint_bindings, **bindings}
+        protected_output_values = set(self.protected_anchor_values)
+        if self.protect_known_binding_values:
+            protected_output_values.update(str(value) for value in effective_bindings.values())
         passages = retrieved_passages
         anchor_window_contract = bool(
             self.anchor_centered_extraction
@@ -1470,9 +1475,9 @@ class SlotMaterializer:
                         f"Respect the ordered relation signature {slot.predicate}({', '.join(slot.arguments)}). "
                         f"Only emit unresolved fields {sorted(requested_fields)}; known arguments are merged by the executor. "
                         + (
-                            "These upstream anchors are protected inputs, never values for unresolved fields: "
-                            f"{json.dumps(sorted(self.protected_anchor_values), ensure_ascii=False)}. "
-                            if self.protected_anchor_values else ""
+                            "These known relation inputs are protected, never values for unresolved fields: "
+                            f"{json.dumps(sorted(protected_output_values), ensure_ascii=False)}. "
+                            if protected_output_values else ""
                         )
                         if self.role_projected_extraction else ""
                     )
@@ -1570,7 +1575,7 @@ class SlotMaterializer:
                         for key, value in normalized.items():
                             if any(
                                 self._normalized_text(value) == self._normalized_text(anchor)
-                                for anchor in self.protected_anchor_values
+                                for anchor in protected_output_values
                             ):
                                 invalid_bindings.append(f"{key} copies a protected upstream anchor")
                                 metrics = metrics.model_copy(update={
@@ -1652,7 +1657,7 @@ class SlotMaterializer:
                     role_context = (
                         f" Ordered relation: {slot.predicate}({', '.join(slot.arguments)}). "
                         f"Known bindings: {json.dumps(effective_bindings, ensure_ascii=False)}. "
-                        f"Protected upstream anchors: {json.dumps(sorted(self.protected_anchor_values), ensure_ascii=False)}."
+                        f"Protected relation inputs: {json.dumps(sorted(protected_output_values), ensure_ascii=False)}."
                         if self.role_projected_extraction else ""
                     )
                     messages.append({

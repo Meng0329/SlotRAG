@@ -44,6 +44,7 @@ class MethodSpec:
     grounded_entity_anchor_folding: bool = False
     grounded_entity_anchor_substitution: bool = False
     role_projected_extraction: bool = False
+    protect_known_binding_values: bool = False
     direct_grounded_anchor_projection: bool = False
     extraction_enable_thinking: bool | None = None
     bound_role_signatures: bool = False
@@ -82,6 +83,7 @@ ABLATION_METHODS = [
     "slotrag-anchor-substitution",
     "slotrag-role-projected-substitution",
     "slotrag-grounded-role-projection",
+    "slotrag-grounded-binding-guard",
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
     "slotrag-dual-query-retrieval",
@@ -180,6 +182,15 @@ METHODS: dict[str, MethodSpec] = {
         grounded_entity_anchor_substitution=True,
         role_projected_extraction=True,
         direct_grounded_anchor_projection=True,
+    ),
+    "slotrag-grounded-binding-guard": MethodSpec(
+        "slotrag-grounded-binding-guard",
+        "slotrag",
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        description="grounded role projection with non-reflexive known-binding protection",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -998,6 +1009,8 @@ def _run_slotrag(
             "role_projected_extraction": True,
             "protected_anchor_values": protected_anchor_values,
         })
+        if spec.protect_known_binding_values:
+            materializer_options["protect_known_binding_values"] = True
         if spec.extraction_enable_thinking is not None:
             materializer_options["extraction_enable_thinking"] = spec.extraction_enable_thinking
         if spec.bound_role_signatures:
