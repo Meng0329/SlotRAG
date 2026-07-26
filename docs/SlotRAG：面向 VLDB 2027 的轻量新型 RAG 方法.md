@@ -2928,6 +2928,126 @@ provider calls 和 total tokens 均值增幅不超过 `+50%` 时，才保留该�
 诊断并否决，不进入 evaluation/test。运行前后均需保存 sample/plan/source audit 和完整
 failure denominator，不能用结果回写 v49。
 
+#### v50 完成：预算敏感性 train 结果（2026-07-26）
+
+v50 已按预注册完成，唯一运行单元为
+`slotrag-grounded-binding-guard`，没有修改代码、prompt、检索器或答案解析。五个数据集
+各 20 题，共 `100/100` final、attempt、trace；100 条均为 `ok`，无 timeout、provider
+failure、retry。100/100 imported frozen plans 有效，missing provenance、plan hash mismatch、
+inconsistent pair 和 effective-plan variant 均为 0；records audit complete，gate 为
+`analysis_ready_nonpublication`（仅因 train split，不代表投稿就绪）。
+
+| 预算/结果 | Primary | EM | F1 | Evidence R@10 | LLM calls | Retrieval calls | Provider calls | Total tokens | Wall ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| guard@6（v48，同题） | 0.7330 | 0.5500 | 0.5820 | 0.8313 | 1.930 | 1.540 | 5.010 | 2,382.1 | 61,590.2 |
+| guard@12（v50） | **0.7430** | 0.5400 | 0.5720 | 0.8313 | 1.950 | 1.560 | 5.070 | 2,418.0 | 21,796.0 |
+
+guard@12 相对 guard@6 的同题配对 primary 为 `+0.0100`，95% CI `[0.0000,+0.0300]`，
+sign-flip `p=1.0000`，胜/平/负=`1/99/0`；EM 和 F1 均为 `-0.0100`（CI
+`[-0.0400,+0.0200]`）。失败率从 `1/100` 降为 `0/100`，但该样本只证明预算阻塞减少了
+一条 MuSiQue 失败，不能解释为稳定质量提升。Total tokens 均值增加 `35.9`（约 `+1.51%`），
+provider calls 增加 `0.06`（约 `+1.20%`），均通过预注册的 `+50%` 成本门槛；wall time 受
+共享服务时段影响，仅作描述，不作为晋级判据。因此保留 `10/12` 作为下一轮 evaluation
+的候选执行预算，但不把 v50 train 结果写成显著性或领先结论。
+
+各数据集 primary（2Wiki/ DROP/ Hotpot/ MuSiQue/ StrategyQA）为
+`0.7750/0.7130/0.8000/0.5768/0.8500`；完整 145 个运行指标、失败分母、retrieval、
+stratified、frozen-plan 和逐题结果均保留在
+`runs/slotrag-binding-guard-budget-train-v1/summaries/budget_sensitivity_train/`。
+预算配对的 145 指标及 CI/p 在其 `fixed_budget_analysis/paired_analysis.json` 和
+`paired_contrasts.csv`，输入仅按 `(dataset, question_id)` 连接，10,000 次
+dataset-stratified bootstrap/sign-flip，seed=`27182`。核心工件 SHA-256：
+`per_question.csv=c7ab6f7a3f83453e483aea1f43e77212e7ddabd7a866e7a44f13e97d9bfc8655`、
+`macro_metrics.csv=47373a754bcdea3f3b0543d2258095f70b4cf76e89db96e1e3d7d60eec6c811c`、
+`metrics.csv=e2e5cf047eae7347ef803b66aec2ebbb32af0d64a2b3bc7398998d938508b3f5`、
+`failure_report.csv=c0bc9d49df943c0af19c13b01cd89431a5d95a8c902725d8702c69d51ab903f0`、
+`records-audit.json=85b66c3b99d6ae4bbc86e31bd4368cd14dc95fac07f33fe3234212a2a72c2dd5`、
+`gate.json=cdf03eed1743212ef3e5a98350f7967275176090585517a57bbcfb7f39f83612`、
+`fixed_budget_analysis/paired_analysis.json=b7a86fbf40a65ccb8d0c0b8e63d05f869225ebcff03d87be9b0c940ea72933be`、
+`fixed_budget_analysis/paired_contrasts.csv=dd27899d5bd45b7f9cc4a32b171acf08c1759e116d38dda56fc8d00f3d8f7b5e`。
+
+### v51：10/12 预算 fixed-main evaluation 预注册
+
+v50 通过预算晋级门槛后，v51 在不重叠 train 选择的前提下，将同一候选预算固定到
+evaluation 复核。配置为 `configs/experiments/slotrag-binding-guard-fixed-main-eval-v2.yaml`，
+run=`runs/slotrag-binding-guard-fixed-main-eval-v2`，stage=`binding_guard_fixed_main_eval_v2`；
+五个数据集各 100 题、seed=`2040`，复用 v49 已冻结且已审计的 500 份 imported plans，
+只运行 guard（`slotrag` 仍仅作为 frozen-plan source）。相对 v49 唯一变量为
+`max_steps=10`、`max_retrieval_calls=12`；`max_llm_calls=64`、timeout=300 s、provider
+限制 30/20 RPM、服务并发 64 保持不变。运行前固定 sample SHA/plan source fingerprint，
+运行后要求 500/500 final/attempt/trace、完整失败分母、全指标和 publication gate；不得在
+看到 v51 结果后再改变预算或解析规则。由于该 evaluation 样本曾用于早期候选诊断且 baseline
+仍非 exact upstream，v51 只能作为固定 adapted 预算复核，不能冒充全新 held-out 投稿主表。
+
+#### v51 完成：10/12 预算 fixed-main 结果（2026-07-26）
+
+v51 已按预注册完成，实际只运行 `slotrag-grounded-binding-guard`，未重跑 baseline，也未改变
+代码、prompt、解析或 frozen plans。五个数据集各 100 题，共 `500/500` final、attempt、trace；
+499 条 `ok`，HotpotQA 题 `5a801e68554299485f59856f` 为 1 条 `failed/other`，错误为
+`slot S3 has no join path`，无 timeout、provider failure、retry。500/500 imported plans 有效，
+plan/provenance/hash/variant 异常均为 0；sample 与 v49 五个 SHA 完全相同，与 v48 train
+overlap=0。gate 对本方法记录为 `publication_ready`，但其 baseline comparison 仍为
+`diagnostic_local_adapters`、`exact_upstream_execution_verified=false`，不能据此授权外部方法
+领先主张。
+
+固定样本 adapted 宏平均如下；`*` 仍表示 shared-provider local adapter，而非 exact upstream：
+
+| 方法 | Primary | EM | F1 | Accuracy | DROP F1 | Evidence R@10 | LLM calls | Total tokens | Provider calls | Wall ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SlotRAG-grounded-binding-guard@10/12 | **0.6889** | 0.3540 | 0.5022 | 0.8600 | 0.5955 | 0.7938 | 1.996 | 2,557.3 | 5.124 | 20,191.0 |
+| SlotRAG* | 0.6719 | 0.3360 | 0.4805 | 0.8600 | 0.6178 | 0.7750 | 2.820 | 3,819.0 | 5.884 | 22,356.0 |
+| GraphRAG* | 0.6871 | 0.4920 | 0.6494 | 0.8700 | 0.7094 | 1.0000 | 1.000 | 2,077.7 | 1.000 | 17,440.4 |
+| PlanRAG* | 0.7137 | 0.5200 | 0.6796 | 0.8600 | 0.6944 | 0.9450 | 1.938 | 2,364.5 | 6.706 | 36,962.9 |
+| Hybrid* | 0.7305 | 0.5300 | 0.6919 | 0.8800 | 0.7195 | 0.9975 | 1.000 | 2,002.6 | 3.000 | 19,328.3 |
+| ReAct* | 0.7328 | 0.5260 | 0.6978 | 0.8700 | 0.7078 | 1.0000 | 4.864 | 5,186.5 | 12.436 | 51,826.8 |
+| IRCoT* | 0.7485 | 0.5440 | 0.7044 | 0.8900 | 0.7195 | 1.0000 | 4.996 | 5,255.7 | 12.984 | 51,352.0 |
+| SRAG* | 0.6197 | 0.2960 | 0.4299 | 0.8800 | 0.5639 | 0.7713 | 3.292 | 4,774.6 | 6.308 | 40,921.1 |
+
+v51 相对 v49 guard@4/4 的同题 primary 为 `+0.0050`，95% CI
+`[-0.0050,+0.0161]`，sign-flip `p=0.3894`，八个整体 primary 对比的 Holm p=`0.7787`，
+胜/平/负=`7/487/6`；EM `+0.0060`、F1 `+0.0021`，各自 CI 均覆盖 0。六个 v49
+`budget_exceeded` 中五个变为 `ok`，另一个转为上述 join-path failure；其中两题 primary
+从 0 变为 1。成本相对 v49 增加：retrieval calls `+0.054`、provider calls `+0.178`
+（约 `+3.60%`）、total tokens `+94.82`（约 `+3.85%`）、wall `+1,561.5 ms`。因此
+10/12 明显改善执行完成率且成本温和，但固定样本 primary 增益小且不显著；保留为当前
+候选执行预算，同时把 join-path failure 作为下一轮通用计划验证/退化机制的目标，不再扩大
+预算来掩盖它。
+
+八个整体 primary 配对统计（10,000 次 dataset-stratified bootstrap/sign-flip，seed=`27182`，
+Holm 家族为八个对比）如下：
+
+| 对比（v51 guard - reference） | Δ Primary | 95% CI | p | Holm p | 胜/平/负 |
+|---|---:|---|---:|---:|---:|
+| v49 guard@4/4 | +0.0050 | [-0.0050, +0.0161] | 0.3894 | 0.7787 | 7/487/6 |
+| SlotRAG* | +0.0169 | [-0.0013, +0.0360] | 0.0785 | 0.3140 | 22/464/14 |
+| GraphRAG* | +0.0018 | [-0.0382, +0.0408] | 0.9293 | 0.9293 | 74/350/76 |
+| PlanRAG* | -0.0249 | [-0.0657, +0.0151] | 0.2322 | 0.6965 | 60/356/84 |
+| Hybrid* | -0.0417 | [-0.0802, -0.0027] | 0.0355 | 0.1775 | 52/366/82 |
+| ReAct* | -0.0439 | [-0.0831, -0.0055] | 0.0225 | 0.1350 | 52/362/86 |
+| IRCoT* | -0.0597 | [-0.0970, -0.0223] | 0.0027 | 0.0189 | 46/365/89 |
+| SRAG* | +0.0691 | [+0.0405, +0.0985] | 0.0001 | 0.0008 | 64/410/26 |
+
+Holm 后只保留对 IRCoT* 的劣势和对 SRAG* 的优势；这些仍是 adapted 内部诊断。五数据集
+primary（2Wiki/DROP/Hotpot/MuSiQue/StrategyQA）为
+`0.7199/0.5955/0.7325/0.5364/0.8600`。完整 145 指标、分层可用分母、failure、retrieval、
+plan audit 和 6,006 条 paired contrasts 位于
+`runs/slotrag-binding-guard-fixed-main-eval-v2/summaries/binding_guard_fixed_main_eval_v2/`
+及其 `fixed_main_analysis/`。核心 SHA-256：
+`config=e0376b24e4d95cd7aead2c5ad6623d1f00317a06e89b02479d661c8d84d84b1c`、
+`per_question.csv=557a49fb599bfbe312bd0613b50aabd107c4a02784be55e57b3661ad16039049`、
+`macro_metrics.csv=fc533f97e6e9e0fe623af6b7c73a2c344f4b6a33b0a6254781e8dd756b2b9c24`、
+`metrics.csv=ca7c695c351c10ea2623bdade34fab559bcf863ea813f7102676b634263361fb`、
+`failure_report.csv=47dd436443484d17ac2cbec8eb77b28c7b0a0505b1f064c3358c9fe2f590dcfd`、
+`sample-audit.json=604266e50753ebb07ea11df8cbba7869a2ea99c003bc30534e978e431eda185f`、
+`records-audit.json=caf611f2d00e361ccd5e3b66054c2c45b726da41203d7147fb5084faf7a583ee`、
+`gate.json=3fc65bb9f453ee497cca0e5ec6396bef9e19cc42fa3f341aafce1f25be4b42ac`、
+`fixed_main_analysis/paired_analysis.json=2b9bddbfc065ea3e0c790684ebcd879108eedcc629f8d1b90c55b24f78bdcda7`、
+`fixed_main_analysis/paired_contrasts.csv=0e0e10bcda53a9c9b7cdaa4fabb2eeed78cbf645c9e36b509af931931e29f990`。
+
+本轮仍不满足“远超所有 baseline 10%”或 exact-upstream 投稿结论。下一轮若继续改方法，只能
+针对通用 join-path/多跳执行失败建立 train/dev 机制门并先预注册；不得继续在这 500 个重复
+evaluation 题上试规则或择优重跑。
+
 # 11. 关键消融
 
 必须包含：

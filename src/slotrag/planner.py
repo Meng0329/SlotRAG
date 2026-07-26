@@ -202,6 +202,7 @@ class ExecutionOptions(BaseModel):
     binding_propagation: bool = True
     eager_materialization: bool = False
     typed_operators: bool = True
+    frontier_safe_selection: bool = False
 
 
 def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
@@ -2007,27 +2008,57 @@ class AdaptiveExecutor:
         self.random = random.Random(random_seed)
         self.options = options or ExecutionOptions()
 
-    def _choose_slot(self, remaining: list[Slot], bindings: dict[str, str], plan: SlotPlan, cardinalities: dict[str, int], strategy: str) -> Slot:
+    def _choose_slot(
+        self,
+        remaining: list[Slot],
+        bindings: dict[str, str],
+        plan: SlotPlan,
+        cardinalities: dict[str, int],
+        strategy: str,
+        *,
+        materialized_slots: set[str] | None = None,
+    ) -> tuple[Slot, bool, bool, int]:
         connected = [slot for slot in remaining if not bindings or any(
             slot.id == join.right_slot and join.left_field in bindings
             or slot.id == join.left_slot and join.right_field in bindings
             for join in plan.joins
         )]
         candidates = connected or remaining
+        guard_checked = bool(
+            self.options.frontier_safe_selection
+            and self.options.incremental_join
+            and materialized_slots
+        )
+        guard_intervened = False
+        candidates_pruned = 0
+        if guard_checked:
+            frontier = [slot for slot in remaining if any(
+                slot.id == join.right_slot and join.left_slot in materialized_slots
+                or slot.id == join.left_slot and join.right_slot in materialized_slots
+                for join in plan.joins
+            )]
+            if frontier:
+                original_ids = {slot.id for slot in candidates}
+                frontier_ids = {slot.id for slot in frontier}
+                guard_intervened = original_ids != frontier_ids
+                candidates_pruned = len(original_ids - frontier_ids)
+                candidates = frontier
         if strategy == "question":
-            return candidates[0]
-        if strategy == "random":
-            return self.random.choice(candidates)
-        if strategy == "fixed":
-            return sorted(candidates, key=lambda slot: slot.id)[0]
-        if strategy == "oracle":
-            return min(candidates, key=lambda slot: cardinalities.get(slot.id, slot.estimated_cardinality))
-        def score(slot: Slot) -> float:
-            bound = len(slot.variables & bindings.keys())
-            estimated = max(cardinalities.get(slot.id, slot.estimated_cardinality), 1)
-            cost = slot.estimated_cost + self.default_slot_cost + max(len(slot.variables) - bound, 0) * self.unbound_argument_cost
-            return (bound + slot.importance) / (cost * estimated)
-        return max(candidates, key=score)
+            chosen = candidates[0]
+        elif strategy == "random":
+            chosen = self.random.choice(candidates)
+        elif strategy == "fixed":
+            chosen = sorted(candidates, key=lambda slot: slot.id)[0]
+        elif strategy == "oracle":
+            chosen = min(candidates, key=lambda slot: cardinalities.get(slot.id, slot.estimated_cardinality))
+        else:
+            def score(slot: Slot) -> float:
+                bound = len(slot.variables & bindings.keys())
+                estimated = max(cardinalities.get(slot.id, slot.estimated_cardinality), 1)
+                cost = slot.estimated_cost + self.default_slot_cost + max(len(slot.variables) - bound, 0) * self.unbound_argument_cost
+                return (bound + slot.importance) / (cost * estimated)
+            chosen = max(candidates, key=score)
+        return chosen, guard_checked, guard_intervened, candidates_pruned
 
     def execute(self, plan: SlotPlan, *, strategy: str = "adaptive") -> ExecutionResult:
         remaining = list(plan.slots)
@@ -2040,18 +2071,50 @@ class AdaptiveExecutor:
         order: list[str] = []
         current: list[BindingRow] | None = None
         frozen_order: list[Slot] = []
+        frozen_guard_stats: list[tuple[bool, bool, int]] = []
         if not self.options.runtime_replan:
             pending = list(remaining)
             frozen_bindings: dict[str, str] = {}
+            frozen_materialized: set[str] = set()
             while pending:
-                chosen = self._choose_slot(pending, frozen_bindings, plan, {}, strategy)
+                chosen, guard_checked, guard_intervened, candidates_pruned = self._choose_slot(
+                    pending,
+                    frozen_bindings,
+                    plan,
+                    {},
+                    strategy,
+                    materialized_slots=frozen_materialized,
+                )
                 pending.remove(chosen)
                 frozen_order.append(chosen)
+                frozen_guard_stats.append((guard_checked, guard_intervened, candidates_pruned))
                 frozen_bindings.update({name: "<estimated>" for name in chosen.variables})
+                frozen_materialized.add(chosen.id)
         for step in range(self.max_replans):
             if not remaining:
                 break
-            slot = frozen_order[step] if frozen_order else self._choose_slot(remaining, all_bindings, plan, cardinalities, strategy)
+            if frozen_order:
+                slot = frozen_order[step]
+                guard_checked, guard_intervened, candidates_pruned = frozen_guard_stats[step]
+            else:
+                slot, guard_checked, guard_intervened, candidates_pruned = self._choose_slot(
+                    remaining,
+                    all_bindings,
+                    plan,
+                    cardinalities,
+                    strategy,
+                    materialized_slots=set(materialized),
+                )
+            if guard_checked:
+                metrics = metrics.model_copy(update={
+                    "frontier_guard_checks": metrics.frontier_guard_checks + 1,
+                    "frontier_guard_interventions": (
+                        metrics.frontier_guard_interventions + int(guard_intervened)
+                    ),
+                    "frontier_candidates_pruned": (
+                        metrics.frontier_candidates_pruned + candidates_pruned
+                    ),
+                })
             remaining.remove(slot)
             order.append(slot.id)
             if current is None or not self.options.binding_propagation or self.options.eager_materialization:

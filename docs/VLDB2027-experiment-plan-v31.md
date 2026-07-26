@@ -332,6 +332,58 @@ v49 的 6 个 evaluation budget failure 中 5 个为 5/9-slot 计划，另 1 个
 完整记录、失败分母、gate=`analysis_ready_nonpublication`，再由配对统计和完整成本报告决定
 是否需要新的计划压缩模块。
 
+### v50 完成记录（2026-07-26）
+
+v50 已完成且审计通过：100/100 final、attempt、trace，100 条均为 `ok`；0 timeout/provider
+failure/retry；100/100 imported frozen plans 有效，所有 provenance/hash/variant 异常计数为 0。
+宏平均 guard@12 为 primary=`0.7429571`、EM=`0.5400`、F1=`0.5720`、evidence R@10=`0.8313`、
+LLM calls=`1.950`、retrieval calls=`1.560`、provider calls=`5.070`、total tokens=`2418.0`。
+
+与 v48 同题 guard@6 的配对 primary 为 `+0.0100`，95% CI `[0.0000,+0.0300]`，sign-flip
+`p=1.0000`，胜/平/负=`1/99/0`；EM/F1 均为 `-0.0100`。失败率从 `1/100` 降为 `0/100`，
+total tokens 增幅约 `+1.51%`，provider calls 增幅约 `+1.20%`，通过预注册晋级门槛；这只支持
+保留 10/12 作为下一轮执行预算，不支持显著质量提升或领先结论。完整 145 指标、失败分母和
+配对 CI/p 位于 `runs/slotrag-binding-guard-budget-train-v1/summaries/budget_sensitivity_train/`
+及其 `fixed_budget_analysis/`，配对 seed=`27182`、10,000 次 dataset-stratified
+bootstrap/sign-flip。train gate 仍为 `analysis_ready_nonpublication`。
+
+### v51 fixed-main evaluation 预注册（2026-07-26）
+
+基于 v50 的预算门禁，v51 将 `max_steps=10/max_retrieval_calls=12` 固定到 evaluation 复核，
+不再调整预算、prompt、代码或解析。配置：
+`configs/experiments/slotrag-binding-guard-fixed-main-eval-v2.yaml`；run：
+`runs/slotrag-binding-guard-fixed-main-eval-v2`；stage：`binding_guard_fixed_main_eval_v2`。
+五个数据集各 100 题、seed=`2040`，复用 v49 已审计的 500 份 imported plans，只运行 guard，
+`slotrag` 仅作为 frozen-plan source；timeout=300 s、LLM 上限 64、provider/operational
+RPM=30/20、服务并发=64 保持不变。运行前固定 sample/plan fingerprint，运行后要求
+500/500 final/attempt/trace、完整失败分母、全指标汇总和 gate。该 evaluation 样本曾用于早期
+候选诊断且 baseline 仍非 exact upstream，因此 v51 只能作为 adapted 预算复核，不能写成
+全新 held-out 投稿主表。
+
+### v51 完成记录（2026-07-26）
+
+v51 已完成：500/500 final、attempt、trace，499 `ok`；HotpotQA
+`5a801e68554299485f59856f` 为 1 条 `failed/other`（`slot S3 has no join path`），无
+timeout/provider/retry。500/500 imported plans 有效，sample SHA 与 v49 一致且与 v48 train
+overlap=0；plan/provenance/hash/variant 异常均为 0。gate 对本方法为 `publication_ready`，
+但 baseline comparison 仍为 `diagnostic_local_adapters`、exact-upstream=false。
+
+宏平均 primary=`0.6888553`、EM=`0.3540`、F1=`0.5022`、accuracy=`0.8600`、DROP
+F1=`0.5955`、evidence R@10=`0.7938`、LLM calls=`1.996`、retrieval calls=`1.564`、
+provider calls=`5.124`、total tokens=`2557.3`。相对同题 v49 guard@4/4：primary
+`+0.0050136`，95% CI `[-0.0049578,+0.0161357]`，sign-flip `p=0.3894`，八比较
+Holm=`0.7787`，胜/平/负=`7/487/6`；六个旧 budget failure 中五个转为 `ok`，一个转为
+上述 join-path failure。provider calls 增加约 `+3.60%`，total tokens 增加约 `+3.85%`。
+结论是保留 10/12 作为候选执行预算，但不宣称显著质量提升。
+
+同题 adapted primary 为：v51-SlotRAG* `+0.0169`（Holm `0.3140`）、GraphRAG*
+`+0.0018` (`0.9293`)、PlanRAG* `-0.0249` (`0.6965`)、Hybrid* `-0.0417`
+(`0.1775`)、ReAct* `-0.0439` (`0.1350`)、IRCoT* `-0.0597` (`0.0189`)、SRAG*
+`+0.0691` (`0.0008`)。完整 145 指标与 6,006 条 paired contrasts 在
+`runs/slotrag-binding-guard-fixed-main-eval-v2/summaries/binding_guard_fixed_main_eval_v2/`
+及 `fixed_main_analysis/`。该结果不满足领先 10% 或 exact-upstream 投稿门槛；下一轮只允许
+在 train/dev 预注册通用 join-path 退化机制，不得在这 500 个 evaluation 题上继续调规则。
+
 ## 门禁与顺序
 
 ### 1. 上游基线审计

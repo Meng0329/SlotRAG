@@ -19,6 +19,12 @@
 - v49 的 5×100 evaluation samples 已 prepare 和 audit，与旧 `main_comparison` SHA 逐一相同，与 v48 train 重叠为 0。`sample-audit.json` 已落盘。冻结计划来自 `runs/slotrag-final-candidate-v2/plans/imported_main`，五数据集各 100，missing=0。
 - v49 primary guard=`0.6838417`，旧 SlotRAG*=`0.6719169`；guard-old=`+0.0119249`，95% CI `[-0.0067178,+0.0306060]`，sign-flip `p=0.2059`，七比较 Holm=`0.4524`。guard 低于 IRCoT*/Hybrid*/ReAct* `6.47/4.67/4.89pp`，高于 SRAG* `6.41pp`；所有 baseline 仍是 `shared_provider_adapted` local adapter，`exact_upstream_execution_verified=false`。
 - v49 guard 触发审计：15/500 题、28 次拒绝（HotpotQA 5、MuSiQue 10），2 exact gain、0 exact loss、13 exact tie。完整 145 指标 paired artifacts 位于 `runs/slotrag-binding-guard-fixed-main-eval-v1/summaries/binding_guard_fixed_main_eval/fixed_main_analysis/`。
+- v50 已完成：配置 `configs/experiments/slotrag-binding-guard-budget-train-v1.yaml`，输出 `runs/slotrag-binding-guard-budget-train-v1`，五数据集各 20 train 题，100/100 final、attempt、trace 全部 `ok`；100/100 imported plans 有效，0 timeout/provider/retry，gate=`analysis_ready_nonpublication`。
+- v50 guard@12 primary=`0.7429571`，相对同题 v48 guard@6 配对 `+0.0100`，95% CI `[0.0000,+0.0300]`，sign-flip `p=1.0000`，胜/平/负=`1/99/0`；EM/F1 各 `-0.0100`。失败率从 `1/100` 降为 `0/100`，total tokens `+1.51%`、provider calls `+1.20%`，只据此保留 10/12 预算候选，不宣称质量显著提升。
+- v50 全指标与 paired artifacts 位于 `runs/slotrag-binding-guard-budget-train-v1/summaries/budget_sensitivity_train/`，包含 145 指标、失败分母、CI/p、Holm 输入和 SHA；预算配对报告在 `fixed_budget_analysis/`。核心 `per_question.csv` SHA=`c7ab6f7a3f83453e483aea1f43e77212e7ddabd7a866e7a44f13e97d9bfc8655`，`paired_analysis.json` SHA=`b7a86fbf40a65ccb8d0c0b8e63d05f869225ebcff03d87be9b0c940ea72933be`。
+- v51 已完成：`runs/slotrag-binding-guard-fixed-main-eval-v2`，500/500 final、attempt、trace；499 `ok`，HotpotQA 1 条 `failed/other`（`slot S3 has no join path`），0 timeout/provider/retry；500/500 imported plans 有效，sample 与 v49 SHA 相同、与 v48 train overlap=0。
+- v51 primary=`0.6888553`，相对 v49 guard@4/4 `+0.0050136`，95% CI `[-0.0049578,+0.0161357]`，p=`0.3894`、Holm=`0.7787`，胜/平/负=`7/487/6`；六个 v49 budget failure 中五个转为 `ok`，一个转为 join-path failure。provider calls `+3.60%`、total tokens `+3.85%`，保留 10/12 预算但不宣称显著质量提升。
+- v51 对 adapted SlotRAG*/GraphRAG*/PlanRAG*/Hybrid*/ReAct*/IRCoT*/SRAG* 的 primary 差值依次为 `+0.0169/+0.0018/-0.0249/-0.0417/-0.0439/-0.0597/+0.0691`；Holm 后只保留对 IRCoT* 的劣势与对 SRAG* 的优势。完整 145 指标和 6,006 条 contrasts 在 v51 `fixed_main_analysis/`，baseline exact-upstream 仍为 false。
 - 全量测试在加入离线分析工具后为 `247 passed, 1 skipped`，包含 `tests/test_fixed_main_analysis.py`；`compileall` 与 `git diff --check` 通过。
 
 ## Key decisions
@@ -41,9 +47,14 @@
 
 ## Next steps
 
-1. 不要重复启动 v49 provider。先复核 `gate.json`、`sample-audit.json`、`manifest.json` 和
-   `fixed_main_analysis/report.json` 的完整性与 SHA-256。
-2. 复跑离线分析时使用：
+1. 不要重复启动 v49 或 v50 provider。v50 的 `records-audit.json`、`gate.json`、
+   `manifest.json`、`summaries/budget_sensitivity_train/summary.json` 和
+   `fixed_budget_analysis/report.json` 已完成并记录 SHA-256；复核时保持这些工件不可变。
+2. 不要重复启动 v51 provider。先复核 v51 的 `sample-audit.json`、`records-audit.json`、
+   `gate.json`、`summary.json` 和 `fixed_main_analysis/report.json`；核心
+   `per_question.csv` SHA=`557a49fb599bfbe312bd0613b50aabd107c4a02784be55e57b3661ad16039049`，
+   `paired_analysis.json` SHA=`2b9bddbfc065ea3e0c790684ebcd879108eedcc629f8d1b90c55b24f78bdcda7`。
+3. 复跑 v49 离线分析时使用：
 
    ```bash
    .venv/bin/python tools/analyze_fixed_main.py \
@@ -59,16 +70,17 @@
 
    该工具只读取 immutable CSV/items，输出 145 指标的逐题 paired contrasts、整体/数据集
    分层 CI/p、Holm primary family 和 binding-guard 触发审计；不调用任何服务。
-3. 先在不重叠 train/dev 上做错误分层：MuSiQue/HotpotQA 的抽取失败、计划 5+ slots 的
-   预算终止、DROP/StrategyQA 的单跳退化。不要使用 v49 evaluation gold 选择规则、阈值或
-   prompt；每个候选改动先写新的预注册配置和停止门。
-4. 新候选必须保留 `plain`、旧 grounding、guard 的 frozen-plan paired 对照，并报告
+4. 下一步先在不重叠 train/dev 上审计 `slot S3 has no join path` 的通用成因，并设计计划验证/
+   安全退化候选；同时保留 MuSiQue/HotpotQA 抽取失败与 DROP/StrategyQA 单跳退化分层。
+   不要使用 v49/v51 evaluation gold 选择规则、阈值或 prompt；每个候选改动先写新的预注册
+   配置和停止门。
+5. 新候选必须保留 `plain`、旧 grounding、guard 的 frozen-plan paired 对照，并报告
    质量、evidence、calls/tokens、wall P50/P95/P99、失败分母和机制计数。只有不重叠的
    held-out/test 样本才能进入投稿表。
-5. 继续推进 exact-upstream baseline 审计：IRCoT 需要其 processed data/Elasticsearch
+6. 继续推进 exact-upstream baseline 审计：IRCoT 需要其 processed data/Elasticsearch
    retriever/official config，PlanRAG 只能在其 DQA 场景报告，GraphRAG 不能把本地 QA
    adapter 标成官方执行。缺少 exact 入口时，保留 `publication_claim_allowed=false`。
-6. 文档同步顺序固定为：运行/分析完成 → 更新主方法文档和实验计划 → 更新本交接文档 →
+7. 文档同步顺序固定为：运行/分析完成 → 更新主方法文档和实验计划 → 更新本交接文档 →
    全量测试、`compileall`、`git diff --check` → 提交。任何数字变化必须同时更新三处记录。
 
 ## Suggested skills

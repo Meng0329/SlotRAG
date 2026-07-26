@@ -593,6 +593,60 @@ def test_adaptive_executor_joins_and_propagates_bindings():
     assert result.metrics.extraction_llm_calls == 2
 
 
+def test_frontier_safe_selection_prevents_transitive_variable_join_failure():
+    class HubJoinMaterializer:
+        rows = {
+            "S1": {"physicist1": "Eugen von Lommel", "physicist2": "Johannes Stark"},
+            "S2": {"physicist2": "Johannes Stark"},
+            "S3": {"physicist2": "Johannes Stark"},
+            "S4": {"physicist1": "Eugen von Lommel"},
+            "S5": {"physicist1": "Eugen von Lommel", "equation": "Lommel differential equation"},
+        }
+
+        def materialize(self, slot, _bindings):
+            return [BindingRow(
+                slot_id=slot.id,
+                bindings=self.rows[slot.id],
+                source_id=f"{slot.id}-source",
+                source_span=f"Evidence for {slot.id}",
+                confidence=1,
+            )], RunMetrics(documents_accessed=1, passages_processed=1)
+
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "doctoralAdvisor", "arguments": ["?physicist1", "?physicist2"]},
+            {"id": "S2", "predicate": "identified", "arguments": ["?physicist2", "Stark effect"]},
+            {"id": "S3", "predicate": "nationality", "arguments": ["?physicist2", "German"]},
+            {"id": "S4", "predicate": "nationality", "arguments": ["?physicist1", "German"]},
+            {"id": "S5", "predicate": "developed", "arguments": ["?physicist1", "?equation"]},
+        ],
+        "joins": [
+            ["S1.physicist1", "S4.physicist1"],
+            ["S1.physicist2", "S2.physicist2"],
+            ["S1.physicist2", "S3.physicist2"],
+            ["S1.physicist1", "S5.physicist1"],
+        ],
+        "outputs": ["?equation"],
+    })
+
+    unsafe = AdaptiveExecutor(HubJoinMaterializer(), max_replans=5).execute(plan)
+    guarded = AdaptiveExecutor(
+        HubJoinMaterializer(),
+        max_replans=5,
+        options=ExecutionOptions(frontier_safe_selection=True),
+    ).execute(plan)
+
+    assert unsafe.status == "failed"
+    assert unsafe.order == ["S2", "S3"]
+    assert unsafe.error == "slot S3 has no join path"
+    assert guarded.status == "ok"
+    assert guarded.order == ["S2", "S1", "S3", "S4", "S5"]
+    assert guarded.rows == [{"equation": "Lommel differential equation"}]
+    assert guarded.metrics.frontier_guard_checks == 4
+    assert guarded.metrics.frontier_guard_interventions == 1
+    assert guarded.metrics.frontier_candidates_pruned == 1
+
+
 def test_adaptive_executor_propagates_role_projection_metrics():
     class RoleProjectionMaterializer:
         def materialize(self, slot, _bindings):

@@ -1,0 +1,24 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+  - musique
+  - strategyqa
+  - drop
+seed: 2040
+random_seeds: [2040, 2041, 2042, 2043, 2044]
+budget:
+  max_steps: 10
+  max_llm_calls: 64
+  max_retrieval_calls: 12
+  question_timeout_seconds: 300
+stages:
+  binding_guard_fixed_main_eval_v2:
+    split: evaluation
+    sample_size: 100
+    methods:
+      - slotrag
+      - slotrag-grounded-binding-guard
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/slotrag-final-candidate-v2/plans/imported_main

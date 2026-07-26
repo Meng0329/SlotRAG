@@ -353,6 +353,9 @@ class RunMetrics(StrictModel):
     index_bytes: int = 0
     intermediate_binding_sizes: list[int] = Field(default_factory=list)
     reoptimizations: int = 0
+    frontier_guard_checks: int = 0
+    frontier_guard_interventions: int = 0
+    frontier_candidates_pruned: int = 0
     slot_selectivity_errors: list[float] = Field(default_factory=list)
     planner_regret: float | None = None
     provider_request_ids: list[str] = Field(default_factory=list)
