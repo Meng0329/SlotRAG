@@ -6,12 +6,42 @@ from .models import ExecutionResult
 from .providers import AgnesClient, ChatResult, Usage
 
 
+def _answer_tool(answer_kind: str) -> dict[str, object]:
+    answer_schema: dict[str, object] = {"type": "string"}
+    if answer_kind == "boolean":
+        answer_schema["enum"] = ["True", "False"]
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_final_answer",
+            "description": "Return only the final answer span; never include reasoning or citations.",
+            "parameters": {
+                "type": "object",
+                "properties": {"answer": answer_schema},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
+    if response.tool_calls:
+        arguments = client.require_tool(response, "emit_final_answer")
+        answer = arguments.get("answer")
+        if isinstance(answer, str):
+            return answer.strip()
+        return ""
+    return (response.content or "").strip()
+
+
 def generate_answer_response(
     client: AgnesClient,
     question: str,
     result: ExecutionResult,
     *,
     answer_kind: str = "short",
+    structured_output: bool = False,
 ) -> tuple[str, ChatResult]:
     """Generate an answer from selected evidence and retain provider metadata."""
     evidence = [
@@ -23,14 +53,28 @@ def generate_answer_response(
         }
         for item in result.evidence
     ]
-    format_instruction = {
-        "boolean": "Return exactly True or False.",
-        "number": "Return only the requested number or short span.",
-    }.get(answer_kind, "Return only a concise answer span.")
+    if structured_output:
+        format_instruction = {
+            "boolean": "The answer field must be exactly True or False.",
+            "number": "The answer field must contain only the requested number or short span.",
+        }.get(answer_kind, "The answer field must contain only a concise answer span.")
+        system_instruction = (
+            "Answer using only the supplied evidence. Do not reveal reasoning, repeat the question, "
+            f"or include citations. {format_instruction} Call emit_final_answer exactly once."
+        )
+    else:
+        format_instruction = {
+            "boolean": "Return exactly True or False.",
+            "number": "Return only the requested number or short span.",
+        }.get(answer_kind, "Return only a concise answer span.")
+        system_instruction = (
+            "Answer using only the supplied evidence. If it is insufficient, say so. "
+            f"{format_instruction} Do not invent citations."
+        )
     messages = [
         {
             "role": "system",
-            "content": f"Answer using only the supplied evidence. If it is insufficient, say so. {format_instruction} Do not invent citations.",
+            "content": system_instruction,
         },
         {
             "role": "user",
@@ -42,9 +86,19 @@ def generate_answer_response(
     ]
     responses: list[ChatResult] = []
     for attempt in range(2):
-        response = client.complete(messages, temperature=0.0)
+        if structured_output:
+            response = client.complete(
+                messages,
+                tools=[_answer_tool(answer_kind)],
+                tool_choice={"type": "function", "function": {"name": "emit_final_answer"}},
+                temperature=0.0,
+                enable_thinking=False,
+            )
+        else:
+            response = client.complete(messages, temperature=0.0)
         responses.append(response)
-        if response.content and response.content.strip():
+        answer = _tool_answer(client, response) if structured_output else (response.content or "").strip()
+        if answer:
             combined = response.model_copy(update={
                 "logical_calls": len(responses),
                 "usage": Usage(
@@ -53,9 +107,16 @@ def generate_answer_response(
                 ),
                 "latency_ms": sum(item.latency_ms for item in responses),
             })
-            return response.content.strip(), combined
+            return answer, combined
         if attempt == 0:
-            messages.append({"role": "user", "content": "Return the requested answer now as non-empty plain text."})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Return exactly one emit_final_answer tool call with a non-empty answer field now."
+                    if structured_output
+                    else "Return the requested answer now as non-empty plain text."
+                ),
+            })
     raise ValueError("Agnes returned an empty answer twice")
 
 

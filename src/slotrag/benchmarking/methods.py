@@ -46,6 +46,7 @@ class MethodSpec:
     role_projected_extraction: bool = False
     protect_known_binding_values: bool = False
     direct_grounded_anchor_projection: bool = False
+    structured_answer_contract: bool = False
     extraction_enable_thinking: bool | None = None
     bound_role_signatures: bool = False
     semantic_role_type_filter: bool = False
@@ -85,6 +86,7 @@ ABLATION_METHODS = [
     "slotrag-grounded-role-projection",
     "slotrag-grounded-binding-guard",
     "slotrag-grounded-frontier-guard",
+    "slotrag-grounded-frontier-answer-contract",
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
     "slotrag-dual-query-retrieval",
@@ -202,6 +204,17 @@ METHODS: dict[str, MethodSpec] = {
         protect_known_binding_values=True,
         direct_grounded_anchor_projection=True,
         description="grounded binding guard with explicit materialized-frontier slot selection",
+    ),
+    "slotrag-grounded-frontier-answer-contract": MethodSpec(
+        "slotrag-grounded-frontier-answer-contract",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        structured_answer_contract=True,
+        description="frontier guard with structured final-answer tool and thinking disabled",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -685,11 +698,24 @@ def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> s
     return value
 
 
-def _finalize(client: AgnesClient, dataset: str, question: QuestionRecord, result: ExecutionResult) -> ExecutionResult:
+def _finalize(
+    client: AgnesClient,
+    dataset: str,
+    question: QuestionRecord,
+    result: ExecutionResult,
+    *,
+    structured_answer_contract: bool = False,
+) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
     started = time.perf_counter()
-    answer, response = generate_answer_response(client, question.question, result, answer_kind=_answer_kind(dataset))
+    answer, response = generate_answer_response(
+        client,
+        question.question,
+        result,
+        answer_kind=_answer_kind(dataset),
+        structured_output=structured_answer_contract,
+    )
     metrics = merge_metrics(
         result.metrics,
         _chat_metrics(response, phase="generation"),
@@ -1073,6 +1099,14 @@ def _run_slotrag(
             "polar_row_consensus": result.metrics.polar_row_consensus + int(consensus_answer is not None),
         })
         return result.model_copy(update={"answer": deterministic_answer, "metrics": metrics})
+    if spec.structured_answer_contract:
+        return _finalize(
+            client,
+            dataset,
+            question,
+            result,
+            structured_answer_contract=True,
+        )
     return _finalize(client, dataset, question, result)
 
 
