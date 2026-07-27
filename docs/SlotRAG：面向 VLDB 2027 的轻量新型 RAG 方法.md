@@ -3701,3 +3701,28 @@ profile 重建 local chunks。local missing source 从 18 降为 0。`analyze_sl
 
 验证：focused analyzer tests `8 passed`；全量 `PYTHONPATH=src:. pytest -q` 为 `297 passed, 1 skipped`。
 当前论文 gate 仍为 fail；不报告 SOTA、领先 10% 或显著性结果。
+
+# v64 Persistent Global BM25 与 Provenance Aggregation（2026-07-27）
+
+v64 只解决 v63 定位的 shared-index 数据管理瓶颈，不改变检索排序、计划、执行或生成语义。provenance
+改为一次性集合累积；新增 checksum/version 可验证的 `SparseBM25Index`；corpus manifest 升为 schema 3，
+记录 passage/BM25 artifact、分段延迟和明确 reuse reason。完整设计、命令和 artifact hash 见
+`docs/optimization-audit-v64.md`。
+
+真实 train shared corpus 的 provider-free 冷/热结果如下：
+
+| Dataset | Chunks | v63 build | v64 cold | v64 warm | Cold/warm | Index |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| HotpotQA | 483,921 | 62.92s | 125.65s | 31.14s | 4.03x | 662.16 MiB |
+| 2Wiki | 401,090 | 2,487.21s | 102.07s | 28.73s | 3.55x | 523.70 MiB |
+
+HotpotQA cold 比 v63 慢约 2 倍，因为 v64 额外写出 BM25 artifact；这是可摊销的一次性成本，不宣称
+全面加速。两个数据集 warm 均为 `fully_reused`，cold/warm index ID、两类 checksum 与 top-10 probe
+完全一致，四次运行 provider calls 均为 0。2Wiki 的主要加速来自移除高重复 provenance 的近二次更新。
+
+新增 `tools/build_global_corpus_index.py` 生成不可覆盖 cold/warm 报告，内嵌 dataset/source checksum、
+资源和 manifest 快照。测试新增 corruption fallback、禁止 warm 重建和报告不可覆盖；全量结果为
+`301 passed, 1 skipped`，compileall 与 `git diff --check` 通过。
+
+该版本只解除数据管理门禁，没有 answer-quality 结果。global sufficiency 和 executable physical action
+仍未通过，因此不启动 2×2/evaluation/full baseline matrix，也不声称 SOTA 或 10% 提升。

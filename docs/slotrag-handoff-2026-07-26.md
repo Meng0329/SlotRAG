@@ -371,6 +371,27 @@ candidate counts=`[6, 7]`。
 下一版本从 development enriched traces 校准 action gains，并用 oracle/近似 oracle 审计正确 binding
 是否被剪枝；通过后才进入冻结 `local_context`/`global_corpus` 2×2 ablation。当前不启动 provider 矩阵。
 
+## v64 Persistent Global BM25（2026-07-27）
+
+shared-index 数据管理门禁已完成。修改集中在 `src/slotrag/benchmarking/corpus.py`、
+`src/slotrag/retrieval.py`、`tools/build_global_corpus_index.py`、`tests/test_benchmark_corpus.py` 和
+`tests/test_global_corpus_index_tool.py`。provenance 一次性累积；BM25 pickle 有 format/engine/version/count/
+checksum 验证；passage/BM25 写入均原子发布；manifest schema 3 明确记录 cold/warm reuse。
+
+有效 artifacts：
+
+* `runs/slotrag-global-index-v64/hotpotqa/cold-build.json`：125.65s；warm：31.14s；483,921 chunks；
+* `runs/slotrag-global-index-v64/2wikimultihop/cold-build.json`：102.07s；warm：28.73s；401,090 chunks；
+* 两个 warm 都是 `fully_reused`，probe、index ID、passage/BM25 checksum 与 cold 一致；provider calls=0；
+* 完整 hash、RSS、负结果和命令见 `docs/optimization-audit-v64.md`。
+
+不要把 v64 写成质量提升。HotpotQA cold 因持久化写盘比 v63 慢约 2 倍；v64 的价值是后续 warm 复用和
+2Wiki 近二次聚合修复。全量测试为 `301 passed, 1 skipped`。
+
+下一任务是 v65 backend-aware Evidence Sufficiency。只允许在 train/development enriched traces 上改用
+raw BM25、rank/quantile 等有方差特征并重新 calibration；不要同时改 physical action，不要运行
+evaluation 或完整 2×2。v65 gate 通过后，再用独立版本把 action 从 telemetry 接到真实 retrieval 路径。
+
 ## v63 Enriched Development Trace 与审计结论（2026-07-27）
 
 新增并验证的有效 runs：

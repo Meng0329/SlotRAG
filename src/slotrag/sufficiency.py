@@ -30,6 +30,7 @@ class EvidenceContext(StrictModel):
     """Observable state after one slot retrieval/extraction attempt."""
 
     retrieval_results: list[RetrievalResult] = Field(default_factory=list)
+    retrieval_backend: Literal["bm25", "hybrid", "unknown"] = "unknown"
     predicate: str = ""
     requested_variables: list[str] = Field(default_factory=list)
     bound_variables: dict[str, str] = Field(default_factory=dict)
@@ -46,6 +47,18 @@ class SufficiencyFeatures(StrictModel):
     topk_min_score: float = 0.0
     top1_top2_margin: float = 0.0
     score_entropy: float = 0.0
+    backend_top1_score: float = 0.0
+    backend_top1_top2_margin: float = 0.0
+    backend_margin_ratio: float = 0.0
+    backend_top1_share: float = 0.0
+    backend_relative_entropy: float = 0.0
+    backend_score_iqr_ratio: float = 0.0
+    backend_top1_robust_zscore: float = 0.0
+    backend_rank_discounted_mass: float = 0.0
+    score_source_bm25: float = 0.0
+    score_source_dense: float = 0.0
+    score_source_reranker: float = 0.0
+    score_source_fused: float = 0.0
     sparse_dense_agreement: float = 0.0
     reranker_agreement: float = 0.0
     new_entity_coverage: float = 0.0
@@ -67,6 +80,27 @@ class SufficiencyFeatures(StrictModel):
 
 SufficiencyStatus = Literal["SUFFICIENT", "PARTIAL", "INSUFFICIENT"]
 
+SUFFICIENCY_FEATURE_SCHEMA_VERSION = 2
+SUFFICIENCY_FEATURE_NAMES_V1 = (
+    "top1_score",
+    "topk_score",
+    "topk_min_score",
+    "top1_top2_margin",
+    "score_entropy",
+    "sparse_dense_agreement",
+    "reranker_agreement",
+    "new_entity_coverage",
+    "source_diversity",
+    "predicate_coverage",
+    "bound_variable_coverage",
+    "join_edge_coverage",
+    "extraction_consistency",
+    "row_count",
+    "remaining_plan_depth",
+    "budget_remaining",
+    "budget_fraction",
+    "retrieval_count",
+)
 SUFFICIENCY_FEATURE_NAMES = tuple(SufficiencyFeatures.model_fields)
 
 
@@ -107,7 +141,8 @@ class CalibrationReport(StrictModel):
 
 
 class SufficiencyCalibrationArtifact(StrictModel):
-    schema_version: int = 1
+    schema_version: Literal[1, 2] = 2
+    feature_schema_version: Literal[1, 2] = 2
     created_at: str
     source_split: Literal["train"]
     retrieval_protocol: Literal["local_context", "global_corpus"]
@@ -118,8 +153,17 @@ class SufficiencyCalibrationArtifact(StrictModel):
     reports: dict[str, dict[str, Any]] = Field(default_factory=dict)
     example_counts: dict[str, int] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_feature_schema(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "feature_schema_version" not in value:
+            value = {**value, "feature_schema_version": 1 if value.get("schema_version") == 1 else 2}
+        return value
+
     @model_validator(mode="after")
     def validate_dataset_inventory(self) -> "SufficiencyCalibrationArtifact":
+        if self.schema_version != self.feature_schema_version:
+            raise ValueError("artifact schema and feature schema versions must match")
         if not self.calibrators:
             raise ValueError("calibrators must contain at least one dataset")
         missing = sorted(set(self.calibrators) - set(self.example_counts))
@@ -127,6 +171,16 @@ class SufficiencyCalibrationArtifact(StrictModel):
             raise ValueError(f"example_counts missing datasets: {', '.join(missing)}")
         if any(self.example_counts[dataset] <= 0 for dataset in self.calibrators):
             raise ValueError("every dataset calibrator requires positive development examples")
+        mismatched = sorted(
+            dataset
+            for dataset, payload in self.calibrators.items()
+            if int(payload.get("feature_schema_version", 1)) != self.feature_schema_version
+        )
+        if mismatched:
+            raise ValueError(
+                "calibrator feature schema does not match artifact for datasets: "
+                + ", ".join(mismatched)
+            )
         return self
 
     def calibrator_for(self, dataset: str) -> "EvidenceSufficiencyCalibrator":
@@ -230,6 +284,7 @@ class EvidenceSufficiencyCalibrator:
         self,
         *,
         feature_names: tuple[str, ...] = SUFFICIENCY_FEATURE_NAMES,
+        feature_schema_version: int = SUFFICIENCY_FEATURE_SCHEMA_VERSION,
         means: Sequence[float] | None = None,
         scales: Sequence[float] | None = None,
         weights: Sequence[float] | None = None,
@@ -238,6 +293,16 @@ class EvidenceSufficiencyCalibrator:
         partial_threshold: float = 0.3,
     ) -> None:
         self.feature_names = tuple(feature_names)
+        self.feature_schema_version = int(feature_schema_version)
+        if self.feature_schema_version not in {1, 2}:
+            raise ValueError("unsupported sufficiency feature schema version")
+        unknown_features = sorted(set(self.feature_names) - set(SufficiencyFeatures.model_fields))
+        if unknown_features:
+            raise ValueError(f"unknown sufficiency features: {', '.join(unknown_features)}")
+        if self.feature_schema_version == 1 and not set(self.feature_names).issubset(
+            SUFFICIENCY_FEATURE_NAMES_V1
+        ):
+            raise ValueError("feature schema 1 cannot contain backend-aware features")
         width = len(self.feature_names)
         self.means = np.asarray(means if means is not None else np.zeros(width), dtype=float)
         self.scales = np.asarray(scales if scales is not None else np.ones(width), dtype=float)
@@ -281,6 +346,7 @@ class EvidenceSufficiencyCalibrator:
             intercept -= learning_rate * float(residual.mean())
         calibrator = cls(
             feature_names=feature_names,
+            feature_schema_version=SUFFICIENCY_FEATURE_SCHEMA_VERSION,
             means=means,
             scales=scales,
             weights=weights,
@@ -329,6 +395,7 @@ class EvidenceSufficiencyCalibrator:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "feature_schema_version": self.feature_schema_version,
             "feature_names": list(self.feature_names),
             "means": self.means.tolist(),
             "scales": self.scales.tolist(),
@@ -342,6 +409,7 @@ class EvidenceSufficiencyCalibrator:
     def from_dict(cls, payload: dict[str, Any]) -> "EvidenceSufficiencyCalibrator":
         return cls(
             feature_names=tuple(payload["feature_names"]),
+            feature_schema_version=int(payload.get("feature_schema_version", 1)),
             means=payload["means"],
             scales=payload["scales"],
             weights=payload["weights"],

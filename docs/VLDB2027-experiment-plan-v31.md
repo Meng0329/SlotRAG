@@ -821,3 +821,18 @@ Evidence Sufficiency global holdout gate 失败：HotpotQA Brier/ECE=`0.2381/0.3
 5. development paired smoke 在多个 slice 同向，unsupported answer 不增加，质量-成本 gate 通过。
 
 完成前不得启动 frozen evaluation 或 full baseline matrix。v63 测试为 `297 passed, 1 skipped`。
+
+## v64 Shared-index 数据管理门禁（2026-07-27）
+
+门禁 1 已通过。`CorpusManifest` schema 3 现在记录完整 passage/sparse checksum、BM25 engine/version、
+aggregation/build/load/write 分段时间和 reuse reason；`SparseBM25Index` warm 加载前后均校验兼容性。
+provider-free train 全量结果：HotpotQA `483,921` chunks，cold/warm=`125.65/31.14s`；2Wiki
+`401,090` chunks，cold/warm=`102.07/28.73s`。所有 warm 均为 `fully_reused`，cold/warm probe 与 checksum
+一致。HotpotQA cold 比 v63 慢约 2 倍，原因是新增 BM25 持久化写盘；该负结果保留。
+
+证据：`runs/slotrag-global-index-v64/{hotpotqa,2wikimultihop}/{cold,warm}-build.json` 和
+`docs/optimization-audit-v64.md`。四次 provider calls=`0`。全量测试 `301 passed, 1 skipped`。
+
+剩余门禁顺序不变：先单独实现 backend-aware raw BM25/rank/quantile sufficiency 并在不重叠 development
+holdout 校准；再单独让 physical action 真正改变 retrieval/executor。两项分别通过后才允许小规模 paired
+2×2 development smoke，仍不得使用 evaluation 选配置。

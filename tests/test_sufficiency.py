@@ -66,6 +66,89 @@ def test_extract_features_covers_retrieval_agreement_evidence_and_budget_signals
     assert features.budget_fraction == 0.75
 
 
+def test_backend_features_use_raw_bm25_when_fused_rrf_scores_are_constant():
+    context = EvidenceContext(
+        retrieval_backend="bm25",
+        retrieval_results=[
+            RetrievalResult(
+                passage=Passage(id="p1", text="Alpha evidence."),
+                score=0.00819672131147541,
+                bm25_score=30.0,
+            ),
+            RetrievalResult(
+                passage=Passage(id="p2", text="Beta evidence."),
+                score=0.00819672131147541,
+                bm25_score=10.0,
+            ),
+            RetrievalResult(
+                passage=Passage(id="p3", text="Gamma evidence."),
+                score=0.00819672131147541,
+                bm25_score=5.0,
+            ),
+        ],
+    )
+
+    features = extract_features(context)
+
+    assert features.top1_score == pytest.approx(0.00819672131147541)
+    assert features.top1_top2_margin == 0.0
+    assert features.backend_top1_score == 30.0
+    assert features.backend_top1_top2_margin == 20.0
+    assert features.backend_margin_ratio == pytest.approx(2 / 3)
+    assert features.backend_top1_share > 0.5
+    assert 0.0 <= features.backend_relative_entropy <= 1.0
+    assert 0.0 <= features.backend_score_iqr_ratio <= 1.0
+    assert 0.0 <= features.backend_rank_discounted_mass <= 1.0
+    assert features.score_source_bm25 == 1.0
+    assert features.score_source_fused == 0.0
+
+
+def test_backend_shape_features_are_invariant_to_positive_score_scaling():
+    def features(scale: float):
+        return extract_features(EvidenceContext(
+            retrieval_backend="bm25",
+            retrieval_results=[
+                RetrievalResult(
+                    passage=Passage(id=f"p{index}", text="evidence"),
+                    score=0.008,
+                    bm25_score=score * scale,
+                )
+                for index, score in enumerate((10.0, 5.0, 1.0))
+            ],
+        ))
+
+    small = features(1.0)
+    large = features(100.0)
+
+    assert large.backend_top1_score == small.backend_top1_score * 100
+    assert large.backend_top1_top2_margin == small.backend_top1_top2_margin * 100
+    assert large.backend_margin_ratio == pytest.approx(small.backend_margin_ratio)
+    assert large.backend_top1_share == pytest.approx(small.backend_top1_share)
+    assert large.backend_relative_entropy == pytest.approx(small.backend_relative_entropy)
+    assert large.backend_score_iqr_ratio == pytest.approx(small.backend_score_iqr_ratio)
+    assert large.backend_rank_discounted_mass == pytest.approx(
+        small.backend_rank_discounted_mass
+    )
+
+
+def test_sparse_dense_agreement_detects_reversed_rankings():
+    context = EvidenceContext(
+        retrieval_results=[
+            RetrievalResult(
+                passage=Passage(id=f"p{index}", text="evidence"),
+                score=0.5,
+                bm25_score=bm25,
+                dense_score=dense,
+            )
+            for index, (bm25, dense) in enumerate(((3.0, 1.0), (2.0, 2.0), (1.0, 3.0)))
+        ],
+    )
+
+    features = extract_features(context)
+
+    assert features.sparse_dense_agreement == pytest.approx(0.0)
+
+
 def _calibration_example(index: int, sufficient: bool) -> SufficiencyExample:
     score = 0.95 if sufficient else 0.10
     passage = Passage(
@@ -139,6 +222,9 @@ def test_calibration_artifact_loads_dataset_models_and_hash(tmp_path):
     loaded, sha256 = load_calibration_artifact(path)
 
     assert loaded.calibrator_for("hotpotqa").intercept == 1.5
+    assert loaded.schema_version == 2
+    assert loaded.feature_schema_version == 2
+    assert loaded.calibrator_for("hotpotqa").feature_schema_version == 2
     assert len(sha256) == 64
     with pytest.raises(ValueError, match="does not contain dataset"):
         loaded.calibrator_for("musique")
@@ -157,3 +243,50 @@ def test_calibration_artifact_rejects_evaluation_source():
             "reports": {},
             "example_counts": {"hotpotqa": 1},
         })
+
+
+def test_schema_one_calibration_artifact_remains_explicitly_legacy(tmp_path):
+    calibrator = EvidenceSufficiencyCalibrator(
+        feature_names=("top1_score", "row_count"),
+        means=[0.0, 0.0],
+        scales=[1.0, 1.0],
+        weights=[1.0, 1.0],
+    ).to_dict()
+    calibrator.pop("feature_schema_version")
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "created_at": "2026-07-27T00:00:00+00:00",
+        "source_split": "train",
+        "retrieval_protocol": "global_corpus",
+        "retrieval_backend": "bm25",
+        "training_manifest_sha256": "a" * 64,
+        "label_definition": "legacy development calibration",
+        "calibrators": {"hotpotqa": calibrator},
+        "reports": {},
+        "example_counts": {"hotpotqa": 10},
+    }), encoding="utf-8")
+
+    artifact, _ = load_calibration_artifact(path)
+
+    assert artifact.schema_version == 1
+    assert artifact.feature_schema_version == 1
+    assert artifact.calibrator_for("hotpotqa").feature_schema_version == 1
+
+
+def test_calibration_artifact_rejects_mixed_feature_schemas():
+    with pytest.raises(ValueError, match="feature schema"):
+        SufficiencyCalibrationArtifact(
+            created_at="2026-07-27T00:00:00+00:00",
+            source_split="train",
+            retrieval_protocol="global_corpus",
+            retrieval_backend="bm25",
+            training_manifest_sha256="a" * 64,
+            label_definition="invalid mixed schemas",
+            calibrators={"hotpotqa": {
+                **EvidenceSufficiencyCalibrator().to_dict(),
+                "feature_schema_version": 1,
+            }},
+            reports={},
+            example_counts={"hotpotqa": 1},
+        )
