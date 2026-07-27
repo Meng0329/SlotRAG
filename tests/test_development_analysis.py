@@ -90,6 +90,21 @@ def test_development_analysis_builds_strong_examples_and_topk_oracle(tmp_path):
     assert example["supervision"] == "strong_gold_evidence"
     assert example["label"] == 0
     assert example["context"]["retrieval_results"][0]["passage"]["id"] == "noise#0"
+    assert example["action_supervision"] == {
+        "candidate_pool_is_counterfactual_proxy": True,
+        "eligible": True,
+        "gold_evidence_ids": ["Alpha#0"],
+        "selected_evidence_ids": ["noise#0"],
+        "candidate_evidence_ids": ["Alpha#0", "noise#0"],
+        "selected_count": 1,
+        "candidate_count": 2,
+        "expansion_available": True,
+        "gold_selected": False,
+        "candidate_gold_available": True,
+        "expand_topk_recoverable": True,
+        "topk_expansion_retrieval_calls": 1,
+    }
+    assert report["schema_version"] == 3
     assert report["oracle_headroom"]["expand_topk_recoverable"] == 1
     assert report["oracle_headroom"]["evidence_selected_extraction_failed"] == 0
 
@@ -290,6 +305,8 @@ def test_development_analysis_keeps_weak_supervision_out_of_strong_inventory(tmp
 
     assert report["supervision_counts"] == {"weak_answer_surface": 1}
     assert report["examples"][0]["label"] == 1
+    assert report["examples"][0]["action_supervision"]["eligible"] is False
+    assert report["examples"][0]["action_supervision"]["expand_topk_recoverable"] is False
 
 
 def test_calibration_uses_question_disjoint_fit_and_holdout():

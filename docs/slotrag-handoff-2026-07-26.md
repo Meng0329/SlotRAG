@@ -456,3 +456,42 @@ diff check 通过。
 下一步用同一 8 题和同一逻辑计划运行 v69，只验证 join-order correctness 修复的 paired effect。不要同时
 调 action utility；若 loss 消失但成本无收益，下一版本再用较大 development traces 校准 action marginal
 gain。详见 `docs/optimization-audit-v68.md`。
+
+## v69 有效结果与 v70 下一门禁（2026-07-27）
+
+第一次 v69 目录 `runs/slotrag-qo-dependency-safe-global-smoke-v69` 在完成 24/32 records 后，外部提交
+改变了启动时 code provenance；runner 对最后两个 cells 报 `run manifest provenance mismatch`。保留该
+目录为 invalid，不得补齐或与其他 run 合并。
+
+有效目录 `runs/slotrag-qo-dependency-safe-global-smoke-v69-valid` 从干净 revision
+`8e7336b85453aecdd04731d601acc99276987736` 重新运行：32/32 ok、8/8 imported plans 有效、无缺失
+trace/attempt，样本与 v63 development overlap=0。v68 唯一 dependency-order loss 已消失；两个数据集
+physical/QO 相对 SlotRAG 全部为 `0/4/0`。
+
+质量没有提高且成本 gate 失败。2Wiki 四方法 primary=`0.50`，HotpotQA=`0.25`，evidence recall/nDCG
+也持平；QO calls/tokens/wall latency 分别为 2Wiki `1.75/3583/9354 ms`（baseline
+`1.25/2010/5596`），Hotpot `5.50/11282/35807 ms`（baseline `2.75/4286/17653`）。不要扩大到
+evaluation/full matrix，不要在 4 题 smoke 上调 utility threshold。
+
+下一任务 v70：从 v63 global development enriched traces 构建 strong-supervision action outcome，固定
+策略后只在零重叠 v66-valid traces 验证。报告 recoverable positives、expansion precision/recall、false
+expansions、status/dataset/depth 分层和 cost；candidate pool recovery 只标注为 proxy upper bound。正例
+不足时不得拟合复杂模型。完整记录：`docs/optimization-audit-v69.md`。
+
+## v70 Action Headroom 结果与 v71 状态（2026-07-27）
+
+新增 `src/slotrag/benchmarking/action_headroom.py` 和 `tools/analyze_action_headroom.py`。development analyzer
+schema=3，逐 slot 保留 gold/selected/candidate canonical IDs、counts、expansion availability 和明确的
+candidate-pool proxy label。weak supervision 不进入 action selection。
+
+有效离线目录：`runs/slotrag-qo-action-headroom-v70`，provider calls=0。v63 development 131 examples、
+8 positives；零重叠 v66-valid 150 examples、7 positives。当前 utility development/validation 的
+TP/FP/FN=`6/76/2`、`6/99/1`，precision=`0.0732/0.0571`，proxy net utility=`-0.004275/-0.016000`。
+development 冻结选择为 `no_expansion`；validation 没有用于反向改选。
+
+SUFFICIENT 状态仍包含 development/validation positives `5/2`，所以不能改成简单 status guard。主
+`slotrag-physical-policy`/`slotrag-qo` 的 v71 代码采用 no-top-k mode；旧 utility 路径作为
+`slotrag-physical-policy-utility` 和 `slotrag-qo-utility` ablation 保留。focused tests 7 passed。
+
+下一步先跑与 v69 相同 8 题、相同 frozen plans 的 v71 smoke，验证 `EXPAND_TOPK=0`、cost 回落且质量不
+退化；不在该 smoke 上选择参数。详见 `docs/optimization-audit-v70.md`。

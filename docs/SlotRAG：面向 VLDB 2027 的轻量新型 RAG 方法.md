@@ -3770,3 +3770,43 @@ dependency cycle 变为 compile error；不改其他模块。全量测试 `318 p
 Qwen raw answer 中的 think 内容继续保留用于审计，官方评分使用 `prediction_scored`，已验证提取最后一个
 `</think>` 后或 final/answer tag 内容。完整结果、成本、失败案例和 hash 见
 `docs/optimization-audit-v68.md`。
+
+# v69 Dependency-safe Physical Planning 结果（2026-07-27）
+
+v69 的有效运行目录为 `runs/slotrag-qo-dependency-safe-global-smoke-v69-valid`，revision 为
+`8e7336b85453aecdd04731d601acc99276987736`。同一 8 个 train/global-corpus 问题、同一冻结逻辑计划的
+32/32 records 均为 `ok`；8/8 plans 有效，trace/attempt 完整，样本与 v63 development overlap=`0`。
+第一次目录 `runs/slotrag-qo-dependency-safe-global-smoke-v69` 在 24/32 后因外部提交改变 code
+provenance，被 runner 拒绝继续追加；该目录保留为无效运行，未与有效结果合并。
+
+dependency-safe topological ordering 消除了 v68 的唯一 loss：HotpotQA 和 2Wiki 中 physical/QO 相对
+SlotRAG 均为 gain/tie/loss=`0/4/0`。但 quality-cost gate 仍失败。2Wiki 四方法 primary 都是 `0.50`，
+HotpotQA 都是 `0.25`；evidence recall/nDCG 也持平。QO 的 calls/tokens/wall latency 在 2Wiki 从
+`1.25/2010/5596 ms` 增至 `1.75/3583/9354 ms`，在 HotpotQA 从
+`2.75/4286/17653 ms` 增至 `5.50/11282/35807 ms`，没有带来质量收益。
+
+因此 v69 不扩大到 evaluation 或完整 baseline matrix。v70 先用 v63 development traces 标注 action
+marginal-gain，并在零重叠 v66-valid traces 固定验证；不能在 4 题 smoke 上调 threshold。当前 exact
+upstream、冻结 evaluation、同协议可比的 SOTA 单元格仍为 `0`，不能声称 80% SOTA 覆盖。完整协议、
+指标、无效运行说明和 hashes 见 `docs/optimization-audit-v69.md`。
+
+# v70 Bounded Top-k Action Headroom（2026-07-27）
+
+v70 完成 provider-free、零泄漏的 bounded top-k action 分析。v63 global development 的 131 个 strong
+slot examples 中，candidate-pool recovery proxy 只有 `8` 个；零重叠 v66-valid 的 150 个 examples 中
+只有 `7` 个。该 proxy 仅表示未选 gold 存在于已记录 candidate pool，不保证 extractor、join、generator
+或 final answer 能恢复。
+
+使用既有 retrieval-call penalty `0.08`，development 冻结选择为 `no_expansion`。当前 utility 在
+development 扩展 82 次，TP/FP/FN=`6/76/2`、precision/recall=`0.0732/0.7500`、proxy net utility
+=`-0.004275`；validation 扩展 105 次，`6/99/1`、`0.0571/0.8571`、net=`-0.016000`。fixed top-k、
+rule 和 status-safe 在 development 也全部负于 no-expansion。
+
+不能简单加 SUFFICIENT guard：8 个 development positives 有 5 个处于 SUFFICIENT，7 个 validation
+positives 有 2 个处于 SUFFICIENT。正例还横跨 dataset、depth 和 question type，样本不足以支持新的
+predicate/slice rule。因此主方法降级 bounded `EXPAND_TOPK`，旧 utility 保留为 ablation；下一核心
+优化应转向 v66 中更大的 available-answer retrieval-miss headroom，而非继续调 top-k 阈值。
+
+新增 schema-3 action supervision、离线分析模块/CLI、完整逐样本记录与 immutable manifest。完整表、
+命令和 hashes 见 `docs/optimization-audit-v70.md`。当前仍无冻结 evaluation + exact upstream 同协议
+SOTA 比较，可比 SOTA 单元格=`0`。

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..config import AppConfig
 from ..generation import generate_answer_response
-from ..action_policy import PhysicalActionPolicy
+from ..action_policy import PhysicalActionPolicy, TopKExpansionMode
 from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
 from ..planner import (
     AdaptiveExecutor,
@@ -67,6 +67,7 @@ class MethodSpec:
     physical_plan: bool = False
     adaptive_binding_beam: bool = False
     physical_action_policy: bool = False
+    topk_expansion_mode: TopKExpansionMode = "utility"
     evidence_sufficiency: bool = False
     description: str = ""
 
@@ -128,6 +129,8 @@ ABLATION_METHODS = [
     "slotrag-grounded-role-no-thinking",
     "slotrag-grounded-role-bound-signature",
     "slotrag-lean-grounded-role-projection",
+    "slotrag-physical-policy-utility",
+    "slotrag-qo-utility",
 ]
 
 
@@ -145,7 +148,8 @@ METHODS: dict[str, MethodSpec] = {
         physical_plan=True,
         adaptive_binding_beam=True,
         physical_action_policy=True,
-        description="SlotRAG with physical planning, action policy, and adaptive binding beam",
+        topk_expansion_mode="disabled",
+        description="SlotRAG with physical planning and v70 development-selected no-top-k action policy",
     ),
     "slotrag-qo": MethodSpec(
         "slotrag-qo",
@@ -153,8 +157,28 @@ METHODS: dict[str, MethodSpec] = {
         physical_plan=True,
         adaptive_binding_beam=True,
         physical_action_policy=True,
+        topk_expansion_mode="disabled",
         evidence_sufficiency=True,
         description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer",
+    ),
+    "slotrag-physical-policy-utility": MethodSpec(
+        "slotrag-physical-policy-utility",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="utility",
+        description="v69 physical-policy utility expansion ablation",
+    ),
+    "slotrag-qo-utility": MethodSpec(
+        "slotrag-qo-utility",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="utility",
+        evidence_sufficiency=True,
+        description="v69 SlotRAG-QO utility expansion ablation",
     ),
     "hybrid": MethodSpec("hybrid", "hybrid", description="whole-question hybrid retrieval"),
     "ircot": MethodSpec("ircot", "ircot", description="interleaved reasoning and retrieval, adapted"),
@@ -1152,7 +1176,11 @@ def _run_slotrag(
         max_retrieval_calls=max_retrieval_calls,
         max_binding_contexts=config.execution.max_binding_contexts,
         adaptive_binding_beam=spec.adaptive_binding_beam,
-        action_policy=PhysicalActionPolicy() if spec.physical_action_policy else None,
+        action_policy=(
+            PhysicalActionPolicy(topk_expansion_mode=spec.topk_expansion_mode)
+            if spec.physical_action_policy
+            else None
+        ),
         sufficiency_calibrator=(sufficiency_calibrator if spec.evidence_sufficiency else None),
         retrieval_backend=("bm25" if getattr(retriever, "dense_enabled", None) is False else "hybrid"),
         random_seed=seed,

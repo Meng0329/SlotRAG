@@ -23,6 +23,16 @@ Action = Literal[
     "ANSWER",
     "ABSTAIN",
 ]
+TopKExpansionMode = Literal["utility", "disabled", "status_safe"]
+ActionDecisionPolicy = Literal[
+    "utility",
+    "utility_no_topk",
+    "utility_status_safe",
+    "rule",
+    "fixed_topk",
+    "legacy",
+    "oracle",
+]
 
 
 class ActionPolicyContext(StrictModel):
@@ -57,7 +67,7 @@ class ActionCandidate(StrictModel):
 
 
 class ActionDecision(StrictModel):
-    policy_name: Literal["utility", "rule", "fixed_topk", "legacy", "oracle"]
+    policy_name: ActionDecisionPolicy
     action: Action
     selected: ActionCandidate
     candidates: list[ActionCandidate]
@@ -95,11 +105,15 @@ class PhysicalActionPolicy:
         retrieval_call_penalty: float = 0.08,
         token_penalty: float = 0.00005,
         latency_penalty: float = 0.0005,
+        topk_expansion_mode: TopKExpansionMode = "utility",
     ) -> None:
+        if topk_expansion_mode not in {"utility", "disabled", "status_safe"}:
+            raise ValueError(f"unsupported top-k expansion mode: {topk_expansion_mode}")
         self.quality_weight = quality_weight
         self.retrieval_call_penalty = retrieval_call_penalty
         self.token_penalty = token_penalty
         self.latency_penalty = latency_penalty
+        self.topk_expansion_mode = topk_expansion_mode
 
     def _candidate(
         self,
@@ -234,9 +248,18 @@ class PhysicalActionPolicy:
 
     def decide(self, context: ActionPolicyContext) -> ActionDecision:
         candidates = self.candidates(context)
+        if self.topk_expansion_mode == "disabled":
+            candidates = [candidate for candidate in candidates if candidate.action != "EXPAND_TOPK"]
+            policy_name: ActionDecisionPolicy = "utility_no_topk"
+        elif self.topk_expansion_mode == "status_safe":
+            if context.sufficiency.status == "SUFFICIENT":
+                candidates = [candidate for candidate in candidates if candidate.action != "EXPAND_TOPK"]
+            policy_name = "utility_status_safe"
+        else:
+            policy_name = "utility"
         selected = max(candidates, key=lambda item: (item.utility, item.expected_quality_gain, item.action))
         return ActionDecision(
-            policy_name="utility",
+            policy_name=policy_name,
             action=selected.action,
             selected=selected,
             candidates=candidates,
@@ -414,6 +437,7 @@ __all__ = [
     "ActionPolicyExample",
     "ActionPolicyReport",
     "PhysicalActionPolicy",
+    "TopKExpansionMode",
     "make_runtime_sufficiency_prediction",
     "evaluate_action_policy",
 ]

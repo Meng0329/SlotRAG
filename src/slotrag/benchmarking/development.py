@@ -257,6 +257,9 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
         sample = samples.get((dataset, question_id))
         if sample is None:
             continue
+        sample_metadata = (
+            sample.get("metadata") if isinstance(sample.get("metadata"), dict) else {}
+        )
         answers = [str(value) for value in sample.get("answers", [])]
         gold_ids = {str(value).split("#chunk-", 1)[0] for value in sample.get("gold_evidence", [])}
         result = item.get("result") if isinstance(item.get("result"), dict) else {}
@@ -309,6 +312,12 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
                     _canonical_id(result_item.passage.id, result_item.passage)
                     for result_item in candidates
                 }
+                gold_selected = bool(gold_ids and selected_canonical & gold_ids)
+                candidate_gold_available = bool(gold_ids and candidate_canonical & gold_ids)
+                expansion_available = bool(candidate_canonical - selected_canonical)
+                expand_topk_recoverable = bool(
+                    gold_ids and not gold_selected and candidate_gold_available
+                )
                 row_gold = any(
                     _canonical_id(row.source_id, lookup.get(row.source_id)) in gold_ids
                     for row in rows
@@ -320,9 +329,8 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
                 ]
                 if gold_ids:
                     supervision = "strong_gold_evidence"
-                    gold_selected = bool(selected_canonical & gold_ids)
                     label = int(gold_selected and row_gold and bool(complete_rows))
-                    if not gold_selected and candidate_canonical & gold_ids:
+                    if expand_topk_recoverable:
                         oracle["expand_topk_recoverable"] += 1
                     if gold_selected and not complete_rows:
                         oracle["evidence_selected_extraction_failed"] += 1
@@ -358,10 +366,25 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
                     "question_id": question_id,
                     "slot_id": slot_id,
                     "supervision": supervision,
+                    "question_type": str(sample_metadata.get("stratum") or "unknown"),
                     "retrieval_protocol": item.get("retrieval_protocol"),
                     "retrieval_backend": item.get("retrieval_backend"),
                     "primary_score": (item.get("scores") or {}).get("primary_score"),
                     "item_path": str(item_path),
+                    "action_supervision": {
+                        "candidate_pool_is_counterfactual_proxy": True,
+                        "eligible": bool(gold_ids),
+                        "gold_evidence_ids": sorted(gold_ids),
+                        "selected_evidence_ids": sorted(selected_canonical),
+                        "candidate_evidence_ids": sorted(candidate_canonical),
+                        "selected_count": len(selected_canonical),
+                        "candidate_count": len(candidate_canonical),
+                        "expansion_available": expansion_available,
+                        "gold_selected": gold_selected,
+                        "candidate_gold_available": candidate_gold_available,
+                        "expand_topk_recoverable": expand_topk_recoverable,
+                        "topk_expansion_retrieval_calls": 1,
+                    },
                 })
                 supervision_counts[supervision] += 1
                 dataset_counts[dataset] += 1
@@ -377,7 +400,7 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
             oracle["available_answer_retrieval_miss"] += 1
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_dir": str(run_dir),
         "stage": stage,
         "record_count": len(items),

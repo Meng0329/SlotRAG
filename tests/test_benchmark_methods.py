@@ -1289,6 +1289,19 @@ def test_slotrag_qo_two_by_two_variants_are_orthogonal(method, sufficiency, phys
     assert spec.physical_action_policy is physical_policy
     assert spec.physical_plan is physical_policy
     assert spec.adaptive_binding_beam is physical_policy
+    assert spec.topk_expansion_mode == ("disabled" if physical_policy else "utility")
+
+
+def test_slotrag_qo_retains_pre_v70_utility_policy_as_explicit_ablation():
+    physical = methods.METHODS["slotrag-physical-policy-utility"]
+    qo = methods.METHODS["slotrag-qo-utility"]
+
+    assert physical.physical_action_policy is True
+    assert physical.evidence_sufficiency is False
+    assert physical.topk_expansion_mode == "utility"
+    assert qo.physical_action_policy is True
+    assert qo.evidence_sufficiency is True
+    assert qo.topk_expansion_mode == "utility"
 
 
 def test_sufficiency_variant_refuses_to_run_without_frozen_development_calibrator():
