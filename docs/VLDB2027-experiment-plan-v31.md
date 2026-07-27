@@ -689,3 +689,25 @@ PYTHONPATH=src:. python tools/run_qo_compile_smoke.py \
 Sufficiency 和 action policy；完成每条垂直链路后分别 smoke，最后才做冻结协议上的 2×2 ablation。
 
 验证：`PYTHONPATH=src:. pytest -q`（`264 passed, 1 skipped`）、compileall、`git diff --check`。
+
+## v59 PhysicalPlan runtime vertical slice（2026-07-27）
+
+本版本把 `PhysicalPlan.slot_execution_order` 接入 `AdaptiveExecutor`，并注册独立的
+`slotrag-qo` 方法。旧 `slotrag` 和已有 adapted methods 不传物理计划，保持旧调用契约；QO 方法在
+物理计划编译成功后才冻结执行顺序，顺序缺 slot、重复或包含未知 slot 时显式失败。运行 metrics 新增
+`physical_plan_applied`、`physical_plan_order_mismatches`、`physical_plan_order` 以及 validation
+errors/warnings，便于逐题 trace 和后续 action policy 分析。
+
+离线 smoke：
+
+```bash
+PYTHONPATH=src:. python tools/run_physical_execution_smoke.py \
+  --output-dir runs/slotrag-physical-execution-smoke-v59
+```
+
+结果：legacy order=`S1 -> S2`，QO order=`S2 -> S1`，均成功；非法重复 order 被拒绝；provider calls=`0`。
+这不是质量实验，也没有选择 evaluation 阈值。下一门禁是 development-only Evidence Sufficiency
+calibration，再单独实现 physical action policy 和 adaptive binding beam；未通过前不启动完整
+2×2 或 global-corpus dense 矩阵。
+
+验证：`PYTHONPATH=src:. pytest -q` 为 `267 passed, 1 skipped`；compileall 与 `git diff --check` 通过。

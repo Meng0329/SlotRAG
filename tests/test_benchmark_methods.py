@@ -1209,6 +1209,70 @@ def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it
     assert observed_document_counts == [1, None]
 
 
+def test_slotrag_qo_compiles_and_passes_physical_plan_to_executor(monkeypatch):
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Founder", "arguments": ["?person", "OpenAI"], "estimated_cardinality": 10, "estimated_cost": 2},
+            {"id": "S2", "predicate": "Founded", "arguments": ["?person", "?company"], "estimated_cardinality": 1, "estimated_cost": 1},
+        ],
+        "joins": [["S1.person", "S2.person"]],
+        "outputs": ["?person", "?company"],
+    })
+    observed = {}
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **_kwargs):
+            return plan, RunMetrics()
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy, physical_plan=None):
+            observed["strategy"] = strategy
+            observed["physical_plan"] = physical_plan
+            return ExecutionResult(
+                rows=[{"person": "Ada", "company": "X"}],
+                evidence=[EvidenceRecord(source_id="p", source_span="Ada founded X", slot_id="S2", bindings={"person": "Ada", "company": "X"})],
+                order=list(physical_plan.slot_execution_order),
+                metrics=RunMetrics(
+                    physical_plan_applied=1,
+                    physical_plan_order=list(physical_plan.slot_execution_order),
+                ),
+            )
+
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    monkeypatch.setattr(methods, "_finalize", lambda _client, _dataset, _question, result, **_kwargs: result)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_retrieval_calls=4,
+        max_binding_contexts=2,
+    ))
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-qo"],
+        "hotpotqa",
+        QuestionRecord(id="q", question="Who founded OpenAI?"),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=4,
+    )
+
+    assert observed["strategy"] == "adaptive"
+    assert observed["physical_plan"].slot_execution_order == ["S2", "S1"]
+    assert result.order == ["S2", "S1"]
+    assert result.metrics.physical_plan_order == ["S2", "S1"]
+
+
 def test_direct_answer_projection_strips_only_redundant_numeric_explanation():
     verbose = "families (20,154 families compared to 74,563 people)"
     result = ExecutionResult(

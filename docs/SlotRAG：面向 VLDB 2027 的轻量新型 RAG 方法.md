@@ -3505,3 +3505,35 @@ adaptive binding beam 或 `slotrag-qo` benchmark method；这些属于后续独�
 
 验证：`PYTHONPATH=src:. pytest -q` 为 `264 passed, 1 skipped`；compileall 与 `git diff --check`
 通过。v58 到此暂停，不启动 provider 全矩阵。
+
+# v59 PhysicalPlan 执行接入（2026-07-27）
+
+v59 完成一条独立的 runtime vertical slice：`PhysicalPlan.slot_execution_order` 已作为可选参数接入
+`AdaptiveExecutor.execute`。默认 `slotrag`、所有历史 ablation 和 adapted baseline 仍走原有调用路径；
+新增 `slotrag-qo` method spec，只在该方法编译 `LogicalPlan -> PhysicalPlan` 并传入 executor。
+
+执行器在运行前校验物理顺序必须与逻辑 `SlotPlan` 的 slot 集合完全一致且无重复。校验失败返回
+`status=failed`，并把 `physical_plan_order_mismatches` 记为 1；成功执行记录
+`physical_plan_applied`、`physical_plan_order` 以及物理计划 validation errors/warnings。当前物理计划
+只改变执行顺序，尚未启用 Evidence Sufficiency、action policy、adaptive binding beam 或每 slot 的
+top-k/budget 字段，因此不能把 v59 解释为质量改进。
+
+## v59 provider-free smoke
+
+命令：
+
+```bash
+PYTHONPATH=src:. python tools/run_physical_execution_smoke.py \
+  --output-dir runs/slotrag-physical-execution-smoke-v59
+```
+
+工件：`runs/slotrag-physical-execution-smoke-v59/summary.json`，`provider_calls=0`。同一逻辑计划的
+legacy 自适应顺序为 `S1 -> S2`，编译出的物理计划顺序为 `S2 -> S1`，两者均 `status=ok`；人为注入的
+重复顺序 `S1 -> S1` 被拒绝，`status=failed`、mismatch=`1`。该 smoke 只证明物理顺序接线、旧路径兼容性
+和一致性失败可观测，不包含 retrieval、generation 或 benchmark quality 数字。
+
+修改：`src/slotrag/models.py`、`src/slotrag/planner.py`、`src/slotrag/benchmarking/methods.py`、
+`tests/test_execution.py`、`tests/test_benchmark_methods.py`、`tools/run_physical_execution_smoke.py`。
+验证：`PYTHONPATH=src:. pytest -q` 为 `267 passed, 1 skipped`；compileall 与 `git diff --check` 通过。
+下一版本只实现 Evidence Sufficiency 的离线特征/校准与单独 smoke；在其完成前不启动全量 provider
+矩阵或冻结 evaluation 的 2×2 ablation。

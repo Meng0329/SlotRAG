@@ -15,6 +15,7 @@ from slotrag.planner import (
     substitute_grounded_entity_anchor_with_values,
 )
 from slotrag.providers import ChatResult, ToolCall, Usage
+from slotrag.qo import compile_physical_plan, logical_plan_from_slot_plan
 
 
 class FakeMaterializer:
@@ -591,6 +592,47 @@ def test_adaptive_executor_joins_and_propagates_bindings():
     assert result.order == ["S1", "S2"]
     assert materializer.calls[1][1] == {"person": "Ada"}
     assert result.metrics.extraction_llm_calls == 2
+
+
+def test_adaptive_executor_honors_physical_plan_order_and_records_application():
+    materializer = FakeMaterializer()
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Founder", "arguments": ["?person", "OpenAI"], "estimated_cardinality": 10, "estimated_cost": 2},
+            {"id": "S2", "predicate": "Founded", "arguments": ["?person", "?company"], "estimated_cardinality": 1, "estimated_cost": 1},
+        ],
+        "joins": [["S1.person", "S2.person"]],
+        "outputs": ["?person", "?company"],
+    })
+    physical = compile_physical_plan(logical_plan_from_slot_plan(plan))
+
+    result = AdaptiveExecutor(materializer).execute(plan, physical_plan=physical)
+
+    assert physical.slot_execution_order == ["S2", "S1"]
+    assert result.status == "ok"
+    assert result.order == ["S2", "S1"]
+    assert result.metrics.physical_plan_applied == 1
+    assert result.metrics.physical_plan_order_mismatches == 0
+
+
+def test_adaptive_executor_rejects_physical_plan_order_mismatch():
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Founder", "arguments": ["?person", "OpenAI"]},
+            {"id": "S2", "predicate": "Founded", "arguments": ["?person", "?company"]},
+        ],
+        "joins": [["S1.person", "S2.person"]],
+        "outputs": ["?person", "?company"],
+    })
+    physical = compile_physical_plan(logical_plan_from_slot_plan(plan)).model_copy(update={
+        "slot_execution_order": ["S1", "S1"],
+    })
+
+    result = AdaptiveExecutor(FakeMaterializer()).execute(plan, physical_plan=physical)
+
+    assert result.status == "failed"
+    assert result.metrics.physical_plan_order_mismatches == 1
+    assert result.error == "physical plan slot order does not match logical plan"
 
 
 def test_frontier_safe_selection_prevents_transitive_variable_join_failure():

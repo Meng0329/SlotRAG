@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .errors import SchemaError
 from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
 from .providers import AgnesClient, ChatResult
+from .qo import PhysicalPlan
 from .retrieval import HybridRetriever
 
 
@@ -2060,19 +2061,49 @@ class AdaptiveExecutor:
             chosen = max(candidates, key=score)
         return chosen, guard_checked, guard_intervened, candidates_pruned
 
-    def execute(self, plan: SlotPlan, *, strategy: str = "adaptive") -> ExecutionResult:
+    def execute(
+        self,
+        plan: SlotPlan,
+        *,
+        strategy: str = "adaptive",
+        physical_plan: PhysicalPlan | None = None,
+    ) -> ExecutionResult:
         remaining = list(plan.slots)
         materialized: dict[str, list[BindingRow]] = {}
         cardinalities: dict[str, int] = {}
         all_bindings: dict[str, str] = {}
         evidence: list[EvidenceRecord] = []
         retrieved_evidence: list[EvidenceRecord] = []
-        metrics = RunMetrics()
+        metrics = RunMetrics(
+            physical_plan_applied=int(physical_plan is not None),
+            physical_plan_order_mismatches=0,
+            physical_plan_order=list(physical_plan.slot_execution_order) if physical_plan else [],
+        )
         order: list[str] = []
         current: list[BindingRow] | None = None
         frozen_order: list[Slot] = []
         frozen_guard_stats: list[tuple[bool, bool, int]] = []
-        if not self.options.runtime_replan:
+        if physical_plan is not None:
+            plan_slot_ids = [slot.id for slot in plan.slots]
+            physical_slot_ids = list(physical_plan.slot_execution_order)
+            valid_order = (
+                len(physical_slot_ids) == len(plan_slot_ids)
+                and len(set(physical_slot_ids)) == len(physical_slot_ids)
+                and set(physical_slot_ids) == set(plan_slot_ids)
+            )
+            if not valid_order:
+                metrics = metrics.model_copy(update={"physical_plan_order_mismatches": 1})
+                return ExecutionResult(
+                    rows=[],
+                    order=[],
+                    metrics=metrics,
+                    status="failed",
+                    error="physical plan slot order does not match logical plan",
+                )
+            slots_by_id = {slot.id: slot for slot in plan.slots}
+            frozen_order = [slots_by_id[slot_id] for slot_id in physical_slot_ids]
+            frozen_guard_stats = [(False, False, 0) for _ in frozen_order]
+        elif not self.options.runtime_replan:
             pending = list(remaining)
             frozen_bindings: dict[str, str] = {}
             frozen_materialized: set[str] = set()

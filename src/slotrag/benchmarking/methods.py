@@ -27,6 +27,7 @@ from ..planner import (
     inject_query_grounded_anchor,
 )
 from ..providers import AgnesClient, ChatResult
+from ..qo import PlanValidationError, compile_physical_plan, logical_plan_from_slot_plan
 from ..retrieval import HybridRetriever, tokenize
 
 
@@ -61,10 +62,11 @@ class MethodSpec:
     dual_query_confidence_threshold: float | None = None
     dual_query_evidence_guard: bool = False
     dual_query_evidence_guard_disjoint_only: bool = True
+    physical_plan: bool = False
     description: str = ""
 
 
-MAIN_METHODS = ["slotrag", "hybrid", "ircot", "react", "planrag", "srag", "graphrag"]
+MAIN_METHODS = ["slotrag", "slotrag-qo", "hybrid", "ircot", "react", "planrag", "srag", "graphrag"]
 ABLATION_METHODS = [
     "slotrag-question",
     "slotrag-fixed",
@@ -115,6 +117,12 @@ ABLATION_METHODS = [
 
 METHODS: dict[str, MethodSpec] = {
     "slotrag": MethodSpec("slotrag", "slotrag"),
+    "slotrag-qo": MethodSpec(
+        "slotrag-qo",
+        "slotrag",
+        physical_plan=True,
+        description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer (initial physical-order slice)",
+    ),
     "hybrid": MethodSpec("hybrid", "hybrid", description="whole-question hybrid retrieval"),
     "ircot": MethodSpec("ircot", "ircot", description="interleaved reasoning and retrieval, adapted"),
     "react": MethodSpec("react", "react", description="structured search/finish loop, adapted"),
@@ -498,9 +506,12 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
         "slot_selectivity_errors",
         "provider_request_ids",
         "plan_validation_errors",
+        "physical_plan_validation_errors",
+        "physical_plan_validation_warnings",
         "extraction_finish_reasons",
         "extraction_validation_errors",
     }
+    replace_lists = {"physical_plan_order"}
     max_fields = {
         "peak_rss_mb",
         "index_bytes",
@@ -524,6 +535,9 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
         for key, item in current.items():
             if key in additive_lists:
                 data[key].extend(item)
+            elif key in replace_lists:
+                if item:
+                    data[key] = list(item)
             elif key in max_fields:
                 data[key] = max(data[key], item)
             elif key in nullable:
@@ -1032,6 +1046,24 @@ def _run_slotrag(
             plan=plan,
             metrics=compiler_metrics,
         )
+    physical_plan = None
+    if spec.physical_plan:
+        try:
+            physical_plan = compile_physical_plan(logical_plan_from_slot_plan(plan))
+        except PlanValidationError as exc:
+            return ExecutionResult(
+                status="failed",
+                error=f"physical plan validation failed: {exc}",
+                plan=plan,
+                metrics=compiler_metrics.model_copy(update={
+                    "physical_plan_validation_errors": exc.telemetry.validation_errors,
+                    "physical_plan_validation_warnings": exc.telemetry.validation_warnings,
+                }),
+            )
+        compiler_metrics = compiler_metrics.model_copy(update={
+            "physical_plan_validation_errors": physical_plan.telemetry.validation_errors,
+            "physical_plan_validation_warnings": physical_plan.telemetry.validation_warnings,
+        })
     materializer_options: dict[str, Any] = {
         "max_passages": config.execution.materialization_top_k,
         "typed_extraction_contracts": spec.typed_extraction_contracts,
@@ -1078,7 +1110,11 @@ def _run_slotrag(
         options=spec.options,
     )
     execution_started = time.perf_counter()
-    result = executor.execute(plan, strategy=spec.strategy)
+    if physical_plan is None:
+        # Preserve the legacy call contract for existing methods and test doubles.
+        result = executor.execute(plan, strategy=spec.strategy)
+    else:
+        result = executor.execute(plan, strategy=spec.strategy, physical_plan=physical_plan)
     execution_metrics = RunMetrics(
         execution_latency_ms=(time.perf_counter() - execution_started) * 1000,
         steps_executed=len(result.order),

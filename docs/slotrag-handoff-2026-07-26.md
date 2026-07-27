@@ -248,3 +248,28 @@ top-k=`8`、reranker=true、beam=3、validation errors=[]；缺少 selectivity �
 下一步不得直接跑全矩阵。先在 development 数据把 `PhysicalPlan.slot_execution_order` 接到 executor，
 单独记录执行 telemetry；再实现 Evidence Sufficiency、physical action policy、adaptive binding beam，
 每完成一条独立链路就做一次离线/小规模 smoke 并停下来汇报，最后再做冻结 evaluation 的 2×2 ablation。
+
+## v59 PhysicalPlan runtime slice（2026-07-27）
+
+已完成并暂停。`AdaptiveExecutor.execute(..., physical_plan=...)` 现在校验并遵循物理 slot 顺序；没有
+`physical_plan` 的旧调用路径保持不变。`MethodSpec.physical_plan` 和 `METHODS["slotrag-qo"]` 使新方法
+可以独立进入 benchmark 配置，但 v59 仅改变执行顺序，尚未实现 sufficiency/action policy/binding beam。
+
+### v59 工件与命令
+
+```bash
+PYTHONPATH=src:. python tools/run_physical_execution_smoke.py \
+  --output-dir runs/slotrag-physical-execution-smoke-v59
+```
+
+`runs/slotrag-physical-execution-smoke-v59/summary.json`：provider calls=`0`；legacy order=`S1 -> S2`，
+physical order=`S2 -> S1`，两者 `ok`；重复/非法物理顺序为 `failed` 且 mismatch=`1`。这只是执行接线和
+失败可观测性 smoke，不能写成质量收益或 SOTA 证据。
+
+### v59 修改与验证状态
+
+修改文件：`src/slotrag/models.py`、`src/slotrag/planner.py`、`src/slotrag/benchmarking/methods.py`、
+`tests/test_execution.py`、`tests/test_benchmark_methods.py`、`tools/run_physical_execution_smoke.py`。
+已通过 execution/method focused tests；全量验证为 `267 passed, 1 skipped`，compileall 与 diff check
+通过。下一轮从 development-only Evidence Sufficiency 特征和 calibration smoke 开始，不启动 provider
+全矩阵。

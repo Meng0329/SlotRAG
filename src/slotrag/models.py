@@ -347,6 +347,11 @@ class RunMetrics(StrictModel):
     plan_output_count: int = 0
     plan_operator_count: int = 0
     plan_complexity: int = 0
+    physical_plan_applied: int = 0
+    physical_plan_order_mismatches: int = 0
+    physical_plan_order: list[str] = Field(default_factory=list)
+    physical_plan_validation_errors: list[str] = Field(default_factory=list)
+    physical_plan_validation_warnings: list[str] = Field(default_factory=list)
     steps_executed: int = 0
     llm_budget_utilization: float = 0.0
     retrieval_budget_utilization: float = 0.0
