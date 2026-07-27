@@ -1,6 +1,6 @@
 import json
 
-from slotrag.benchmarking.datasets import DatasetSpec, adapt_record, load_sample
+from slotrag.benchmarking.datasets import DATASETS, DatasetSpec, adapt_record, load_all_questions, load_sample
 from slotrag.data import load_questions, normalize_jsonl
 
 
@@ -51,3 +51,48 @@ def test_stratified_sample_is_deterministic_and_round_trips_metadata(tmp_path):
     reloaded = load_questions(sample_path)
     assert [item.metadata["stratum"] for item in reloaded] == [item.metadata["stratum"] for item in first]
 
+
+def test_strategyqa_facts_are_not_available_corpus_and_drop_stratum_provenance():
+    strategy = adapt_record(
+        DATASETS["strategyqa"],
+        {
+            "id": "sq1",
+            "question": "Is alpha true?",
+            "answers": ["True"],
+            "passages": [{"id": "fact_0#0", "doc_id": "fact_0", "text": "Alpha is true."}],
+            "type": "strategy",
+        },
+        0,
+        split="train",
+    )
+    assert strategy.passages == []
+    assert strategy.metadata["available_evidence"] is False
+    assert strategy.metadata["evidence_protocol"] == "gold_facts_only"
+    assert strategy.metadata["protocol_warning"] == "strategyqa_facts_are_not_shared_corpus"
+
+    drop = adapt_record(
+        DATASETS["drop"],
+        {
+            "id": "drop1",
+            "question": "List the names.",
+            "answers": ["Alpha"],
+            "passages": [{"id": "p1", "text": "Alpha."}],
+            "operation_type": "listing",
+            "operation_type_source": "official",
+        },
+        0,
+        split="train",
+    )
+    assert drop.metadata["stratum"] == "listing"
+    assert drop.metadata["stratum_source"] == "official"
+
+
+def test_load_all_questions_reads_the_complete_split(tmp_path):
+    path = tmp_path / "toy.jsonl"
+    _write_jsonl(path, [
+        {"id": "q1", "question": "One?", "answers": ["1"], "passages": [{"id": "p1", "text": "One."}], "group": "a"},
+        {"id": "q2", "question": "Two?", "answers": ["2"], "passages": [{"id": "p2", "text": "Two."}], "group": "b"},
+    ])
+    spec = DatasetSpec("toy", "toy.jsonl", "toy.jsonl", "f1", lambda record: record["group"])
+    questions = load_all_questions(spec, tmp_path, split="train")
+    assert [question.id for question in questions] == ["q1", "q2"]

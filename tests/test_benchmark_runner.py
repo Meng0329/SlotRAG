@@ -35,6 +35,20 @@ class _FakeService:
         self.stats = ProviderStats()
 
 
+class _FakeEmbedding:
+    class _Config:
+        batch_size = 8
+
+    config = _Config()
+
+    def __init__(self):
+        self.stats = ProviderStats()
+
+    def embed(self, texts):
+        values = [texts] if isinstance(texts, str) else texts
+        return [[1.0, 0.0] if "alpha" in value.lower() else [0.0, 1.0] for value in values]
+
+
 class _FakeRetriever:
     def __init__(self):
         self.calls = 0
@@ -281,10 +295,71 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
     final_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
     record = json.loads(final_path.read_text(encoding="utf-8"))
     metrics = record["result"]["metrics"]
-    assert record["schema_version"] == 28
+    assert record["schema_version"] == 29
     assert record["provider_trace"]["enabled"] is False
     assert metrics["index_build_latency_ms"] >= 20
     assert metrics["wall_latency_ms"] < metrics["index_build_latency_ms"]
+
+
+def test_runner_global_corpus_uses_full_split_and_persists_protocol_manifest(tmp_path, monkeypatch):
+    benchmark_root = tmp_path / "benchmark"
+    benchmark_root.mkdir()
+    records = [
+        {
+            "id": "q1",
+            "question": "Alpha?",
+            "answers": ["Alpha"],
+            "passages": [{"id": "p1", "doc_id": "d1", "text": "Alpha."}],
+            "type": "bridge",
+        },
+        {
+            "id": "q2",
+            "question": "Beta?",
+            "answers": ["Beta"],
+            "passages": [{"id": "p2", "doc_id": "d2", "text": "Beta."}],
+            "type": "bridge",
+        },
+    ]
+    (benchmark_root / "toy.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    spec = DatasetSpec("hotpotqa", "toy.jsonl", "toy.jsonl", "f1", lambda record: record["type"])
+    monkeypatch.setitem(__import__("slotrag.benchmarking.runner", fromlist=["DATASETS"]).DATASETS, "hotpotqa", spec)
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeEmbedding(), _FakeService()),
+    )
+    app_config = _app_config()
+    app_config.reranker.enabled = False
+    suite = BenchmarkSuite(
+        benchmark_root=benchmark_root,
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["hybrid"],
+            retrieval_protocol="global_corpus",
+        )},
+    )
+    runner = BenchmarkRunner(suite, app_config, tmp_path / "run")
+
+    assert runner.run("test")["completed"] == 1
+    record_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["retrieval_protocol"] == "global_corpus"
+    assert set(record["evidence_inventory"]) == {
+        "available_evidence_ids",
+        "gold_evidence_ids",
+        "retrieved_evidence_ids",
+    }
+    manifest_path = tmp_path / "run" / "corpus" / "test" / "hotpotqa" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["source_question_count"] == 2
+    assert manifest["chunk_count"] == 2
+    assert manifest["query_count"] >= 1
+    run_manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+    assert run_manifest["corpus_manifests"]["test/hotpotqa"] == "corpus/test/hotpotqa/manifest.json"
 
 
 def test_frozen_plan_stage_rejects_compile_incompatible_methods():
@@ -370,7 +445,7 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
     snapshots = list((tmp_path / "run" / "plans" / "test").rglob("*.json"))
     assert len(snapshots) == 1
     records = [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "run" / "items" / "test").rglob("*.json")]
-    assert {record["schema_version"] for record in records} == {28}
+    assert {record["schema_version"] for record in records} == {29}
     assert len({record["plan_provenance"]["plan_sha256"] for record in records}) == 1
     assert len({record["plan_provenance"]["effective_plan_sha256"] for record in records}) == 1
     assert {record["plan_provenance"]["source_method"] for record in records} == {"slotrag"}

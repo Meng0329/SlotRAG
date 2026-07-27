@@ -115,3 +115,58 @@
 - `results-analysis`：v49 完成后做全指标、配对 CI/p、失败分母和机制分析时使用。
 - `tdd`：只在分析发现新的通用错误机制、需要修改方法时使用；先失败测试，再实现，并新建预注册 run。
 - `academic-paper-reviewer` 或 `paper-self-review`：只在实验工件完整且结论边界写入 docs 后，审查是否真正达到 VLDB 实验标准。
+
+## v54 research reset 状态（2026-07-27）
+
+本轮完成了不改方法的离线审计。新增 `tools/analyze_slotrag_headroom.py` 和
+`tests/test_headroom_analysis.py`，报告为 `docs/optimization-audit-v54.md`，原始审计汇总位于
+`runs/slotrag-frontier-guard-train-v2/summaries/optimization_audit_v54/`。审计读取
+frontier-guard-train-v2 与 answer-contract-train-v1 的 immutable records，共 1,200 条，provider
+调用为 0。
+
+审计结论：主要可利用空间在结构化抽取/答案生成及证据协议，而不是继续增加稀疏 guard；最近配对结果 tie rate 为 97%，frontier guard 覆盖率为 1.08%。现有 local-context、per-question retriever、adapted baseline 协议不足以支撑论文级检索结论。planner oracle 因历史 trace 缺少可比字段而为 N/A。v54 只完成 audit gate，尚未实现 `slotrag-qo`，也未运行 global-corpus 或 2×2 ablation。
+
+本轮验证命令：`PYTHONPATH=src:. pytest -q`（`253 passed, 1 skipped`）、
+`python -m compileall -q src benchmark tools`、`git diff --check`。按用户要求，完成 v54 后暂停；下一轮从 shared-corpus benchmark protocol 开始，不能把本轮离线 oracle 估计当作新方法增益。
+
+## v55 global-corpus protocol 状态（2026-07-27）
+
+已完成协议层第一版，新增：
+
+* `src/slotrag/benchmarking/corpus.py`：`SharedCorpusIndex`、`CorpusManifest`，跨完整 split 聚合 available passages。
+* `StageConfig.retrieval_protocol`：显式区分 `local_context` 与 `global_corpus`；runner schema 升为 29。
+* 每条新记录的 `evidence_inventory`：available/gold/retrieved 三类 evidence ID 分离；global run manifest 列出 corpus manifest。
+* `configs/experiments/global-corpus-protocol-smoke-v55.yaml` 与 `tools/run_global_corpus_smoke.py`。
+
+v55 provider-free smoke 工件：
+`runs/slotrag-global-corpus-protocol-smoke-v55/`。3 个 source questions、3 个 documents、3 个
+chunks，1 query，`index_bytes=52`，构建约 `379.24 ms`，查询约 `0.80 ms`，provider calls=0。
+
+协议修复：StrategyQA facts 不再作为 available corpus，标记 `gold_facts_only`；DROP 新生成
+`operation_type_source=question_heuristic`，旧记录来源为 `legacy_unknown`。本轮全量验证为
+`258 passed, 1 skipped`，compileall 和 diff check 通过。尚未开始真实 provider 的 local/global
+质量实验，尚未实现 `slotrag-qo`。
+
+下一轮执行顺序：真实数据小规模 local/global smoke → records/gate 审计 → 冻结协议 → LogicalPlan/
+PhysicalPlan 数据结构和编译器验证。完成下一次版本实验后继续停下来汇报，不能把 v55 smoke 当作
+质量提升或投稿主结果。
+
+## v56 real protocol smoke 状态（2026-07-27）
+
+doctor：Agnes、embedding、reranker 均 HTTP 200；运行参数为 provider 30 RPM、实际 20 RPM、并发
+64、trace 开启且 payload 脱敏。
+
+local run：`runs/slotrag-retrieval-local-smoke-v56/`，HotpotQA evaluation 2 题，adapted
+`hybrid` 2/2 成功、0 retry/timeout；primary/F1=`0.395833`、EM=`0`、evidence recall=`1.0`，
+平均 wall=`5545.65 ms`、index build=`2252.49 ms`、total tokens=`2435.5`。records-audit
+完整，gate `analysis_ready=true`，但 smoke 不具备 publication scope。
+
+global run：`runs/slotrag-retrieval-global-smoke-v56/`，目标是完整 HotpotQA evaluation split
+共享 corpus。只读计数得到 7,405 questions、73,700 passages、73,911 chunks、约 2,310 embedding
+batches；20 RPM 理论下界约 115.5 分钟，超过成本门禁。进程在 final corpus/item 前中止，
+`abort.json` 记录 `aborted_cost_gate`，records-audit 为 0 final、analysis_ready=false。没有
+global 质量结果，不得计算 local/global 差异。
+
+下一轮从“离线/持久化 shared index + immutable vector manifest”开始，再实现 LogicalPlan/
+PhysicalPlan 与 `slotrag-qo`；不要为了完成 smoke 把 full split 改回 per-question 或删除跨题
+distractors。v56 已完成并暂停。

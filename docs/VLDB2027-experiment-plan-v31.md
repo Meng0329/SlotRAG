@@ -573,3 +573,59 @@ runs/vldb2027-exact-v31/<run-id>/
 - exact upstream baseline 必须有真实入口执行记录；local adapter 和 adapted protocol 分栏显示。
 - 最终 `ok` 率、retry、timeout、空回答和预算失败按 attempt/final 双分母报告。
 - 结果、统计和文档引用同一个 run manifest SHA-256；架构、提示词、解析器、阈值或数据变化必须新建 run ID。
+
+## v54 research reset 审计记录（2026-07-27）
+
+v54 只完成离线 headroom 审计，未修改方法、未调用 provider、未启动全矩阵实验。命令为：
+
+```bash
+PYTHONPATH=src:. python tools/analyze_slotrag_headroom.py \
+  --run-dir runs/slotrag-frontier-guard-train-v2 \
+  --run-dir runs/slotrag-answer-contract-train-v1 \
+  --output-dir runs/slotrag-frontier-guard-train-v2/summaries/optimization_audit_v54
+```
+
+输入 1,200 条 immutable 逐题记录。结果：结构化抽取错误的观测覆盖率为 `0.1392`，乐观平均 headroom ceiling 为 `0.0615`；当前 retrieval oracle answerability 估计为 `739/1200=0.6158`；rows 正确但 final answer 错误为 `70/1200=0.0583`；最近配对比较 tie rate 为 `0.9700`。frontier guard 仅影响 `13/1200=0.0108` 条记录，稀疏 guard 不再作为主优化方向。
+
+v54 报告：`docs/optimization-audit-v54.md`。该报告中的 oracle/counterfactual 是历史 trace 的离线估计，不能写入论文主结果。下一门禁是先重构 `local_context` 与 `global_corpus` 协议、修复 StrategyQA/DROP 元数据并补齐 retrieval/plan/execution/generation telemetry；门禁通过前不得开始昂贵完整实验。
+
+## v55 global-corpus protocol 实现与 smoke（2026-07-27）
+
+已新增 `SharedCorpusIndex`/`CorpusManifest`，并将 `StageConfig.retrieval_protocol` 固定为
+`local_context` 或 `global_corpus`。global corpus 按完整 split 构建，不按评估题 gold evidence
+选取 passages；每道题的记录分别写入 available/gold/retrieved evidence ID 集合。runner 的新记录
+schema 为 `29`，旧 run 工件不回写。
+
+StrategyQA 适配器现在把 bundled facts 归入 `gold_facts_only`，不再送入检索索引；DROP 的
+`operation_type` 保存来源（新数据为 `question_heuristic`，旧数据为 `legacy_unknown`）。因此
+StrategyQA 在缺少外部语料时不能进入 retrieval quality 主表，必须报告 evidence unavailable。
+
+provider-free smoke 使用：
+
+```bash
+PYTHONPATH=src:. python tools/run_global_corpus_smoke.py \
+  --output-dir runs/slotrag-global-corpus-protocol-smoke-v55
+```
+
+结果为 3 个 source questions、3 个 documents、3 个 chunks、1 次 query；manifest 记录
+`index_bytes=52`、`build_latency_ms≈379.24`、`query_latency_ms≈0.80`、`gold_evidence_not_used=true`，
+provider calls 为 0。该 smoke 只验证协议和可追溯工件，不进入质量统计。全量测试为
+`258 passed, 1 skipped`。下一门禁是对真实 benchmark 做 local/global 受控 smoke；在其完成前
+不启动昂贵完整矩阵，也不实现基于固定 evaluation split 的阈值搜索。
+
+## v56 真实 local/global smoke 与成本门禁（2026-07-27）
+
+服务 doctor 三项均 HTTP 200；运行时配置 provider RPM=30、operational RPM=20、max concurrency=64、
+trace=true、include_payloads=false。local 工件位于 `runs/slotrag-retrieval-local-smoke-v56/`，
+2/2 final/attempt/trace 成功，平均 primary/F1=`0.395833`、EM=`0`、evidence recall=`1.0`、
+wall=`5545.65 ms`；这是 adapted `hybrid` 诊断，不是 SlotRAG 主结果。
+
+global 工件位于 `runs/slotrag-retrieval-global-smoke-v56/`。完整 HotpotQA evaluation split 为
+7,405 questions、73,700 passages、73,911 chunks，约 2,310 个 embedding batches；在 operational
+RPM=20 下理论构建下界约 115.5 分钟，超过受控 smoke 成本门禁。进程在最终 corpus/item 生成前
+中止，`abort.json` 已记录 `status=aborted_cost_gate`；records-audit 为 0 final、
+`analysis_ready=false`。该 cell 没有质量结果，不能与 local 结果比较。
+
+结论：full-split global corpus 的主要下一步是离线/持久化索引构建及可复用向量 manifest，而不是
+继续增加在线 guard。v56 不晋级 publication，不启动完整 global 矩阵；先完成成本方案与
+LogicalPlan/PhysicalPlan 设计，再进入 `slotrag-qo`。

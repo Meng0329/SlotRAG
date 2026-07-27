@@ -22,7 +22,8 @@ from ..retrieval import EmbeddingCache, HybridRetriever
 from ..tracing import provider_trace, trace_metadata
 from .config import BenchmarkSuite
 from .baselines import audit_baselines
-from .datasets import DATASETS, load_sample
+from .corpus import SharedCorpusIndex
+from .datasets import DATASETS, load_all_questions, load_sample
 from .methods import METHODS, compile_slotrag_plan, run_method, slotrag_compile_options
 from .metrics import score_record
 
@@ -196,6 +197,7 @@ class BenchmarkRunner:
         self.output_dir = output_dir
         self.agnes, self.embedding, self.reranker = provider_clients(app_config)
         self.embedding_cache = EmbeddingCache(output_dir / "cache" / "embeddings.json")
+        self._shared_indices: dict[tuple[str, str], SharedCorpusIndex] = {}
 
     def _sample_path(self, stage: str, dataset: str) -> Path:
         return self.output_dir / "samples" / stage / f"{dataset}.jsonl"
@@ -251,6 +253,23 @@ class BenchmarkRunner:
             dense_weight=self.app_config.retrieval.dense_weight,
             rerank_enabled=self.app_config.reranker.enabled,
             cache=self.embedding_cache,
+        )
+
+    def _build_shared_index(self, stage_name: str, dataset: str, split: str) -> SharedCorpusIndex:
+        questions = load_all_questions(DATASETS[dataset], self.suite.benchmark_root, split=split)
+        manifest_path = self.output_dir / "corpus" / stage_name / dataset / "manifest.json"
+        return SharedCorpusIndex.from_questions(
+            questions,
+            dataset=dataset,
+            split=split,
+            retrieval=self.app_config.retrieval,
+            embedding_client=self.embedding,
+            reranker_client=self.reranker,
+            rerank_enabled=self.app_config.reranker.enabled,
+            cache=self.embedding_cache,
+            manifest_path=manifest_path,
+            source_scope="full_split",
+            embedding_dimension=self.app_config.embedding.dimension,
         )
 
     def _provider_snapshot(self) -> dict[str, tuple[int, int, int, float, tuple[str, ...]]]:
@@ -507,9 +526,23 @@ class BenchmarkRunner:
         if unknown_methods:
             raise ValueError(f"methods are not configured for stage {stage_name}: {', '.join(unknown_methods)}")
         counts = {"completed": 0, "skipped": 0, "retried": 0, "failed": 0, "empty": 0, "unsupported": 0}
+        questions_by_dataset = {
+            dataset: self._load_or_create_sample(stage_name, dataset)
+            for dataset in selected_datasets
+        }
+        self._shared_indices = {}
+        if stage.retrieval_protocol == "global_corpus" and any(
+            METHODS[method].family != "graphrag" for method in selected_methods
+        ):
+            for dataset in selected_datasets:
+                self._shared_indices[(stage_name, dataset)] = self._build_shared_index(
+                    stage_name,
+                    dataset,
+                    stage.split,
+                )
         self._write_manifest(stage_name, selected_datasets, selected_methods)
         for dataset in selected_datasets:
-            questions = self._load_or_create_sample(stage_name, dataset)
+            questions = questions_by_dataset[dataset]
             for method in selected_methods:
                 for seed in self._method_seeds(method):
                     method_label = method if len(self._method_seeds(method)) == 1 else f"{method}@{seed}"
@@ -577,27 +610,32 @@ class BenchmarkRunner:
                                 plan_provenance = exc.provenance
                             except Exception as exc:
                                 plan_error = exc
+                        shared_index = self._shared_indices.get((stage_name, dataset))
                         index_provider_before = self._provider_snapshot()
                         index_cache_before = self.embedding_cache.snapshot()
-                        retriever: HybridRetriever | None = None
+                        retriever: Any | None = None
                         index_build_ms = 0.0
                         index_bytes = 0
                         index_error: Exception | None = None
                         if plan_error is None and METHODS[method].family != "graphrag":
-                            index_started = time.perf_counter()
-                            try:
-                                with provider_trace(
-                                    trace_target,
-                                    include_payloads=self.app_config.trace.include_payloads,
-                                ):
-                                    retriever = self._retriever(question)
-                                    retriever.build_index()
-                            except Exception as exc:
-                                index_error = exc
-                            index_build_ms = (time.perf_counter() - index_started) * 1000
-                            if retriever is not None:
-                                index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
-                                index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
+                            if shared_index is not None:
+                                retriever = shared_index
+                                index_bytes = shared_index.manifest.index_bytes
+                            else:
+                                index_started = time.perf_counter()
+                                try:
+                                    with provider_trace(
+                                        trace_target,
+                                        include_payloads=self.app_config.trace.include_payloads,
+                                    ):
+                                        retriever = self._retriever(question)
+                                        retriever.build_index()
+                                except Exception as exc:
+                                    index_error = exc
+                                index_build_ms = (time.perf_counter() - index_started) * 1000
+                                if retriever is not None:
+                                    index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
+                                    index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
                         index_provider_after = self._provider_snapshot()
                         index_cache_after = self.embedding_cache.snapshot()
                         index_delta = {
@@ -610,6 +648,7 @@ class BenchmarkRunner:
                         )
                         before = index_provider_after
                         cache_before = index_cache_after
+                        retrieval_before = shared_index.stats_snapshot() if shared_index is not None else None
                         started = time.perf_counter()
                         rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                         if plan_error is not None:
@@ -662,6 +701,12 @@ class BenchmarkRunner:
                         })})
                         if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
                             result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
+                        if shared_index is not None and retrieval_before is not None:
+                            retrieval_after = shared_index.stats_snapshot()
+                            result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
+                                "retrieval_query_count": retrieval_after[0] - retrieval_before[0],
+                                "retrieval_query_latency_ms": retrieval_after[1] - retrieval_before[1],
+                            })})
                         if plan_provenance is not None and result.plan is not None:
                             plan_provenance = {
                                 **plan_provenance,
@@ -670,8 +715,13 @@ class BenchmarkRunner:
                         trace_info = trace_metadata(trace_target)
                         if trace_info["enabled"]:
                             trace_info["path"] = str(trace_path.relative_to(self.output_dir))
+                        corpus_manifest = (
+                            str(shared_index.manifest_path.relative_to(self.output_dir))
+                            if shared_index is not None and shared_index.manifest_path is not None
+                            else None
+                        )
                         record = {
-                            "schema_version": 28,
+                            "schema_version": 29,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
@@ -679,10 +729,17 @@ class BenchmarkRunner:
                             "seed": seed,
                             "question_id": question.id,
                             "stratum": question.metadata.get("stratum"),
+                            "retrieval_protocol": stage.retrieval_protocol,
+                            "corpus_manifest": corpus_manifest,
                             "attempt_index": attempt_index,
                             "recorded_at": datetime.now(timezone.utc).isoformat(),
                             "budget": self.suite.budget.model_dump(mode="json"),
                             "answers": question.answers,
+                            "evidence_inventory": {
+                                "available_evidence_ids": [passage.id for passage in question.passages],
+                                "gold_evidence_ids": list(question.gold_evidence),
+                                "retrieved_evidence_ids": [item.source_id for item in result.evidence],
+                            },
                             "result": result.model_dump(mode="json"),
                             "scores": score_record(dataset, question, result),
                             "provider_delta": provider_delta,
@@ -693,6 +750,8 @@ class BenchmarkRunner:
                         }
                         _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record)
                         _atomic_json(item_path, record)
+                        if shared_index is not None:
+                            shared_index.persist_manifest()
                         counts["completed"] += 1
                         if result.status in {"failed", "budget_exceeded"}:
                             counts["failed"] += 1
@@ -700,6 +759,8 @@ class BenchmarkRunner:
                             counts["empty"] += 1
                         elif result.status == "unsupported_operation":
                             counts["unsupported"] += 1
+        for shared_index in self._shared_indices.values():
+            shared_index.persist_manifest()
         self.embedding_cache.flush()
         self._write_stage_progress(stage_name)
         return counts
@@ -788,6 +849,11 @@ class BenchmarkRunner:
                 ),
             },
             "suite": self.suite.model_dump(mode="json"),
+            "corpus_manifests": {
+                f"{stage_name}/{dataset}": str(index.manifest_path.relative_to(self.output_dir))
+                for (index_stage, dataset), index in self._shared_indices.items()
+                if index_stage == stage_name and index.manifest_path is not None
+            },
             "provider_config": self.app_config.public_dict(),
             "execution_control": {
                 "provider_rpm": self.app_config.rate_limit.provider_rpm,

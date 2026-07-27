@@ -284,25 +284,23 @@ def download_strategyqa(output_dir: Path) -> None:
 
         data = []
         for item in ds[split]:
-            # StrategyQA has facts as a single string, split into passages
+            # StrategyQA facts are supporting facts supplied with the question,
+            # not an independent retrieval corpus. Preserve them as annotations
+            # and require an external/shared corpus for retrieval experiments.
             facts_text = item.get("facts", "")
-            passages = []
+            fact_annotations = []
             if facts_text:
-                # Split facts by period and create passages
                 sentences = [s.strip() for s in facts_text.split(".") if s.strip()]
-                for i, sent in enumerate(sentences):
-                    passages.append({
-                        "doc_id": f"fact_{i}",
-                        "id": f"fact_{i}#0",
-                        "text": sent + "."
-                    })
+                fact_annotations = [sent + "." for sent in sentences]
 
             record = {
                 "id": item.get("qid", ""),
                 "question": item.get("question", ""),
                 "answers": [str(item.get("answer", ""))],
-                "passages": passages,
+                "passages": [],
                 "gold_evidence": [],
+                "gold_facts": fact_annotations,
+                "evidence_protocol": "gold_facts_only",
                 "type": "strategy",
                 "term": item.get("term", ""),
                 "description": item.get("description", ""),
@@ -378,7 +376,8 @@ def download_drop(output_dir: Path) -> None:
                 "passages": passages,
                 "gold_evidence": [],
                 "type": "drop",
-                "operation_type": classify_drop_operation(question)
+                "operation_type": classify_drop_operation(question),
+                "operation_type_source": "question_heuristic",
             }
             data.append(record)
 
@@ -392,13 +391,15 @@ def download_drop(output_dir: Path) -> None:
 def classify_drop_operation(question: str) -> str:
     """Classify the DROP question into operation type."""
     q_lower = question.lower()
-    if any(w in q_lower for w in ["how many", "how much", "number of", "count"]):
+    if any(w in q_lower for w in ["how many years", "how much earlier", "how much later", "difference between", "what is the difference"]):
+        return "arithmetic"
+    elif any(w in q_lower for w in ["how many", "how much", "number of", "count"]):
         return "counting"
     elif any(w in q_lower for w in ["first", "last", "earliest", "latest", "before", "after"]):
         return "sorting"
     elif any(w in q_lower for w in ["list", "name all", "what are all"]):
         return "listing"
-    elif any(w in q_lower for w in ["more", "less", "greater", "longer", "farther"]):
+    elif any(w in q_lower for w in ["more", "less", "greater", "longer", "farther", "higher", "lower"]):
         return "comparison"
     else:
         return "other"

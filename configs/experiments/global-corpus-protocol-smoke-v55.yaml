@@ -1,0 +1,17 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 4
+  max_llm_calls: 16
+  max_retrieval_calls: 2
+  question_timeout_seconds: 120
+stages:
+  global_corpus_smoke:
+    split: evaluation
+    sample_size: 2
+    methods: [hybrid]
+    retrieval_protocol: global_corpus

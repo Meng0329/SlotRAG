@@ -248,6 +248,8 @@ class RunMetrics(StrictModel):
     unique_documents_accessed: int = 0
     passages_processed: int = 0
     unique_passages_accessed: int = 0
+    retrieval_query_count: int = 0
+    retrieval_query_latency_ms: float = 0.0
     llm_calls: int = 0
     retrieval_calls: int = 0
     dual_query_expansions: int = 0

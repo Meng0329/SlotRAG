@@ -3309,3 +3309,95 @@ Natural-Language Query
 中文：
 
 > **SlotRAG 不围绕完整问题盲目检索文本，而是按需物化查询所需的证据槽位，并根据运行时变量绑定和基数自适应地完成证据连接。**
+
+---
+
+# v54 Research Reset：离线 Headroom 审计（2026-07-27）
+
+本版本先审计、后开发，不修改 SlotRAG 方法，也没有调用任何外部模型服务。审计工具为
+`tools/analyze_slotrag_headroom.py`，读取既有 immutable `items` 和 `samples`，输入运行目录：
+
+```text
+runs/slotrag-frontier-guard-train-v2
+runs/slotrag-answer-contract-train-v1
+```
+
+共分析 1,200 条逐题记录，输出位于
+`runs/slotrag-frontier-guard-train-v2/summaries/optimization_audit_v54/`，报告为
+`docs/optimization-audit-v54.md`。该报告中的 oracle 结果是离线估计，不是新方法实验，也不构成
+SOTA 或“领先 10%”结论。
+
+关键结论：
+
+* 最近两组方法比较的配对 tie rate 为 97%，frontier guard 的触发覆盖率仅 1.08%，继续添加稀疏 guard 的理论收益受覆盖率硬上限约束。
+* 可利用的最大已观测 headroom 来自结构化抽取/答案生成错误：70/1,200 条记录已有正确 rows 但最终答案错误；以当前证据可回答性估计，739/1,200 条记录具备潜在可回答性。
+* 现有 benchmark 为每题独立的 local-context retriever，且 baseline 是 adapted implementation；缺少 shared-corpus、跨题 distractor 和完整 retrieval telemetry，因此不足以证明检索、规划或执行模块的论文级贡献。
+* planner oracle 在历史 trace 中不可估计，不能据此声称 planner 已被验证；下一阶段必须先完成 `local_context`/`global_corpus` 协议和可复现 telemetry，再开发 `slotrag-qo`。
+
+本版本保留 binding/frontier/answer-contract 作为历史对照和 safety ablation，不再从固定 evaluation split 搜索阈值，也不新增 predicate-specific repair。后续实验必须在 development 选择配置、冻结 evaluation，并同步记录 raw predictions、逐题 trace、成本和失败分母。
+
+---
+
+# v55 Benchmark Protocol：local_context / global_corpus（2026-07-27）
+
+v55 完成了协议层第一版实现，尚未修改 SlotRAG planner，也没有开始 `slotrag-qo` 或质量矩阵实验。
+
+## 协议接口
+
+新增 `src/slotrag/benchmarking/corpus.py` 中的 `SharedCorpusIndex` 与 `CorpusManifest`：
+
+* `local_context` 保持现有行为：每道题的 passages 单独建立 retriever，记录 `retrieval_protocol=local_context`。
+* `global_corpus` 从完整 split 读取 available passages，构建跨问题、跨文档的共享索引；评估题只从该共享索引查询，不把 gold supporting evidence 传入构建过程。
+* 每个 global corpus manifest 记录 source question/document/chunk 数、索引估算大小、构建耗时、查询次数、累计查询延迟、question/passage hash 和 evidence policy。
+* runner 记录明确区分 `available_evidence_ids`、`gold_evidence_ids` 和 `retrieved_evidence_ids`，并保存 corpus manifest 相对路径。
+
+## 数据协议修复
+
+* StrategyQA 的 `facts` 被标记为 `gold_facts_only`，适配器不再把 `fact_*` passages 暴露给 local/global retriever；没有外部语料时该数据集的 retrieval evidence 应报告为不可用，而不是 oracle-like 结果。
+* DROP 新下载记录写入 `operation_type_source=question_heuristic`；`how many years` 等算术问题与 counting 分开。旧文件缺少来源时标记为 `legacy_unknown`，不伪装成官方 metadata。
+
+## v55 provider-free smoke
+
+配置：`configs/experiments/global-corpus-protocol-smoke-v55.yaml`；命令：
+
+```bash
+PYTHONPATH=src:. python tools/run_global_corpus_smoke.py \
+  --output-dir runs/slotrag-global-corpus-protocol-smoke-v55
+```
+
+工件：`runs/slotrag-global-corpus-protocol-smoke-v55/smoke.json` 和
+`runs/slotrag-global-corpus-protocol-smoke-v55/corpus/manifest.json`。3 个 source questions 构建
+3 个 documents/3 个 chunks，1 次查询，索引估算 `52 bytes`，构建约 `379.24 ms`，查询约
+`0.80 ms`，provider calls 为 `0`。结果用于验证协议和 provenance，不是质量指标。
+
+验证命令 `PYTHONPATH=src:. pytest -q` 得到 `258 passed, 1 skipped`；`compileall` 与
+`git diff --check` 通过。下一步仍需在真实服务下先跑 global/local 受控 smoke，再进入
+LogicalPlan/PhysicalPlan 与 `slotrag-qo`，本版本不声称 global-corpus 质量提升。
+
+---
+
+# v56 Real Protocol Smoke：成本门禁结果（2026-07-27）
+
+v56 使用真实 Agnes、Qwen embedding 和 BGE reranker 服务，配置为 provider RPM `30`、operational
+RPM `20`、最大并发 `64`、trace 开启且 payload 脱敏。local/global 使用同一 HotpotQA evaluation
+split、同一 2 题样本和 `hybrid` adapted method，run 目录分离保存。
+
+## local_context
+
+工件：`runs/slotrag-retrieval-local-smoke-v56/`。2/2 final、attempt、trace 均成功，0 retry、0
+timeout。平均 primary/F1=`0.395833`，EM=`0`，evidence recall=`1.0`，R@1=`0.5`，R@5/R@10=`1.0`；
+平均 total tokens=`2435.5`，wall=`5545.65 ms`，index build=`2252.49 ms`，index bytes=`89236.5`。
+该结果仅是 adapted hybrid 的协议诊断，不是 SlotRAG 质量结果，也没有 global 对照。
+
+## global_corpus 成本门禁
+
+工件：`runs/slotrag-retrieval-global-smoke-v56/`。完整 evaluation split 有 7,405 questions、
+73,700 passages、估计 73,911 chunks；batch size 32 即约 2,310 个 embedding batches。按实际
+20 RPM 的理论下界约 115.5 分钟，超过受控 smoke 成本门禁，因此在 corpus manifest/item 生成前
+安全中止。`abort.json` 保留原因、规模和 publication=false；records-audit 明确为 0 final、
+analysis_ready=false。没有 global quality 数字，不能计算 local/global 差值。
+
+该 null/blocked 结果说明“full-split dense shared corpus”必须先解决索引构建成本（持久化向量、
+离线预构建或明确的稀疏 smoke 协议），再进入论文级 global-corpus 实验；不能通过降低 RPM、删题
+或偷换成 per-question corpus 来伪造完成。v56 后暂停，下一步再设计可复现的 offline index build
+与 LogicalPlan/PhysicalPlan，尚未开始 `slotrag-qo`。
