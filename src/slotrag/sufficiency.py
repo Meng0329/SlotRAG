@@ -427,10 +427,30 @@ def _rank_agreement(results: list[RetrievalResult], left: str, right: str) -> fl
     ]
     if not values:
         return 0.0
-    left_order = [result.passage.id for result in sorted(values, key=lambda item: getattr(item, left), reverse=True)]
-    right_order = [result.passage.id for result in sorted(values, key=lambda item: getattr(item, right), reverse=True)]
-    width = max(len(left_order), 1)
-    return len(set(left_order[:width]).intersection(right_order[:width])) / width
+    if len(values) == 1:
+        return 1.0
+    left_order = [
+        result.passage.id
+        for result in sorted(
+            values,
+            key=lambda item: (-float(getattr(item, left)), item.passage.id),
+        )
+    ]
+    right_order = [
+        result.passage.id
+        for result in sorted(
+            values,
+            key=lambda item: (-float(getattr(item, right)), item.passage.id),
+        )
+    ]
+    right_positions = {passage_id: index for index, passage_id in enumerate(right_order)}
+    squared_distance = sum(
+        (index - right_positions[passage_id]) ** 2
+        for index, passage_id in enumerate(left_order)
+    )
+    width = len(left_order)
+    spearman = 1.0 - (6.0 * squared_distance) / (width * (width * width - 1))
+    return max(0.0, min(1.0, (spearman + 1.0) / 2.0))
 
 
 def _score_entropy(scores: list[float]) -> float:
@@ -444,6 +464,96 @@ def _score_entropy(scores: list[float]) -> float:
     probabilities = [weight / total for weight in weights]
     entropy = -sum(probability * math.log(probability) for probability in probabilities if probability > 0)
     return entropy / math.log(len(probabilities))
+
+
+def _backend_score_values(context: EvidenceContext) -> tuple[str, list[float]]:
+    results = context.retrieval_results
+
+    def values(attribute: str) -> list[float]:
+        return [
+            float(value)
+            for result in results
+            if (value := getattr(result, attribute)) is not None
+        ]
+
+    bm25 = values("bm25_score")
+    dense = values("dense_score")
+    reranker = values("rerank_score")
+    fused = [float(result.score) for result in results]
+    if context.retrieval_backend == "bm25":
+        return ("bm25", bm25) if bm25 else ("fused", fused)
+    if context.retrieval_backend == "hybrid":
+        if reranker:
+            return "reranker", reranker
+        if bm25 and dense:
+            return "fused", fused
+        if dense:
+            return "dense", dense
+        if bm25:
+            return "bm25", bm25
+        return "fused", fused
+    if reranker:
+        return "reranker", reranker
+    if bm25 and not dense:
+        return "bm25", bm25
+    if dense and not bm25:
+        return "dense", dense
+    return "fused", fused
+
+
+def _backend_score_profile(scores: list[float]) -> dict[str, float]:
+    if not scores:
+        return {
+            "top1": 0.0,
+            "margin": 0.0,
+            "margin_ratio": 0.0,
+            "top1_share": 0.0,
+            "relative_entropy": 0.0,
+            "iqr_ratio": 0.0,
+            "top1_robust_zscore": 0.0,
+            "rank_discounted_mass": 0.0,
+        }
+    ordered = sorted(scores, reverse=True)
+    top1 = ordered[0]
+    top2 = ordered[1] if len(ordered) > 1 else top1
+    margin = top1 - top2
+    margin_ratio = margin / max(abs(top1), abs(top2), 1e-12)
+
+    score_array = np.asarray(scores, dtype=float)
+    minimum = float(np.min(score_array))
+    maximum = float(np.max(score_array))
+    span = maximum - minimum
+    shifted = score_array - minimum
+    shifted_total = float(np.sum(shifted))
+    if shifted_total <= 1e-12:
+        masses = np.full(len(scores), 1.0 / len(scores), dtype=float)
+    else:
+        masses = shifted / shifted_total
+    relative_entropy = 0.0
+    if len(scores) > 1:
+        relative_entropy = -float(np.sum([
+            mass * math.log(mass)
+            for mass in masses
+            if mass > 0
+        ])) / math.log(len(scores))
+    q25, median, q75 = np.quantile(score_array, [0.25, 0.5, 0.75])
+    iqr = float(q75 - q25)
+    robust_scale = iqr if iqr > 1e-12 else span
+    robust_zscore = (top1 - float(median)) / robust_scale if robust_scale > 1e-12 else 0.0
+    rank_discounted_mass = sum(
+        float(mass) / math.log2(rank + 2)
+        for rank, mass in enumerate(masses)
+    )
+    return {
+        "top1": top1,
+        "margin": margin,
+        "margin_ratio": max(0.0, min(2.0, margin_ratio)),
+        "top1_share": float(np.max(masses)),
+        "relative_entropy": max(0.0, min(1.0, relative_entropy)),
+        "iqr_ratio": iqr / span if span > 1e-12 else 0.0,
+        "top1_robust_zscore": max(0.0, min(20.0, robust_zscore)),
+        "rank_discounted_mass": max(0.0, min(1.0, rank_discounted_mass)),
+    }
 
 
 def _coverage(values: list[str], text: str, *, empty_value: float = 1.0) -> float:
@@ -474,7 +584,7 @@ def _extraction_consistency(context: EvidenceContext, result_ids: set[str]) -> f
 
 
 def extract_features(context: EvidenceContext) -> SufficiencyFeatures:
-    """Compute bounded, provider-independent sufficiency features."""
+    """Compute provider-independent sufficiency features from observable runtime state."""
     results = list(context.retrieval_results)
     effective_scores = [
         float(result.rerank_score if result.rerank_score is not None else result.score)
@@ -483,6 +593,8 @@ def extract_features(context: EvidenceContext) -> SufficiencyFeatures:
     effective_scores.sort(reverse=True)
     top1 = effective_scores[0] if effective_scores else 0.0
     top2 = effective_scores[1] if len(effective_scores) > 1 else top1
+    score_source, backend_scores = _backend_score_values(context)
+    backend_profile = _backend_score_profile(backend_scores)
     texts = " ".join(result.passage.text for result in results)
     documents = {result.passage.doc_id or result.passage.id for result in results}
     result_ids = {result.passage.id for result in results}
@@ -508,6 +620,18 @@ def extract_features(context: EvidenceContext) -> SufficiencyFeatures:
         topk_min_score=effective_scores[-1] if effective_scores else 0.0,
         top1_top2_margin=top1 - top2,
         score_entropy=_score_entropy(effective_scores),
+        backend_top1_score=backend_profile["top1"],
+        backend_top1_top2_margin=backend_profile["margin"],
+        backend_margin_ratio=backend_profile["margin_ratio"],
+        backend_top1_share=backend_profile["top1_share"],
+        backend_relative_entropy=backend_profile["relative_entropy"],
+        backend_score_iqr_ratio=backend_profile["iqr_ratio"],
+        backend_top1_robust_zscore=backend_profile["top1_robust_zscore"],
+        backend_rank_discounted_mass=backend_profile["rank_discounted_mass"],
+        score_source_bm25=float(score_source == "bm25"),
+        score_source_dense=float(score_source == "dense"),
+        score_source_reranker=float(score_source == "reranker"),
+        score_source_fused=float(score_source == "fused"),
         sparse_dense_agreement=_rank_agreement(results, "bm25_score", "dense_score"),
         reranker_agreement=_rank_agreement(results, "score", "rerank_score"),
         new_entity_coverage=(
@@ -536,6 +660,9 @@ __all__ = [
     "SufficiencyExample",
     "SufficiencyFeatures",
     "SufficiencyPrediction",
+    "SUFFICIENCY_FEATURE_NAMES",
+    "SUFFICIENCY_FEATURE_NAMES_V1",
+    "SUFFICIENCY_FEATURE_SCHEMA_VERSION",
     "SufficiencyStatus",
     "SufficiencyCalibrationArtifact",
     "extract_features",
