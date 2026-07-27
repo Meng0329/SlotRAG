@@ -80,6 +80,7 @@ def _examples() -> list[ActionPolicyExample]:
                 sufficiency=prediction, has_rows=False, answerable=False,
                 retrieval_calls_used=1, retrieval_call_budget=3,
                 max_binding_beam_width=1,
+                topk_expansion_available=True,
             )
             quality = {"EXPAND_TOPK": 0.8, "REWRITE_QUERY": 0.7, "ABSTAIN": 0.0}
             oracle = "EXPAND_TOPK"
@@ -107,6 +108,8 @@ def _examples() -> list[ActionPolicyExample]:
                 sufficiency=prediction, has_rows=True, answerable=False,
                 retrieval_calls_used=1, retrieval_call_budget=3,
                 can_backtrack=True, binding_beam_width=1,
+                topk_expansion_available=True,
+                binding_beam_expansion_available=True,
             )
             quality = {"BACKTRACK": 0.7, "EXPAND_BINDING_BEAM": 0.6, "EXPAND_TOPK": 0.4, "ABSTAIN": 0.0}
             oracle = "BACKTRACK"

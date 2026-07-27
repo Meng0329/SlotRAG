@@ -500,6 +500,31 @@ def test_schema26_reports_plan_and_surface_repairs_without_backfilling_schema25(
     assert legacy_summary["evidence_surface_grounding_repairs"] is None
 
 
+def test_schema31_reports_executable_action_effects_without_backfilling_schema30():
+    current = _record("slotrag-qo", "q1", 1.0)
+    current["schema_version"] = 31
+    current["result"]["metrics"] = RunMetrics(
+        evidence_sufficiency_decisions=2,
+        physical_action_executions=2,
+        physical_action_extra_retrieval_calls=1,
+        physical_action_rows_added=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag", "q1", 1.0)
+    legacy["schema_version"] = 30
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag-qo")
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag")
+
+    assert current_summary["evidence_sufficiency_decisions"] == 2
+    assert current_summary["physical_action_executions"] == 2
+    assert current_summary["physical_action_extra_retrieval_calls"] == 1
+    assert current_summary["physical_action_rows_added"] == 1
+    assert legacy_summary["physical_action_executions"] is None
+    assert legacy_summary["physical_action_extra_retrieval_calls"] is None
+    assert legacy_summary["physical_action_rows_added"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

@@ -825,7 +825,7 @@ class BenchmarkRunner:
                         )
                         execution_profile = self._execution_profile()
                         record = {
-                            "schema_version": 30,
+                            "schema_version": 31,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,

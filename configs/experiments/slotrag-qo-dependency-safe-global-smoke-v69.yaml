@@ -1,0 +1,27 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+seed: 314159
+random_seeds: [314159]
+budget:
+  max_steps: 8
+  max_llm_calls: 48
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  qo_dependency_safe_global_dev_v69_smoke:
+    split: train
+    sample_size: 4
+    methods:
+      - slotrag
+      - slotrag-sufficiency
+      - slotrag-physical-policy
+      - slotrag-qo
+    retrieval_protocol: global_corpus
+    retrieval_backend: bm25
+    shared_index_dir: runs/slotrag-global-index-v64/runner-registry
+    sufficiency_calibrator_path: runs/slotrag-qo-development-validation-v66-valid/analysis/qo_trace_global_dev_v66_backend_features_complete/sufficiency-calibrator-v65-frozen.json
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/slotrag-qo-2x2-global-smoke-v67/plans/qo_trace_global_dev_v66_validation

@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 import unicodedata
 
 from pydantic import BaseModel, Field, ValidationError
@@ -1813,6 +1813,35 @@ class SlotMaterializer:
         self.last_retrieval_results = all_retrieval_results
         return merged, metrics
 
+    def estimate_materialization_retrieval_calls(self, contexts: list[dict[str, str]]) -> int:
+        """Return a conservative call estimate for one materialization pass."""
+        total = 0
+        for bindings in contexts or [{}]:
+            dual = bool(
+                self.question_context
+                and self.dual_query_retrieval
+                and (not self.dual_query_unbound_only or not bindings)
+            )
+            total += 2 if dual else 1
+        return total
+
+    def materialize_many_with_top_k(
+        self,
+        slot: Slot,
+        contexts: list[dict[str, str]],
+        *,
+        top_k: int,
+    ) -> tuple[list[BindingRow], RunMetrics]:
+        """Re-materialize a slot with a larger bounded evidence window."""
+        if top_k <= self.max_passages:
+            raise ValueError("expanded top_k must exceed the current materialization limit")
+        previous = self.max_passages
+        self.max_passages = top_k
+        try:
+            return self.materialize_many(slot, contexts)
+        finally:
+            self.max_passages = previous
+
 
 def _join_rows(left: list[BindingRow], right: list[BindingRow], left_field: str, right_field: str) -> list[BindingRow]:
     right_index: dict[str, list[BindingRow]] = defaultdict(list)
@@ -2060,6 +2089,35 @@ def _order_cost(order: list[str], cardinalities: dict[str, int]) -> float:
     return total
 
 
+def _accumulate_run_metrics(base: RunMetrics, delta: RunMetrics) -> RunMetrics:
+    """Accumulate a materialization delta without dropping newly added counters."""
+    data = base.model_dump(mode="python")
+    for name, incoming in delta.model_dump(mode="python").items():
+        current = data[name]
+        if isinstance(current, list):
+            current.extend(incoming)
+        elif isinstance(current, (int, float)) and isinstance(incoming, (int, float)):
+            data[name] = current + incoming
+        elif incoming is not None and current is None:
+            data[name] = incoming
+        elif isinstance(incoming, str) and incoming:
+            data[name] = incoming
+    return RunMetrics.model_validate(data)
+
+
+def _merge_binding_rows(rows: list[BindingRow], additions: list[BindingRow]) -> list[BindingRow]:
+    best: dict[tuple[str, tuple[tuple[str, str], ...]], BindingRow] = {}
+    for row in [*rows, *additions]:
+        key = (row.source_id, tuple(sorted(row.bindings.items())))
+        current = best.get(key)
+        if current is None or (row.confidence, row.retrieval_score or 0.0) > (
+            current.confidence,
+            current.retrieval_score or 0.0,
+        ):
+            best[key] = row
+    return list(best.values())
+
+
 class AdaptiveExecutor:
     def __init__(
         self,
@@ -2073,6 +2131,7 @@ class AdaptiveExecutor:
         adaptive_binding_beam: bool = False,
         action_policy: PhysicalActionPolicy | None = None,
         sufficiency_calibrator: EvidenceSufficiencyCalibrator | None = None,
+        retrieval_backend: Literal["bm25", "hybrid", "unknown"] = "unknown",
         random_seed: int = 2027,
         options: ExecutionOptions | None = None,
     ) -> None:
@@ -2086,6 +2145,7 @@ class AdaptiveExecutor:
         self.binding_beam = AdaptiveBindingBeam(max_width=max_binding_contexts)
         self.action_policy = action_policy
         self.sufficiency_calibrator = sufficiency_calibrator
+        self.retrieval_backend = retrieval_backend
         self.random = random.Random(random_seed)
         self.options = options or ExecutionOptions()
 
@@ -2101,6 +2161,8 @@ class AdaptiveExecutor:
         remaining_plan_depth: int,
         budget_remaining: int,
         binding_beam_width: int,
+        topk_expansion_available: bool = False,
+        topk_expansion_retrieval_calls: int = 1,
     ) -> tuple[RunMetrics, SufficiencyPrediction | None, Any | None, str | None]:
         prediction: SufficiencyPrediction | None = None
         model_name: str | None = None
@@ -2121,6 +2183,7 @@ class AdaptiveExecutor:
             })
             prediction = self.sufficiency_calibrator.predict(EvidenceContext(
                 retrieval_results=retrieval_results,
+                retrieval_backend=self.retrieval_backend,
                 predicate=slot.predicate,
                 requested_variables=sorted(slot.variables),
                 bound_variables=bound_variables,
@@ -2156,6 +2219,13 @@ class AdaptiveExecutor:
             retrieval_call_budget=self.max_retrieval_calls,
             binding_beam_width=binding_beam_width,
             max_binding_beam_width=self.binding_beam.max_width,
+            topk_expansion_available=topk_expansion_available,
+            topk_expansion_retrieval_calls=topk_expansion_retrieval_calls,
+            question_plus_slot_available=False,
+            binding_beam_expansion_available=False,
+            query_rewrite_available=False,
+            alternate_retriever_available=False,
+            can_backtrack=False,
         ))
         metrics = metrics.model_copy(update={
             "physical_action_decisions": metrics.physical_action_decisions + 1,
@@ -2367,7 +2437,14 @@ class AdaptiveExecutor:
             else:
                 rows, slot_metrics = self.materializer.materialize(slot, binding_contexts[0])
             materialization_ms = (time.perf_counter() - materialization_started) * 1000
-            retrieved_evidence.extend(getattr(self.materializer, "last_evidence", []))
+            slot_evidence = list(getattr(self.materializer, "last_evidence", []))
+            slot_materialization_traces = list(
+                getattr(self.materializer, "last_materialization_traces", [])
+            )
+            slot_retrieval_results = list(
+                getattr(self.materializer, "last_retrieval_results", [])
+            )
+            retrieved_evidence.extend(slot_evidence)
             materialized[slot.id] = rows
             cardinalities[slot.id] = len(rows)
             selectivity_error = abs(math.log1p(len(rows)) - math.log1p(slot.estimated_cardinality))
@@ -2431,23 +2508,144 @@ class AdaptiveExecutor:
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + slot_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + slot_metrics.extraction_validation_errors,
             })
+            expand_top_k = getattr(self.materializer, "materialize_many_with_top_k", None)
+            estimate_expansion_calls = getattr(
+                self.materializer,
+                "estimate_materialization_retrieval_calls",
+                None,
+            )
+            expansion_call_estimate = (
+                int(estimate_expansion_calls(binding_contexts))
+                if estimate_expansion_calls is not None
+                else len(binding_contexts)
+            )
+            current_top_k = getattr(self.materializer, "max_passages", None)
+            planned_top_k = (
+                physical_plan.top_k.get(slot.id)
+                if physical_plan is not None
+                else (max(int(current_top_k) * 2, int(current_top_k) + 1) if current_top_k else None)
+            )
+            expansion_policy = (
+                physical_plan.expansion_policy.get(slot.id)
+                if physical_plan is not None
+                else "adaptive"
+            )
+            slot_call_budget = (
+                physical_plan.budget_allocation[slot.id].retrieval_calls
+                if physical_plan is not None
+                else self.max_retrieval_calls
+            )
+            topk_expansion_available = bool(
+                expand_top_k is not None
+                and current_top_k is not None
+                and planned_top_k is not None
+                and int(planned_top_k) > int(current_top_k)
+                and expansion_policy == "adaptive"
+                and metrics.retrieval_calls + expansion_call_estimate <= self.max_retrieval_calls
+                and slot_metrics.retrieval_calls + expansion_call_estimate <= slot_call_budget
+            )
             metrics, sufficiency_prediction, action_decision, sufficiency_model = self._evaluate_sufficiency_and_action(
                 metrics,
                 rows,
                 slot=slot,
                 plan=plan,
                 binding_contexts=binding_contexts,
-                retrieval_results=list(getattr(self.materializer, "last_retrieval_results", [])),
+                retrieval_results=slot_retrieval_results,
                 remaining_plan_depth=len(remaining),
                 budget_remaining=max(self.max_retrieval_calls - metrics.retrieval_calls, 0),
                 binding_beam_width=adaptive_beam_width,
+                topk_expansion_available=topk_expansion_available,
+                topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
             )
+            initial_row_count = len(rows)
+            action_executed = False
+            action_execution_reason: str | None = None
+            action_retrieval_calls = 0
+            action_rows_added = 0
+            action_top_k_before: int | None = None
+            action_top_k_after: int | None = None
+            post_sufficiency_prediction: SufficiencyPrediction | None = None
+            post_action_decision = None
+            effective_action_decision = action_decision
+            if action_decision is not None and action_decision.action == "EXPAND_TOPK":
+                action_top_k_before = int(current_top_k)
+                action_top_k_after = int(planned_top_k)
+                expansion_started = time.perf_counter()
+                expanded_rows, expanded_metrics = expand_top_k(
+                    slot,
+                    binding_contexts,
+                    top_k=action_top_k_after,
+                )
+                expansion_ms = (time.perf_counter() - expansion_started) * 1000
+                expanded_evidence = list(getattr(self.materializer, "last_evidence", []))
+                expanded_traces = list(
+                    getattr(self.materializer, "last_materialization_traces", [])
+                )
+                expanded_retrieval_results = list(
+                    getattr(self.materializer, "last_retrieval_results", [])
+                )
+                rows = _merge_binding_rows(rows, expanded_rows)
+                slot_evidence.extend(expanded_evidence)
+                slot_materialization_traces.extend(expanded_traces)
+                slot_retrieval_results.extend(expanded_retrieval_results)
+                retrieved_evidence.extend(expanded_evidence)
+                metrics = _accumulate_run_metrics(metrics, expanded_metrics)
+                action_retrieval_calls = expanded_metrics.retrieval_calls
+                action_rows_added = max(len(rows) - initial_row_count, 0)
+                expanded_selectivity_error = abs(
+                    math.log1p(len(rows)) - math.log1p(slot.estimated_cardinality)
+                )
+                metrics = metrics.model_copy(update={
+                    "materialization_latency_ms": metrics.materialization_latency_ms + expansion_ms,
+                    "materialization_requests": metrics.materialization_requests + len(binding_contexts),
+                    "intermediate_binding_sizes": metrics.intermediate_binding_sizes + [len(rows)],
+                    "slot_selectivity_errors": metrics.slot_selectivity_errors + [expanded_selectivity_error],
+                    "physical_action_executions": metrics.physical_action_executions + 1,
+                    "physical_action_executed": metrics.physical_action_executed + ["EXPAND_TOPK"],
+                    "physical_action_extra_retrieval_calls": (
+                        metrics.physical_action_extra_retrieval_calls + action_retrieval_calls
+                    ),
+                    "physical_action_rows_added": metrics.physical_action_rows_added + action_rows_added,
+                })
+                action_executed = True
+                action_execution_reason = "bounded_top_k_expansion"
+                materialized[slot.id] = rows
+                cardinalities[slot.id] = len(rows)
+                metrics, post_sufficiency_prediction, post_action_decision, _ = (
+                    self._evaluate_sufficiency_and_action(
+                        metrics,
+                        rows,
+                        slot=slot,
+                        plan=plan,
+                        binding_contexts=binding_contexts,
+                        retrieval_results=slot_retrieval_results,
+                        remaining_plan_depth=len(remaining),
+                        budget_remaining=max(self.max_retrieval_calls - metrics.retrieval_calls, 0),
+                        binding_beam_width=adaptive_beam_width,
+                        topk_expansion_available=False,
+                        topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
+                    )
+                )
+                effective_action_decision = post_action_decision
+            if (
+                effective_action_decision is not None
+                and effective_action_decision.action in {"STOP_SLOT", "ANSWER", "ABSTAIN"}
+            ):
+                metrics = metrics.model_copy(update={
+                    "physical_action_executions": metrics.physical_action_executions + 1,
+                    "physical_action_executed": (
+                        metrics.physical_action_executed + [effective_action_decision.action]
+                    ),
+                })
+                if not action_executed:
+                    action_executed = True
+                    action_execution_reason = "control_transition"
             slot_traces.append(SlotExecutionTrace(
                 step=step,
                 slot_id=slot.id,
                 predicate=slot.predicate,
                 binding_contexts=[dict(context) for context in binding_contexts],
-                materializations=list(getattr(self.materializer, "last_materialization_traces", [])),
+                materializations=slot_materialization_traces,
                 extracted_row_count=len(rows),
                 rows_after_join=len(rows),
                 sufficiency_model=sufficiency_model,
@@ -2463,7 +2661,30 @@ class AdaptiveExecutor:
                     [PhysicalActionCandidateTrace.model_validate(candidate.model_dump()) for candidate in action_decision.candidates]
                     if action_decision else []
                 ),
+                action_executed=action_executed,
+                action_execution_reason=action_execution_reason,
+                action_rows_added=action_rows_added,
+                action_retrieval_calls=action_retrieval_calls,
+                action_top_k_before=action_top_k_before,
+                action_top_k_after=action_top_k_after,
+                post_action_sufficiency_status=(
+                    post_sufficiency_prediction.status if post_sufficiency_prediction else None
+                ),
+                post_action_sufficiency_probability=(
+                    post_sufficiency_prediction.probability if post_sufficiency_prediction else None
+                ),
+                post_action_selected=(post_action_decision.action if post_action_decision else None),
             ))
+            if effective_action_decision is not None and effective_action_decision.action == "ABSTAIN":
+                return ExecutionResult(
+                    rows=[],
+                    evidence=retrieved_evidence,
+                    order=order,
+                    metrics=metrics,
+                    slot_traces=slot_traces,
+                    status="empty",
+                    error="physical action policy abstained because evidence was insufficient",
+                )
             if not rows:
                 return ExecutionResult(
                     rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,

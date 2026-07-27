@@ -45,10 +45,14 @@ def test_logical_plan_compiles_to_physical_plan_with_validation_telemetry():
     )
 
     assert [subgoal.predicate for subgoal in physical.logical_plan.subgoals] == ["born_in", "located_in"]
-    assert physical.slot_execution_order == ["S2", "S1"]
+    assert physical.slot_execution_order == ["S1", "S2"]
     assert physical.top_k == {"S1": 8, "S2": 8}
     assert physical.reranker_usage == {"S1": True, "S2": True}
     assert physical.binding_beam_width == {"S1": 3, "S2": 3}
+    assert {slot_id: budget.retrieval_calls for slot_id, budget in physical.budget_allocation.items()} == {
+        "S1": 6,
+        "S2": 6,
+    }
     assert physical.telemetry.validation_status == "valid"
     assert physical.telemetry.validation_errors == []
     assert physical.telemetry.canonicalized_predicates == 2
@@ -80,4 +84,44 @@ def test_invalid_logical_plan_exposes_all_compile_errors_in_telemetry():
     assert any(error.startswith("INVALID_COST") for error in telemetry.validation_errors)
     assert "JOIN_GRAPH_DISCONNECTED" in telemetry.validation_errors
     assert any(error.startswith("ANSWER_UNREACHABLE") for error in telemetry.validation_errors)
+    assert any(error.startswith("DEPENDENCY_CYCLE") for error in telemetry.validation_errors)
     assert telemetry.detected_cycles == ["S1", "S2"]
+
+
+def test_physical_plan_cost_orders_ready_slots_without_violating_dependencies():
+    logical = logical_plan_from_slot_plan(
+        SlotPlan(
+            slots=[
+                Slot(
+                    id="S1",
+                    predicate="Expensive Source",
+                    arguments=["?x"],
+                    estimated_cardinality=10,
+                    estimated_cost=2,
+                ),
+                Slot(
+                    id="S2",
+                    predicate="Cheap Source",
+                    arguments=["?y"],
+                    estimated_cardinality=1,
+                    estimated_cost=1,
+                ),
+                Slot(
+                    id="S3",
+                    predicate="Join Target",
+                    arguments=["?x", "?y", "?answer"],
+                    estimated_cardinality=1,
+                    estimated_cost=1,
+                ),
+            ],
+            joins=[
+                JoinSpec(left_slot="S1", left_field="x", right_slot="S3", right_field="x"),
+                JoinSpec(left_slot="S2", left_field="y", right_slot="S3", right_field="y"),
+            ],
+            outputs=["?answer"],
+        )
+    )
+
+    physical = compile_physical_plan(logical)
+
+    assert physical.slot_execution_order == ["S2", "S1", "S3"]

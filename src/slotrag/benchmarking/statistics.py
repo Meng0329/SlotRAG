@@ -87,8 +87,12 @@ METRICS = [
     "binding_candidates_pruned",
     "binding_correct_path_pruned",
     "physical_action_decisions",
+    "physical_action_executions",
+    "physical_action_extra_retrieval_calls",
+    "physical_action_rows_added",
     "physical_action_mean_utility",
     "physical_action_mean_candidate_count",
+    "evidence_sufficiency_decisions",
     "evidence_only_fallbacks",
     "answer_reconciliations",
     "answer_span_normalizations",
@@ -506,6 +510,14 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             "evidence_surface_grounding_repairs",
         )
     }
+    schema31_metrics = {
+        name: metrics[name] if schema_version >= 31 else None
+        for name in (
+            "physical_action_executions",
+            "physical_action_extra_retrieval_calls",
+            "physical_action_rows_added",
+        )
+    }
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -588,6 +600,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema24_metrics,
         **schema25_metrics,
         **schema26_metrics,
+        **schema31_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,

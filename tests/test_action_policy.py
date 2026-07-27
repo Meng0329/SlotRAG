@@ -63,6 +63,7 @@ def test_policy_evaluation_reports_quality_cost_and_oracle_regret():
             retrieval_calls_used=1,
             retrieval_call_budget=3,
             max_binding_beam_width=1,
+            topk_expansion_available=True,
         ),
         action_quality={
             "EXPAND_TOPK": 0.8,
@@ -97,6 +98,7 @@ def test_legacy_decision_is_labeled_and_oracle_ignores_unlabeled_actions():
         sufficiency=prediction,
         retrieval_calls_used=0,
         retrieval_call_budget=1,
+        query_rewrite_available=True,
     )
     policy = PhysicalActionPolicy()
     legacy = policy.decide_legacy(context)
@@ -120,14 +122,41 @@ def test_action_accuracy_uses_only_examples_with_oracle_labels():
     )
     labeled = ActionPolicyExample(
         example_id="labeled",
-        context=ActionPolicyContext(sufficiency=prediction, retrieval_call_budget=1),
+        context=ActionPolicyContext(
+            sufficiency=prediction,
+            retrieval_call_budget=1,
+            query_rewrite_available=True,
+        ),
         action_quality={"REWRITE_QUERY": 1.0, "ABSTAIN": 0.0},
         oracle_action="REWRITE_QUERY",
     )
     unlabeled = ActionPolicyExample(
         example_id="unlabeled",
-        context=ActionPolicyContext(sufficiency=prediction, retrieval_call_budget=1),
+        context=ActionPolicyContext(
+            sufficiency=prediction,
+            retrieval_call_budget=1,
+            query_rewrite_available=True,
+        ),
         action_quality={"ABSTAIN": 0.0},
     )
     report = evaluate_action_policy([labeled, unlabeled], PhysicalActionPolicy(), policy_name="oracle")
     assert report.action_accuracy == 1.0
+
+
+def test_runtime_action_candidates_require_explicit_executor_capabilities():
+    prediction = SufficiencyPrediction(
+        status="INSUFFICIENT",
+        probability=0.1,
+        raw_logit=-2.2,
+        features=SufficiencyFeatures(),
+    )
+
+    actions = {
+        candidate.action
+        for candidate in PhysicalActionPolicy().candidates(ActionPolicyContext(
+            sufficiency=prediction,
+            retrieval_call_budget=4,
+        ))
+    }
+
+    assert actions == {"ABSTAIN"}

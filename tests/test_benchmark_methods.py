@@ -1268,9 +1268,9 @@ def test_slotrag_qo_compiles_and_passes_physical_plan_to_executor(monkeypatch):
     )
 
     assert observed["strategy"] == "adaptive"
-    assert observed["physical_plan"].slot_execution_order == ["S2", "S1"]
-    assert result.order == ["S2", "S1"]
-    assert result.metrics.physical_plan_order == ["S2", "S1"]
+    assert observed["physical_plan"].slot_execution_order == ["S1", "S2"]
+    assert result.order == ["S1", "S2"]
+    assert result.metrics.physical_plan_order == ["S1", "S2"]
 
 
 @pytest.mark.parametrize(

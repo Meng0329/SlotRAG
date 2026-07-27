@@ -740,9 +740,9 @@ def test_adaptive_executor_honors_physical_plan_order_and_records_application():
 
     result = AdaptiveExecutor(materializer).execute(plan, physical_plan=physical)
 
-    assert physical.slot_execution_order == ["S2", "S1"]
+    assert physical.slot_execution_order == ["S1", "S2"]
     assert result.status == "ok"
-    assert result.order == ["S2", "S1"]
+    assert result.order == ["S1", "S2"]
     assert result.metrics.physical_plan_applied == 1
     assert result.metrics.physical_plan_order_mismatches == 0
 
@@ -924,6 +924,102 @@ def test_executor_records_adaptive_beam_and_action_policy_telemetry():
     assert result.metrics.physical_action_decisions == 2
     assert len(result.metrics.physical_action_selected) == 2
     assert result.metrics.physical_action_policy == "utility"
+
+
+def test_executor_executes_one_bounded_topk_expansion_and_merges_rows():
+    class ExpandableMaterializer:
+        max_passages = 1
+
+        def __init__(self):
+            self.calls = []
+            self.last_evidence = []
+            self.last_materialization_traces = []
+            self.last_retrieval_results = []
+
+        def materialize(self, slot, bindings):
+            self.calls.append(("initial", slot.id, dict(bindings), self.max_passages))
+            return [], RunMetrics(retrieval_calls=1, passages_processed=1)
+
+        def materialize_many_with_top_k(self, slot, contexts, *, top_k):
+            self.calls.append(("expand", slot.id, list(contexts), top_k))
+            return [
+                BindingRow(
+                    slot_id=slot.id,
+                    bindings={"answer": "Ada"},
+                    source_id="p2",
+                    source_span="Ada is the answer.",
+                    confidence=1.0,
+                    retrieval_score=1.0,
+                )
+            ], RunMetrics(retrieval_calls=1, passages_processed=2)
+
+    materializer = ExpandableMaterializer()
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    physical = compile_physical_plan(logical_plan_from_slot_plan(plan), top_k=2)
+
+    result = AdaptiveExecutor(
+        materializer,
+        max_retrieval_calls=2,
+        action_policy=PhysicalActionPolicy(),
+    ).execute(plan, physical_plan=physical)
+
+    assert result.status == "ok"
+    assert result.rows == [{"answer": "Ada"}]
+    assert [call[0] for call in materializer.calls] == ["initial", "expand"]
+    assert result.metrics.retrieval_calls == 2
+    assert result.metrics.physical_action_executions == 2
+    assert result.metrics.physical_action_executed == ["EXPAND_TOPK", "ANSWER"]
+    assert result.metrics.physical_action_rows_added == 1
+    assert result.metrics.physical_action_extra_retrieval_calls == 1
+    assert result.slot_traces[0].action_executed is True
+    assert result.slot_traces[0].action_rows_added == 1
+    assert result.slot_traces[0].action_top_k_before == 1
+    assert result.slot_traces[0].action_top_k_after == 2
+
+
+def test_executor_does_not_offer_topk_expansion_after_retrieval_budget_is_spent():
+    class BudgetBoundMaterializer:
+        max_passages = 1
+
+        def __init__(self):
+            self.calls = []
+            self.last_evidence = []
+            self.last_materialization_traces = []
+            self.last_retrieval_results = []
+
+        def materialize(self, slot, bindings):
+            self.calls.append(("initial", slot.id, dict(bindings)))
+            return [], RunMetrics(retrieval_calls=1, passages_processed=1)
+
+        def materialize_many_with_top_k(self, slot, contexts, *, top_k):
+            self.calls.append(("expand", slot.id, list(contexts), top_k))
+            return [], RunMetrics(retrieval_calls=1, passages_processed=1)
+
+    materializer = BudgetBoundMaterializer()
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+    physical = compile_physical_plan(logical_plan_from_slot_plan(plan), top_k=2)
+
+    result = AdaptiveExecutor(
+        materializer,
+        max_retrieval_calls=1,
+        action_policy=PhysicalActionPolicy(),
+    ).execute(plan, physical_plan=physical)
+
+    assert result.status == "empty"
+    assert [call[0] for call in materializer.calls] == ["initial"]
+    assert result.metrics.retrieval_calls == 1
+    assert result.metrics.physical_action_extra_retrieval_calls == 0
+    assert "EXPAND_TOPK" not in {
+        candidate.action for candidate in result.slot_traces[0].action_candidates
+    }
 
 
 def test_slot_compiler_repairs_invalid_plan_once():

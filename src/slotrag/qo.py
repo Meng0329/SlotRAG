@@ -316,7 +316,7 @@ def _validation_telemetry(plan: LogicalPlan, started: float) -> PlanTelemetry:
             errors.append(f"DEPENDENCY_SELF_REFERENCE: {edge.source_slot}")
     detected_cycles = _cycle_nodes([(edge.source_slot, edge.target_slot) for edge in plan.dependency_edges])
     if detected_cycles:
-        warnings.append(f"DEPENDENCY_CYCLE: {', '.join(detected_cycles)}")
+        errors.append(f"DEPENDENCY_CYCLE: {', '.join(detected_cycles)}")
 
     if plan.answer_variable not in declared_variables or not occurrences.get(plan.answer_variable):
         unreachable_variables.append(plan.answer_variable)
@@ -380,7 +380,31 @@ def compile_physical_plan(
         selectivity = subgoal.estimated_selectivity if subgoal.estimated_selectivity is not None else 1.0
         return (subgoal.estimated_cost * subgoal.estimated_cardinality * selectivity, -len(subgoal.variables), subgoal.id)
 
-    ordered = sorted(canonicalized.subgoals, key=physical_priority)
+    subgoals_by_id = {subgoal.id: subgoal for subgoal in canonicalized.subgoals}
+    children: dict[str, set[str]] = {
+        subgoal.id: set() for subgoal in canonicalized.subgoals
+    }
+    incoming = {subgoal.id: 0 for subgoal in canonicalized.subgoals}
+    for edge in canonicalized.dependency_edges:
+        if edge.target_slot in children[edge.source_slot]:
+            continue
+        children[edge.source_slot].add(edge.target_slot)
+        incoming[edge.target_slot] += 1
+
+    ready = [
+        subgoals_by_id[slot_id]
+        for slot_id, dependency_count in incoming.items()
+        if dependency_count == 0
+    ]
+    ordered: list[LogicalSubgoal] = []
+    while ready:
+        subgoal = min(ready, key=physical_priority)
+        ready.remove(subgoal)
+        ordered.append(subgoal)
+        for target in sorted(children[subgoal.id]):
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(subgoals_by_id[target])
     slot_ids = [subgoal.id for subgoal in ordered]
     query_formulation = {
         subgoal.id: " ".join(
@@ -396,7 +420,7 @@ def compile_physical_plan(
     }
     policies = {
         subgoal.id: BudgetAllocation(
-            retrieval_calls=1,
+            retrieval_calls=(2 * binding_beam_width if expansion_policy == "adaptive" else binding_beam_width),
             token_budget=2048,
             latency_budget_ms=1000.0,
         )

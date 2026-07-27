@@ -3726,3 +3726,47 @@ HotpotQA cold 比 v63 慢约 2 倍，因为 v64 额外写出 BM25 artifact；这
 
 该版本只解除数据管理门禁，没有 answer-quality 结果。global sufficiency 和 executable physical action
 仍未通过，因此不启动 2×2/evaluation/full baseline matrix，也不声称 SOTA 或 10% 提升。
+
+# v65-v67 Backend-aware Sufficiency 与 2x2 Runtime 审计（2026-07-27）
+
+v65 在 v63 train/development enriched traces 上冻结 backend-aware sufficiency 特征。随后 v66-valid 使用
+与 v63 零重叠的 train 样本完成独立验证：HotpotQA selected/legacy Brier 为 `0.1508/0.2036`，paired
+delta 95% CI=`[-0.0952,-0.0129]`；2Wiki 为 `0.1449/0.1684`，CI=`[-0.0510,0.0069]`，后者跨 0。
+这证明 calibration headroom，不证明 answer quality 或 evaluation 提升。
+
+v66-valid 共 80/80 `ok`，HotpotQA/2Wiki 各 40；global primary 为 `0.4791/0.4167`，evidence recall 为
+`0.4875/0.5250`。headroom proxy 中 available-answer retrieval miss=`32`，expand-top-k recoverable=`7`，
+selected-evidence extraction failure=`7`，rows-correct/final-wrong=`1`。首次 v66 运行因 API 环境变量未加载
+而 80/80 configuration failure，保留为无效工件，不与 valid run 合并。
+
+v67 在相同 global development 协议做每数据集 4 题的 2x2 smoke。32/32 records 完整，但审计发现
+physical actions 只有 selected telemetry，executed=0，execution coverage=0。因此 2Wiki treatment
+相对 SlotRAG 的 `-0.25` 和 HotpotQA 的 `0.00` 都不能解释为方法效果，只能说明 runtime no-op 缺陷。
+`slotrag-sufficiency` 单独因子与 baseline answers/rows/evidence 完全一致，符合 predictor-only 设计。
+
+v68 前置实现现只暴露可执行动作：有预算时允许一次 bounded `EXPAND_TOPK` 并合并 rows/evidence/trace，
+随后重算 sufficiency；`STOP_SLOT/ANSWER/ABSTAIN` 执行 control transition；rewrite/switch/backtrack 等未实现
+动作从 runtime capabilities 中禁用。全量代码门禁为 `317 passed, 1 skipped`，compileall 与 diff check
+通过。完整指标、hash、命令和模块保留/降级清单见 `docs/optimization-audit-v65-v67.md`。
+
+当前没有冻结 evaluation + exact upstream + 同协议 SOTA 对照，已验证 SOTA 可比单元格为 0；不能声称
+达到用户提出的 80% SOTA 覆盖。下一步仅运行 v68 executable-action global smoke，通过动作覆盖、预算、
+unsupported-answer 和逐题配对 gate 后再决定是否扩大 development 实验。
+
+# v68 Executable Action 与 v69 Dependency-safe Join Order（2026-07-27）
+
+v68 在与 v67 完全相同的 8 个 train/global-corpus 问题和冻结计划上复跑 2x2。32/32 records 为 `ok`，
+schema 31 trace 完整；physical/QO selected-action execution coverage 均从 0 提升到 `1.0`。2Wiki 每题
+执行 0.50/0.75 次额外 retrieval calls，Hotpot 为 2.00/2.25；实际新增 rows，但没有获得质量增益。
+
+2Wiki SlotRAG/+suff/+physical/QO primary=`0.50/0.50/0.25/0.25`；Hotpot 四者均为 `0.25`。physical/QO
+使两数据集 evidence recall 下降，tokens 和 wall latency 上升。质量/成本 gate 明确失败，不扩大实验。
+
+唯一 paired loss 的 trace 显示 optimizer 把依赖 `S1 -> S2` 排成 `S2 -> S1`，先执行未绑定 FatherOf，
+adaptive beam 剪掉 3 个候选；baseline 的依赖顺序得到正确答案。这不是 predicate case，而是 join-order
+correctness 缺失。v69 只将 physical ordering 改为 dependency-constrained cost-based topological sort，
+dependency cycle 变为 compile error；不改其他模块。全量测试 `318 passed, 1 skipped`。
+
+Qwen raw answer 中的 think 内容继续保留用于审计，官方评分使用 `prediction_scored`，已验证提取最后一个
+`</think>` 后或 final/answer tag 内容。完整结果、成本、失败案例和 hash 见
+`docs/optimization-audit-v68.md`。

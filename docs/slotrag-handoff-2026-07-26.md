@@ -417,3 +417,42 @@ search 的 RRF top-1 score 恒定，必须改用 raw BM25/rank/quantile；rerank
 完整证据和下一门禁：`docs/optimization-audit-v63.md`。下一任务先优化 `_aggregate_passages` 的重复
 provenance 聚合并实现真实 sparse-index persistence，然后再做 backend-aware sufficiency；不要直接跑
 2×2、不要修改 evaluation split、不要新增 predicate guard。
+
+## v65-v67 校准、独立验证与 runtime no-op 审计（2026-07-27）
+
+v65 已在 v63 development traces 上冻结 backend-aware sufficiency：HotpotQA `full_v2@l2=0.01`，2Wiki
+`structural_backend_raw@l2=0.1`。v66-valid 使用与 v63 零重叠的 train 样本各 40 题验证。HotpotQA
+Brier 由 legacy `0.2036` 降为 `0.1508`，paired 95% CI 不跨 0；2Wiki 由 `0.1684` 降为 `0.1449`，但
+CI 跨 0。冻结 validation/calibrator SHA 分别为 `c6fc076c...a71f655`、`858653ec...03044d8`。
+
+有效 v66 目录是 `runs/slotrag-qo-development-validation-v66-valid`：80/80 ok、无 retry/failure/empty、
+trace 完整。首次 `runs/slotrag-qo-development-validation-v66` 因未加载 API key 环境变量而 80/80
+configuration failure，必须保留并标记 invalid。v66 headroom 为 retrieval-miss proxy 32、expand top-k 7、
+selected evidence/extraction failure 7、rows-correct/final-wrong 1。
+
+v67 目录 `runs/slotrag-qo-2x2-global-smoke-v67`，32/32 ok，但 physical action selected 后从未执行，
+execution coverage=0。因此该 smoke 的 Hotpot tie 和 2Wiki negative 不是方法效果证据。compact audit：
+`summaries/qo_trace_global_dev_v66_validation/runtime-action-audit-v67.json`，SHA `a96ec056...3dba4`。
+
+当前代码已进入 v68 pre-smoke 状态：只暴露真正可执行的动作；实现一次有预算约束的 `EXPAND_TOPK`，
+合并 rows/evidence/trace 后重新预测；控制动作记录 executed；未实现动作禁止成为候选。新增 schema 31
+action metrics 和 compact 2x2 audit。全量测试 `317 passed, 1 skipped`，compileall/diff check 通过。
+
+下一步：新目录运行 v68 global development smoke，先验证 action execution coverage、额外 retrieval calls、
+预算和 unsupported records。不得用 4 题 smoke 调阈值；gate 不通过就继续诊断，不启动 evaluation/full
+baseline matrix。完整记录见 `docs/optimization-audit-v65-v67.md`。
+
+## v68 结果与 v69 当前状态（2026-07-27）
+
+v68 目录：`runs/slotrag-qo-action-execution-global-smoke-v68`。与 v67 相同 8 题、相同 imported frozen
+plans；32/32 ok，trace/attempt/manifest 完整。动作 execution coverage=`1.0`，但 2Wiki physical/QO
+相对 SlotRAG 都为 `-0.25`（0/3/1），Hotpot 都为 0（0/4/0）；成本明显上升，quality/cost gate 失败。
+
+根因不是 top-k 本身：唯一 loss 的逻辑 dependency 是 `S1 -> S2`，旧 physical sort 忽略 dependency，
+按成本排成 `S2 -> S1`，未绑定检索后 beam 剪掉正确路径。v69 已用 TDD 改为 dependency-constrained
+cost-based topological sort，并把 cycle 升为 compile error。全量 `318 passed, 1 skipped`，compileall/
+diff check 通过。
+
+下一步用同一 8 题和同一逻辑计划运行 v69，只验证 join-order correctness 修复的 paired effect。不要同时
+调 action utility；若 loss 消失但成本无收益，下一版本再用较大 development traces 校准 action marginal
+gain。详见 `docs/optimization-audit-v68.md`。

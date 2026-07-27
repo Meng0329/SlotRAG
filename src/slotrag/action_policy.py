@@ -38,8 +38,12 @@ class ActionPolicyContext(StrictModel):
     binding_beam_width: int = Field(default=1, ge=1)
     max_binding_beam_width: int = Field(default=8, ge=1)
     can_backtrack: bool = False
-    query_rewrite_available: bool = True
-    alternate_retriever_available: bool = True
+    topk_expansion_available: bool = False
+    topk_expansion_retrieval_calls: int = Field(default=1, ge=1)
+    question_plus_slot_available: bool = False
+    binding_beam_expansion_available: bool = False
+    query_rewrite_available: bool = False
+    alternate_retriever_available: bool = False
 
 
 class ActionCandidate(StrictModel):
@@ -137,34 +141,51 @@ class PhysicalActionPolicy:
                 latency_ms=15,
                 rationale="structured rows are answerable and calibrated evidence is available",
             ))
-        if prediction.status == "SUFFICIENT" and context.has_rows:
+        if context.has_rows:
             candidates.append(self._candidate(
                 "STOP_SLOT",
-                gain=probability * 0.95,
-                rationale="slot evidence is sufficient; stop further expansion",
+                gain=probability * (0.95 if prediction.status == "SUFFICIENT" else 0.80),
+                rationale=(
+                    "slot evidence is sufficient; stop further expansion"
+                    if prediction.status == "SUFFICIENT"
+                    else "accept the current rows without spending more retrieval budget"
+                ),
             ))
-        if remaining_calls > 0:
+        if (
+            context.topk_expansion_available
+            and remaining_calls >= context.topk_expansion_retrieval_calls
+        ):
             uncertainty = max(1.0 - probability, 0.0)
             candidates.append(self._candidate(
                 "EXPAND_TOPK",
-                gain=uncertainty * (0.35 + 0.35 * features.score_entropy),
-                calls=1,
+                gain=min(probability + uncertainty * (0.35 + 0.35 * features.score_entropy), 1.0),
+                calls=context.topk_expansion_retrieval_calls,
                 tokens=512,
                 latency_ms=120,
                 rationale="uncertainty and score dispersion leave recoverable evidence headroom",
             ))
+        if remaining_calls > 0 and context.question_plus_slot_available:
+            uncertainty = max(1.0 - probability, 0.0)
             candidates.append(self._candidate(
                 "RETRIEVE_QUESTION_PLUS_SLOT",
-                gain=uncertainty * (0.25 + 0.25 * (1.0 - features.predicate_coverage)),
+                gain=min(
+                    probability + uncertainty * (0.25 + 0.25 * (1.0 - features.predicate_coverage)),
+                    1.0,
+                ),
                 calls=1,
                 tokens=256,
                 latency_ms=110,
                 rationale="query context may recover predicate coverage",
             ))
+        if remaining_calls > 0:
+            uncertainty = max(1.0 - probability, 0.0)
             if context.query_rewrite_available:
                 candidates.append(self._candidate(
                     "REWRITE_QUERY",
-                    gain=uncertainty * (0.20 + 0.30 * (1.0 - features.bound_variable_coverage)),
+                    gain=min(
+                        probability + uncertainty * (0.20 + 0.30 * (1.0 - features.bound_variable_coverage)),
+                        1.0,
+                    ),
                     calls=1,
                     tokens=256,
                     latency_ms=100,
@@ -173,13 +194,20 @@ class PhysicalActionPolicy:
             if context.alternate_retriever_available:
                 candidates.append(self._candidate(
                     "SWITCH_RETRIEVER",
-                    gain=uncertainty * (0.15 + 0.25 * (1.0 - features.sparse_dense_agreement)),
+                    gain=min(
+                        probability + uncertainty * (0.15 + 0.25 * (1.0 - features.sparse_dense_agreement)),
+                        1.0,
+                    ),
                     calls=1,
                     tokens=128,
                     latency_ms=90,
                     rationale="retriever disagreement indicates a complementary ranking may help",
                 ))
-        if context.binding_beam_width < context.max_binding_beam_width and features.extraction_consistency > 0:
+        if (
+            context.binding_beam_expansion_available
+            and context.binding_beam_width < context.max_binding_beam_width
+            and features.extraction_consistency > 0
+        ):
             candidates.append(self._candidate(
                 "EXPAND_BINDING_BEAM",
                 gain=max(1.0 - features.new_entity_coverage, 0.0) * 0.35,
@@ -218,8 +246,14 @@ class PhysicalActionPolicy:
         prediction = context.sufficiency
         if context.answerable and context.has_rows and prediction.status == "SUFFICIENT":
             action: Action = "ANSWER"
-        elif context.retrieval_calls_used < context.retrieval_call_budget:
+        elif (
+            context.topk_expansion_available
+            and context.retrieval_calls_used + context.topk_expansion_retrieval_calls
+            <= context.retrieval_call_budget
+        ):
             action = "EXPAND_TOPK"
+        elif context.has_rows:
+            action = "STOP_SLOT"
         else:
             action = "ABSTAIN"
         candidates = self.candidates(context)
@@ -228,7 +262,13 @@ class PhysicalActionPolicy:
 
     def decide_fixed_topk(self, context: ActionPolicyContext) -> ActionDecision:
         action: Action = "ANSWER" if context.answerable and context.has_rows else (
-            "EXPAND_TOPK" if context.retrieval_calls_used < context.retrieval_call_budget else "ABSTAIN"
+            "EXPAND_TOPK"
+            if (
+                context.topk_expansion_available
+                and context.retrieval_calls_used + context.topk_expansion_retrieval_calls
+                <= context.retrieval_call_budget
+            )
+            else "STOP_SLOT" if context.has_rows else "ABSTAIN"
         )
         candidates = self.candidates(context)
         selected = next(candidate for candidate in candidates if candidate.action == action)

@@ -301,6 +301,15 @@ class SlotExecutionTrace(StrictModel):
     action_selected: str | None = None
     action_utility: float | None = None
     action_candidates: list[PhysicalActionCandidateTrace] = Field(default_factory=list)
+    action_executed: bool = False
+    action_execution_reason: str | None = None
+    action_rows_added: int = Field(default=0, ge=0)
+    action_retrieval_calls: int = Field(default=0, ge=0)
+    action_top_k_before: int | None = Field(default=None, ge=1)
+    action_top_k_after: int | None = Field(default=None, ge=1)
+    post_action_sufficiency_status: Literal["SUFFICIENT", "PARTIAL", "INSUFFICIENT"] | None = None
+    post_action_sufficiency_probability: float | None = Field(default=None, ge=0, le=1)
+    post_action_selected: str | None = None
 
 
 class RunMetrics(StrictModel):
@@ -365,6 +374,10 @@ class RunMetrics(StrictModel):
     physical_action_selected: list[str] = Field(default_factory=list)
     physical_action_utilities: list[float] = Field(default_factory=list)
     physical_action_candidate_counts: list[int] = Field(default_factory=list)
+    physical_action_executions: int = 0
+    physical_action_executed: list[str] = Field(default_factory=list)
+    physical_action_extra_retrieval_calls: int = 0
+    physical_action_rows_added: int = 0
     evidence_sufficiency_decisions: int = 0
     evidence_sufficiency_model: str | None = None
     evidence_sufficiency_statuses: list[str] = Field(default_factory=list)

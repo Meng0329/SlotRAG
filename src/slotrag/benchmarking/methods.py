@@ -546,6 +546,7 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
         "binding_beam_widths",
         "binding_pruned_source_ids",
         "physical_action_selected",
+        "physical_action_executed",
         "physical_action_utilities",
         "physical_action_candidate_counts",
         "evidence_sufficiency_statuses",
@@ -1153,6 +1154,7 @@ def _run_slotrag(
         adaptive_binding_beam=spec.adaptive_binding_beam,
         action_policy=PhysicalActionPolicy() if spec.physical_action_policy else None,
         sufficiency_calibrator=(sufficiency_calibrator if spec.evidence_sufficiency else None),
+        retrieval_backend=("bm25" if getattr(retriever, "dense_enabled", None) is False else "hybrid"),
         random_seed=seed,
         options=spec.options,
     )
