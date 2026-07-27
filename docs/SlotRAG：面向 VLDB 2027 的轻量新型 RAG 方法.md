@@ -3810,3 +3810,18 @@ predicate/slice rule。因此主方法降级 bounded `EXPAND_TOPK`，旧 utility
 新增 schema-3 action supervision、离线分析模块/CLI、完整逐样本记录与 immutable manifest。完整表、
 命令和 hashes 见 `docs/optimization-audit-v70.md`。当前仍无冻结 evaluation + exact upstream 同协议
 SOTA 比较，可比 SOTA 单元格=`0`。
+
+# v71 Development-selected No-top-k Runtime（2026-07-27）
+
+v71 在与 v69 相同的 8 个 train/global-corpus 问题和 frozen plans 上接入 v70 冻结的
+`no_expansion`。32/32 records 全部 ok，trace/attempt/plan/sample audit 完整。两个数据集所有 treatment
+相对 SlotRAG 均为 `0/4/0`，answers/rows/evidence 逐题完全相同。
+
+`EXPAND_TOPK` 和 action-induced retrieval calls 均为 0。2Wiki physical/QO calls/tokens 从 v69 的
+`1.75/3176`、`1.75/3583` 回落到 `1.25/2010`；Hotpot 从 `5.00/10126`、`5.50/11282` 回落到
+`2.75/4286`、`2.75/4278`。质量仍为 2Wiki `0.50`、Hotpot `0.25`，所以这是 Pareto 成本修复，
+不是质量提升。旧 utility expansion 作为显式 ablation 保留。
+
+v72 转向更大的 retrieval-miss headroom：通用 query rewrite、complementary retrieval、evidence-gain
+stopping。最多 10 轮只在 development 上迭代，evaluation 完全冻结；只有过 gate 候选跑完整对比。
+完整 v71 协议、指标、provenance 和 hashes 见 `docs/optimization-audit-v71.md`。

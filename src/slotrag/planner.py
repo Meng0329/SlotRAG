@@ -36,6 +36,7 @@ from .models import (
 )
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
+from .query_optimization import QueryVariant, formulate_query
 from .retrieval import HybridRetriever
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
@@ -1304,7 +1305,13 @@ class SlotMaterializer:
             return f"{field} requires a male role but {value!r} has an explicit female marker"
         return None
 
-    def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
+    def materialize(
+        self,
+        slot: Slot,
+        bindings: dict[str, str],
+        *,
+        query_variant: QueryVariant | None = None,
+    ) -> tuple[list[BindingRow], RunMetrics]:
         slot_query = slot.query_text(bindings)
         searches: list[RetrievalSearchTrace] = []
 
@@ -1345,7 +1352,12 @@ class SlotMaterializer:
         dual_query_confidence_skip = False
         dual_query_guard_check = False
         dual_query_guard_fallback = False
-        if dual_query_requested:
+        if query_variant is not None:
+            if query_variant != "slot" and not self.question_context:
+                raise ValueError(f"query variant {query_variant!r} requires question_context")
+            query = formulate_query(self.question_context or "", slot_query, query_variant)
+            retrieved_passages = search(query, query_variant)[:self.max_passages]
+        elif dual_query_requested:
             question_query = f"{self.question_context} {slot_query}"
             slot_ranked = search(slot_query, "slot")
             if self.dual_query_confidence_threshold is not None and slot_ranked:
@@ -1748,7 +1760,13 @@ class SlotMaterializer:
         })]
         return rows, metrics
 
-    def materialize_many(self, slot: Slot, contexts: list[dict[str, str]]) -> tuple[list[BindingRow], RunMetrics]:
+    def materialize_many(
+        self,
+        slot: Slot,
+        contexts: list[dict[str, str]],
+        *,
+        query_variant: QueryVariant | None = None,
+    ) -> tuple[list[BindingRow], RunMetrics]:
         """Materialize once per distinct binding context and merge the rows."""
         merged: list[BindingRow] = []
         metrics = RunMetrics()
@@ -1757,7 +1775,11 @@ class SlotMaterializer:
         all_retrieval_results: list[RetrievalResult] = []
         seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
         for bindings in contexts or [{}]:
-            rows, current_metrics = self.materialize(slot, bindings)
+            rows, current_metrics = self.materialize(
+                slot,
+                bindings,
+                query_variant=query_variant,
+            )
             all_evidence.extend(self.last_evidence)
             all_traces.extend(self.last_materialization_traces)
             all_retrieval_results.extend(self.last_retrieval_results)
@@ -1812,6 +1834,17 @@ class SlotMaterializer:
         self.last_materialization_traces = all_traces
         self.last_retrieval_results = all_retrieval_results
         return merged, metrics
+
+    def materialize_many_with_query_variant(
+        self,
+        slot: Slot,
+        contexts: list[dict[str, str]],
+        *,
+        query_variant: QueryVariant,
+    ) -> tuple[list[BindingRow], RunMetrics]:
+        """Execute one explicit physical query formulation per binding context."""
+
+        return self.materialize_many(slot, contexts, query_variant=query_variant)
 
     def estimate_materialization_retrieval_calls(self, contexts: list[dict[str, str]]) -> int:
         """Return a conservative call estimate for one materialization pass."""
@@ -2131,6 +2164,7 @@ class AdaptiveExecutor:
         adaptive_binding_beam: bool = False,
         action_policy: PhysicalActionPolicy | None = None,
         sufficiency_calibrator: EvidenceSufficiencyCalibrator | None = None,
+        complementary_retrieval: bool = False,
         retrieval_backend: Literal["bm25", "hybrid", "unknown"] = "unknown",
         random_seed: int = 2027,
         options: ExecutionOptions | None = None,
@@ -2145,6 +2179,7 @@ class AdaptiveExecutor:
         self.binding_beam = AdaptiveBindingBeam(max_width=max_binding_contexts)
         self.action_policy = action_policy
         self.sufficiency_calibrator = sufficiency_calibrator
+        self.complementary_retrieval = complementary_retrieval
         self.retrieval_backend = retrieval_backend
         self.random = random.Random(random_seed)
         self.options = options or ExecutionOptions()
@@ -2163,6 +2198,8 @@ class AdaptiveExecutor:
         binding_beam_width: int,
         topk_expansion_available: bool = False,
         topk_expansion_retrieval_calls: int = 1,
+        question_plus_slot_available: bool = False,
+        query_rewrite_available: bool = False,
     ) -> tuple[RunMetrics, SufficiencyPrediction | None, Any | None, str | None]:
         prediction: SufficiencyPrediction | None = None
         model_name: str | None = None
@@ -2221,9 +2258,9 @@ class AdaptiveExecutor:
             max_binding_beam_width=self.binding_beam.max_width,
             topk_expansion_available=topk_expansion_available,
             topk_expansion_retrieval_calls=topk_expansion_retrieval_calls,
-            question_plus_slot_available=False,
+            question_plus_slot_available=question_plus_slot_available,
             binding_beam_expansion_available=False,
-            query_rewrite_available=False,
+            query_rewrite_available=query_rewrite_available,
             alternate_retriever_available=False,
             can_backtrack=False,
         ))
@@ -2544,6 +2581,20 @@ class AdaptiveExecutor:
                 and metrics.retrieval_calls + expansion_call_estimate <= self.max_retrieval_calls
                 and slot_metrics.retrieval_calls + expansion_call_estimate <= slot_call_budget
             )
+            materialize_query_variant = getattr(
+                self.materializer,
+                "materialize_many_with_query_variant",
+                None,
+            )
+            complementary_call_estimate = max(len(binding_contexts), 1)
+            complementary_available = bool(
+                self.complementary_retrieval
+                and materialize_query_variant is not None
+                and metrics.retrieval_calls + complementary_call_estimate
+                <= self.max_retrieval_calls
+                and slot_metrics.retrieval_calls + complementary_call_estimate
+                <= slot_call_budget
+            )
             metrics, sufficiency_prediction, action_decision, sufficiency_model = self._evaluate_sufficiency_and_action(
                 metrics,
                 rows,
@@ -2556,6 +2607,8 @@ class AdaptiveExecutor:
                 binding_beam_width=adaptive_beam_width,
                 topk_expansion_available=topk_expansion_available,
                 topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
+                question_plus_slot_available=complementary_available,
+                query_rewrite_available=complementary_available,
             )
             initial_row_count = len(rows)
             action_executed = False
@@ -2564,6 +2617,10 @@ class AdaptiveExecutor:
             action_rows_added = 0
             action_top_k_before: int | None = None
             action_top_k_after: int | None = None
+            action_query_variant: str | None = None
+            action_novel_passages = 0
+            action_evidence_gain = 0.0
+            action_stop_reason: str | None = None
             post_sufficiency_prediction: SufficiencyPrediction | None = None
             post_action_decision = None
             effective_action_decision = action_decision
@@ -2627,6 +2684,141 @@ class AdaptiveExecutor:
                     )
                 )
                 effective_action_decision = post_action_decision
+            elif action_decision is not None and action_decision.action in {
+                "RETRIEVE_QUESTION_PLUS_SLOT",
+                "REWRITE_QUERY",
+            }:
+                action_query_variant = (
+                    "question_plus_slot"
+                    if action_decision.action == "RETRIEVE_QUESTION_PLUS_SLOT"
+                    else "question_plus_lexical_slot"
+                )
+                initial_source_ids = {
+                    result.passage.id for result in slot_retrieval_results
+                }
+                initial_probability = (
+                    sufficiency_prediction.probability if sufficiency_prediction else 0.0
+                )
+                complementary_started = time.perf_counter()
+                complementary_rows, complementary_metrics = materialize_query_variant(
+                    slot,
+                    binding_contexts,
+                    query_variant=action_query_variant,
+                )
+                complementary_ms = (time.perf_counter() - complementary_started) * 1000
+                complementary_evidence = list(getattr(self.materializer, "last_evidence", []))
+                complementary_traces = list(
+                    getattr(self.materializer, "last_materialization_traces", [])
+                )
+                complementary_results = list(
+                    getattr(self.materializer, "last_retrieval_results", [])
+                )
+                action_novel_passages = len({
+                    result.passage.id for result in complementary_results
+                } - initial_source_ids)
+                rows = _merge_binding_rows(rows, complementary_rows)
+                slot_evidence.extend(complementary_evidence)
+                slot_materialization_traces.extend(complementary_traces)
+                slot_retrieval_results.extend(complementary_results)
+                retrieved_evidence.extend(complementary_evidence)
+                metrics = _accumulate_run_metrics(metrics, complementary_metrics)
+                action_retrieval_calls = complementary_metrics.retrieval_calls
+                action_rows_added = max(len(rows) - initial_row_count, 0)
+                gain_denominator = max(
+                    len(complementary_results) + len(complementary_rows),
+                    1,
+                )
+                action_evidence_gain = (
+                    action_novel_passages + action_rows_added
+                ) / gain_denominator
+                complementary_selectivity_error = abs(
+                    math.log1p(len(rows)) - math.log1p(slot.estimated_cardinality)
+                )
+                metrics = metrics.model_copy(update={
+                    "materialization_latency_ms": (
+                        metrics.materialization_latency_ms + complementary_ms
+                    ),
+                    "materialization_requests": (
+                        metrics.materialization_requests + len(binding_contexts)
+                    ),
+                    "intermediate_binding_sizes": (
+                        metrics.intermediate_binding_sizes + [len(rows)]
+                    ),
+                    "slot_selectivity_errors": (
+                        metrics.slot_selectivity_errors + [complementary_selectivity_error]
+                    ),
+                    "physical_action_executions": metrics.physical_action_executions + 1,
+                    "physical_action_executed": (
+                        metrics.physical_action_executed + [action_decision.action]
+                    ),
+                    "physical_action_extra_retrieval_calls": (
+                        metrics.physical_action_extra_retrieval_calls + action_retrieval_calls
+                    ),
+                    "physical_action_rows_added": (
+                        metrics.physical_action_rows_added + action_rows_added
+                    ),
+                    "complementary_retrieval_actions": (
+                        metrics.complementary_retrieval_actions + 1
+                    ),
+                    "complementary_retrieval_question_plus_slot": (
+                        metrics.complementary_retrieval_question_plus_slot
+                        + int(action_decision.action == "RETRIEVE_QUESTION_PLUS_SLOT")
+                    ),
+                    "complementary_retrieval_query_rewrites": (
+                        metrics.complementary_retrieval_query_rewrites
+                        + int(action_decision.action == "REWRITE_QUERY")
+                    ),
+                    "complementary_retrieval_novel_passages": (
+                        metrics.complementary_retrieval_novel_passages
+                        + action_novel_passages
+                    ),
+                    "complementary_retrieval_novel_rows": (
+                        metrics.complementary_retrieval_novel_rows + action_rows_added
+                    ),
+                    "complementary_retrieval_no_gain": (
+                        metrics.complementary_retrieval_no_gain
+                        + int(action_novel_passages == 0 and action_rows_added == 0)
+                    ),
+                    "evidence_gain_values": (
+                        metrics.evidence_gain_values + [action_evidence_gain]
+                    ),
+                    "evidence_gain_stops": metrics.evidence_gain_stops + 1,
+                })
+                action_executed = True
+                materialized[slot.id] = rows
+                cardinalities[slot.id] = len(rows)
+                metrics, post_sufficiency_prediction, post_action_decision, _ = (
+                    self._evaluate_sufficiency_and_action(
+                        metrics,
+                        rows,
+                        slot=slot,
+                        plan=plan,
+                        binding_contexts=binding_contexts,
+                        retrieval_results=slot_retrieval_results,
+                        remaining_plan_depth=len(remaining),
+                        budget_remaining=max(
+                            self.max_retrieval_calls - metrics.retrieval_calls,
+                            0,
+                        ),
+                        binding_beam_width=adaptive_beam_width,
+                        topk_expansion_available=False,
+                        topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
+                        question_plus_slot_available=False,
+                        query_rewrite_available=False,
+                    )
+                )
+                effective_action_decision = post_action_decision
+                post_probability = (
+                    post_sufficiency_prediction.probability
+                    if post_sufficiency_prediction else initial_probability
+                )
+                if action_rows_added > 0 or post_probability > initial_probability + 1e-12:
+                    action_stop_reason = "sufficiency_improved"
+                elif action_novel_passages > 0:
+                    action_stop_reason = "novel_evidence_no_row_gain"
+                else:
+                    action_stop_reason = "no_novel_evidence"
+                action_execution_reason = "bounded_complementary_retrieval"
             if (
                 effective_action_decision is not None
                 and effective_action_decision.action in {"STOP_SLOT", "ANSWER", "ABSTAIN"}
@@ -2667,6 +2859,10 @@ class AdaptiveExecutor:
                 action_retrieval_calls=action_retrieval_calls,
                 action_top_k_before=action_top_k_before,
                 action_top_k_after=action_top_k_after,
+                action_query_variant=action_query_variant,
+                action_novel_passages=action_novel_passages,
+                action_evidence_gain=action_evidence_gain,
+                action_stop_reason=action_stop_reason,
                 post_action_sufficiency_status=(
                     post_sufficiency_prediction.status if post_sufficiency_prediction else None
                 ),

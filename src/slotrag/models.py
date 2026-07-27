@@ -255,7 +255,13 @@ class RetrievalCandidateTrace(StrictModel):
 
 class RetrievalSearchTrace(StrictModel):
     query: str
-    query_variant: Literal["slot", "question_plus_slot"]
+    query_variant: Literal[
+        "slot",
+        "question",
+        "question_plus_slot",
+        "lexical_slot",
+        "question_plus_lexical_slot",
+    ]
     candidates: list[RetrievalCandidateTrace] = Field(default_factory=list)
 
 
@@ -307,6 +313,10 @@ class SlotExecutionTrace(StrictModel):
     action_retrieval_calls: int = Field(default=0, ge=0)
     action_top_k_before: int | None = Field(default=None, ge=1)
     action_top_k_after: int | None = Field(default=None, ge=1)
+    action_query_variant: str | None = None
+    action_novel_passages: int = Field(default=0, ge=0)
+    action_evidence_gain: float = Field(default=0.0, ge=0)
+    action_stop_reason: str | None = None
     post_action_sufficiency_status: Literal["SUFFICIENT", "PARTIAL", "INSUFFICIENT"] | None = None
     post_action_sufficiency_probability: float | None = Field(default=None, ge=0, le=1)
     post_action_selected: str | None = None
@@ -378,6 +388,14 @@ class RunMetrics(StrictModel):
     physical_action_executed: list[str] = Field(default_factory=list)
     physical_action_extra_retrieval_calls: int = 0
     physical_action_rows_added: int = 0
+    complementary_retrieval_actions: int = 0
+    complementary_retrieval_question_plus_slot: int = 0
+    complementary_retrieval_query_rewrites: int = 0
+    complementary_retrieval_novel_passages: int = 0
+    complementary_retrieval_novel_rows: int = 0
+    complementary_retrieval_no_gain: int = 0
+    evidence_gain_values: list[float] = Field(default_factory=list)
+    evidence_gain_stops: int = 0
     evidence_sufficiency_decisions: int = 0
     evidence_sufficiency_model: str | None = None
     evidence_sufficiency_statuses: list[str] = Field(default_factory=list)

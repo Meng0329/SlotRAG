@@ -18,7 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..concurrency import atomic_write_json, exclusive_file_lock
 from ..data import chunk_passages, sha256_file
 from ..models import Passage, QuestionRecord, RetrievalResult
-from ..retrieval import EmbeddingCache, HybridRetriever, SparseBM25Index
+from ..retrieval import (
+    EmbeddingCache,
+    FieldedSparseBM25Index,
+    HybridRetriever,
+    SparseBM25Index,
+)
 from ..config import RetrievalConfig
 
 
@@ -67,6 +72,8 @@ class CorpusManifest(BaseModel):
     sparse_index_format: str | None = None
     sparse_index_engine: str | None = None
     sparse_index_engine_version: str | None = None
+    sparse_index_mode: Literal["body", "bm25f"] = "body"
+    sparse_title_weight: float = Field(default=2.0, gt=0)
     embedding_artifact: str | None = None
     aggregation_latency_ms: float = Field(default=0.0, ge=0)
     sparse_index_latency_ms: float = Field(default=0.0, ge=0)
@@ -100,12 +107,16 @@ def _index_id(
     retrieval: RetrievalConfig,
     retrieval_backend: str,
 ) -> str:
+    retrieval_payload = retrieval.model_dump(mode="json")
+    if retrieval.sparse_index_mode == "body":
+        retrieval_payload.pop("sparse_index_mode", None)
+        retrieval_payload.pop("sparse_title_weight", None)
     header = {
         "index_id_version": 2,
         "dataset": dataset,
         "split": split,
         "retrieval_backend": retrieval_backend,
-        "retrieval": retrieval.model_dump(mode="json"),
+        "retrieval": retrieval_payload,
     }
     digest = hashlib.sha256(json.dumps(header, ensure_ascii=True, sort_keys=True).encode("utf-8"))
     for passage in passages:
@@ -392,7 +403,12 @@ class SharedCorpusIndex:
                 raise CorpusBuildCostError(estimate, max_build_minutes)
 
             sparse_started = time.perf_counter()
-            sparse_index: SparseBM25Index | None = None
+            sparse_index_class = (
+                FieldedSparseBM25Index
+                if retrieval.sparse_index_mode == "bm25f"
+                else SparseBM25Index
+            )
+            sparse_index: SparseBM25Index | FieldedSparseBM25Index | None = None
             sparse_index_reused = False
             sparse_index_sha256: str | None = None
             if not passages:
@@ -401,15 +417,16 @@ class SharedCorpusIndex:
                 expected_sparse_checksum = raw_manifest.get("sparse_index_sha256")
                 sparse_metadata_valid = (
                     raw_manifest.get("sparse_index_artifact") == sparse_artifact.name
-                    and raw_manifest.get("sparse_index_format") == SparseBM25Index.artifact_format
-                    and raw_manifest.get("sparse_index_engine") == SparseBM25Index.engine
-                    and raw_manifest.get("sparse_index_engine_version") == SparseBM25Index.engine_version
+                    and raw_manifest.get("sparse_index_format") == sparse_index_class.artifact_format
+                    and raw_manifest.get("sparse_index_engine") == sparse_index_class.engine
+                    and raw_manifest.get("sparse_index_engine_version") == sparse_index_class.engine_version
+                    and raw_manifest.get("sparse_index_mode", "body") == retrieval.sparse_index_mode
                     and isinstance(expected_sparse_checksum, str)
                     and len(expected_sparse_checksum) == 64
                 )
                 if sparse_metadata_valid:
                     try:
-                        sparse_index = SparseBM25Index.load(
+                        sparse_index = sparse_index_class.load(
                             sparse_artifact,
                             expected_passage_count=len(passages),
                             expected_sha256=expected_sparse_checksum,
@@ -438,6 +455,8 @@ class SharedCorpusIndex:
                 cache=index_cache,
                 dense_enabled=backend == "hybrid",
                 sparse_index=sparse_index,
+                sparse_index_mode=retrieval.sparse_index_mode,
+                sparse_title_weight=retrieval.sparse_title_weight,
             )
             sparse_index_latency_ms = (time.perf_counter() - sparse_started) * 1000
 
@@ -509,9 +528,11 @@ class SharedCorpusIndex:
                 passage_artifact_sha256=passage_artifact_sha256,
                 sparse_index_artifact=sparse_artifact.name if sparse_artifact and passages else None,
                 sparse_index_sha256=sparse_index_sha256,
-                sparse_index_format=SparseBM25Index.artifact_format if passages else None,
-                sparse_index_engine=SparseBM25Index.engine if passages else None,
-                sparse_index_engine_version=SparseBM25Index.engine_version if passages else None,
+                sparse_index_format=sparse_index_class.artifact_format if passages else None,
+                sparse_index_engine=sparse_index_class.engine if passages else None,
+                sparse_index_engine_version=sparse_index_class.engine_version if passages else None,
+                sparse_index_mode=retrieval.sparse_index_mode,
+                sparse_title_weight=retrieval.sparse_title_weight,
                 embedding_artifact=(
                     embedding_artifact.name
                     if embedding_artifact and backend == "hybrid" else None

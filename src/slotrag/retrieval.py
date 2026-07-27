@@ -6,7 +6,7 @@ import os
 import pickle
 import re
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Iterable
@@ -29,6 +29,84 @@ except PackageNotFoundError:  # pragma: no cover - import already proves the pac
 
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
+
+
+def _top_k_indices(scores: np.ndarray, top_k: int) -> list[int]:
+    """Select a stable top-k without sorting the full corpus."""
+
+    if top_k <= 0 or scores.size == 0:
+        return []
+    limit = min(top_k, int(scores.size))
+    if limit == scores.size:
+        return [int(index) for index in np.argsort(-scores, kind="stable")]
+    threshold = float(np.partition(scores, int(scores.size) - limit)[int(scores.size) - limit])
+    greater = [int(index) for index in np.flatnonzero(scores > threshold)]
+    tied = [int(index) for index in np.flatnonzero(scores == threshold)]
+    candidates = [*greater, *tied[: limit - len(greater)]]
+    return sorted(
+        candidates,
+        key=lambda index: (-float(scores[index]), index),
+    )
+
+
+def _batch_bm25_top_k(
+    weighted_indexes: list[tuple[BM25Okapi, float]],
+    queries: list[list[str]],
+    *,
+    top_k: int,
+) -> list[list[tuple[int, float]]]:
+    """Score a query batch after one filtered-postings scan per BM25 field."""
+
+    if not weighted_indexes:
+        return [[] for _query in queries]
+    wanted_terms = {term for query in queries for term in query}
+    field_postings: list[dict[str, tuple[np.ndarray, np.ndarray]]] = []
+    for index, _weight in weighted_indexes:
+        raw: dict[str, tuple[list[int], list[float]]] = {
+            term: ([], []) for term in wanted_terms if index.idf.get(term)
+        }
+        if raw:
+            for document_index, frequencies in enumerate(index.doc_freqs):
+                for term, frequency in frequencies.items():
+                    posting = raw.get(term)
+                    if posting is not None:
+                        posting[0].append(document_index)
+                        posting[1].append(float(frequency))
+        field_postings.append({
+            term: (
+                np.asarray(document_indexes, dtype=np.int64),
+                np.asarray(frequencies, dtype=float),
+            )
+            for term, (document_indexes, frequencies) in raw.items()
+        })
+
+    corpus_size = int(weighted_indexes[0][0].corpus_size)
+    output: list[list[tuple[int, float]]] = []
+    for query in queries:
+        scores = np.zeros(corpus_size, dtype=float)
+        counts = Counter(query)
+        for (index, weight), postings in zip(weighted_indexes, field_postings):
+            document_lengths = np.asarray(index.doc_len, dtype=float)
+            for term, multiplicity in counts.items():
+                posting = postings.get(term)
+                if posting is None:
+                    continue
+                document_indexes, frequencies = posting
+                denominator = frequencies + index.k1 * (
+                    1 - index.b
+                    + index.b * document_lengths[document_indexes] / index.avgdl
+                )
+                scores[document_indexes] += (
+                    weight
+                    * multiplicity
+                    * float(index.idf.get(term) or 0.0)
+                    * frequencies
+                    * (index.k1 + 1)
+                    / denominator
+                )
+        ranked = _top_k_indices(scores, top_k)
+        output.append([(index, float(scores[index])) for index in ranked])
+    return output
 
 
 class SparseBM25Index:
@@ -129,6 +207,157 @@ class SparseBM25Index:
     def get_scores(self, query_tokens: list[str]) -> np.ndarray:
         return self._index.get_scores(query_tokens)
 
+    def batch_top_k(
+        self,
+        queries: list[list[str]],
+        *,
+        top_k: int,
+    ) -> list[list[tuple[int, float]]]:
+        return _batch_bm25_top_k([(self._index, 1.0)], queries, top_k=top_k)
+
+
+class FieldedSparseBM25Index:
+    """A compact BM25F-style index over document title and passage body."""
+
+    artifact_format = "slotrag-fielded-rank-bm25-pickle-v1"
+    engine = "rank_bm25.BM25Okapi(title+body)"
+    engine_version = RANK_BM25_VERSION
+
+    def __init__(
+        self,
+        body_index: BM25Okapi,
+        title_index: BM25Okapi,
+        *,
+        passage_count: int,
+        title_weight: float,
+    ) -> None:
+        self._body_index = body_index
+        self._title_index = title_index
+        self.passage_count = passage_count
+        self.title_weight = title_weight
+
+    @staticmethod
+    def _title(passage: Passage) -> str:
+        metadata_title = passage.metadata.get("doc_id")
+        if metadata_title:
+            return str(metadata_title)
+        doc_id = passage.doc_id or passage.id
+        return str(doc_id).split(":", 1)[-1]
+
+    @classmethod
+    def build(
+        cls,
+        passages: Iterable[Passage],
+        *,
+        title_weight: float = 2.0,
+    ) -> "FieldedSparseBM25Index":
+        values = list(passages)
+        if not values:
+            raise ValueError("fielded sparse index requires at least one passage")
+        return cls(
+            BM25Okapi([tokenize(passage.text) for passage in values]),
+            BM25Okapi([tokenize(cls._title(passage)) for passage in values]),
+            passage_count=len(values),
+            title_weight=title_weight,
+        )
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_passage_count: int,
+        expected_sha256: str,
+    ) -> "FieldedSparseBM25Index":
+        source = Path(path)
+        actual_sha256 = SparseBM25Index._sha256(source)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"sparse index checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
+            )
+        try:
+            with source.open("rb") as handle:
+                payload = pickle.load(handle)  # noqa: S301 - checksum-verified local artifact
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, IndexError, TypeError) as exc:
+            raise ValueError("fielded sparse index artifact could not be decoded") from exc
+        if not isinstance(payload, dict) or payload.get("artifact_format") != cls.artifact_format:
+            raise ValueError("fielded sparse index artifact format mismatch")
+        if payload.get("engine") != cls.engine or payload.get("engine_version") != cls.engine_version:
+            raise ValueError("fielded sparse index engine mismatch")
+        passage_count = int(payload.get("passage_count") or 0)
+        if passage_count != expected_passage_count:
+            raise ValueError(
+                f"sparse index passage count mismatch: expected {expected_passage_count}, got {passage_count}"
+            )
+        body_index = payload.get("body_index")
+        title_index = payload.get("title_index")
+        if not all(
+            isinstance(index, BM25Okapi)
+            and int(getattr(index, "corpus_size", -1)) == passage_count
+            for index in (body_index, title_index)
+        ):
+            raise ValueError("fielded sparse index payload is incompatible")
+        return cls(
+            body_index,
+            title_index,
+            passage_count=passage_count,
+            title_weight=float(payload.get("title_weight") or 0.0),
+        )
+
+    def save(self, path: str | Path) -> str:
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".part",
+        )
+        part_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                pickle.dump({
+                    "artifact_format": self.artifact_format,
+                    "engine": self.engine,
+                    "engine_version": self.engine_version,
+                    "passage_count": self.passage_count,
+                    "title_weight": self.title_weight,
+                    "body_index": self._body_index,
+                    "title_index": self._title_index,
+                }, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                handle.flush()
+                os.fsync(handle.fileno())
+            digest = SparseBM25Index._sha256(part_path)
+            os.replace(part_path, destination)
+            return digest
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            part_path.unlink(missing_ok=True)
+            raise
+
+    def get_scores(self, query_tokens: list[str]) -> np.ndarray:
+        return (
+            self._body_index.get_scores(query_tokens)
+            + self.title_weight * self._title_index.get_scores(query_tokens)
+        )
+
+    def batch_top_k(
+        self,
+        queries: list[list[str]],
+        *,
+        top_k: int,
+    ) -> list[list[tuple[int, float]]]:
+        return _batch_bm25_top_k(
+            [
+                (self._body_index, 1.0),
+                (self._title_index, self.title_weight),
+            ],
+            queries,
+            top_k=top_k,
+        )
+
 
 class EmbeddingCache:
     def __init__(self, path: str | Path | None = None) -> None:
@@ -188,7 +417,9 @@ class HybridRetriever:
         rerank_enabled: bool = True,
         cache: EmbeddingCache | None = None,
         dense_enabled: bool = True,
-        sparse_index: SparseBM25Index | None = None,
+        sparse_index: SparseBM25Index | FieldedSparseBM25Index | None = None,
+        sparse_index_mode: str = "body",
+        sparse_title_weight: float = 2.0,
     ) -> None:
         self.passages = passages
         self.embedding_client = embedding_client
@@ -200,7 +431,15 @@ class HybridRetriever:
         self.cache = cache or EmbeddingCache()
         if sparse_index is not None and sparse_index.passage_count != len(passages):
             raise ValueError("sparse index passage count does not match passages")
-        self._bm25 = sparse_index or (SparseBM25Index.build(passages) if passages else None)
+        if sparse_index is not None:
+            self._bm25 = sparse_index
+        elif passages and sparse_index_mode == "bm25f":
+            self._bm25 = FieldedSparseBM25Index.build(
+                passages,
+                title_weight=sparse_title_weight,
+            )
+        else:
+            self._bm25 = SparseBM25Index.build(passages) if passages else None
         self._passage_vectors: list[list[float]] | None = None
 
     def _ensure_vectors(self) -> list[list[float]]:
@@ -248,7 +487,7 @@ class HybridRetriever:
         dense_ranks: dict[int, int] = {}
         if self._bm25:
             bm25_scores = self._bm25.get_scores(tokenize(query))
-            bm25_order = [int(index) for index in np.argsort(-bm25_scores, kind="stable")[:self.bm25_k]]
+            bm25_order = _top_k_indices(bm25_scores, self.bm25_k)
             bm25_ranks = {index: rank for rank, index in enumerate(bm25_order)}
             for index in bm25_order:
                 candidate_scores[int(index)]["bm25"] = float(bm25_scores[index])
@@ -257,7 +496,7 @@ class HybridRetriever:
                 raise RuntimeError("dense retrieval is enabled but no embedding client was provided")
             query_vector = self.embedding_client.embed(query)[0]
             dense_scores = self._cosine(query_vector, self._ensure_vectors())
-            dense_order = [int(index) for index in np.argsort(-dense_scores, kind="stable")[:self.dense_k]]
+            dense_order = _top_k_indices(dense_scores, self.dense_k)
             dense_ranks = {index: rank for rank, index in enumerate(dense_order)}
             for index in dense_order:
                 candidate_scores[int(index)]["dense"] = float(dense_scores[index])
@@ -276,3 +515,36 @@ class HybridRetriever:
             by_index = {item.index: item for item in reranked}
             ranked = [ranked[item.index].model_copy(update={"score": item.score, "rerank_score": item.score}) for item in reranked if item.index in by_index]
         return ranked[:top_k]
+
+    def search_batch(
+        self,
+        queries: list[str],
+        *,
+        top_k: int | None = None,
+    ) -> list[list[RetrievalResult]]:
+        """Execute sparse-only batches with one filtered inverted-index scan."""
+
+        if not queries:
+            return []
+        if self.dense_enabled or (self.rerank_enabled and self.reranker_client):
+            return [self.search(query, top_k=top_k) for query in queries]
+        if not self.passages or self._bm25 is None:
+            return [[] for _query in queries]
+        output_k = top_k or self.final_k
+        candidate_k = min(self.bm25_k, len(self.passages))
+        rankings = self._bm25.batch_top_k(
+            [tokenize(query) for query in queries],
+            top_k=candidate_k,
+        )
+        output: list[list[RetrievalResult]] = []
+        for ranked in rankings:
+            results = [
+                RetrievalResult(
+                    passage=self.passages[index],
+                    score=self.bm25_weight / (self.rrf_k + 1 + rank),
+                    bm25_score=bm25_score,
+                )
+                for rank, (index, bm25_score) in enumerate(ranked)
+            ]
+            output.append(results[:output_k])
+        return output

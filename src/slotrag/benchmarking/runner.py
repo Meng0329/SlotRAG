@@ -324,6 +324,8 @@ class BenchmarkRunner:
             rerank_enabled=self.app_config.reranker.enabled and dense_enabled,
             cache=self.embedding_cache,
             dense_enabled=dense_enabled,
+            sparse_index_mode=self.app_config.retrieval.sparse_index_mode,
+            sparse_title_weight=self.app_config.retrieval.sparse_title_weight,
         )
 
     def _build_shared_index(self, stage_name: str, dataset: str, stage: Any) -> SharedCorpusIndex:

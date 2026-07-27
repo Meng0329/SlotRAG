@@ -119,7 +119,7 @@ def build_global_index(
     usage = resource.getrusage(resource.RUSAGE_SELF)
     report: dict[str, object] = {
         "schema_version": 1,
-        "experiment": "global-corpus-index-v64",
+        "experiment": "global-corpus-index-v72",
         "mode": mode,
         "protocol": "global_corpus",
         "retrieval_backend": "bm25",
@@ -172,6 +172,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=("cold", "warm"), required=True)
     parser.add_argument("--repository-root", type=Path, default=Path.cwd())
     parser.add_argument("--probe-query")
+    parser.add_argument("--sparse-index-mode", choices=("body", "bm25f"), default="body")
+    parser.add_argument("--sparse-title-weight", type=float, default=2.0)
     args = parser.parse_args()
     report = build_global_index(
         dataset=args.dataset,
@@ -182,6 +184,10 @@ def main() -> None:
         mode=args.mode,
         repository_root=args.repository_root,
         probe_query=args.probe_query,
+        retrieval=RetrievalConfig(
+            sparse_index_mode=args.sparse_index_mode,
+            sparse_title_weight=args.sparse_title_weight,
+        ),
     )
     manifest = report["corpus_manifest"]
     print(json.dumps({

@@ -495,3 +495,19 @@ SUFFICIENT 状态仍包含 development/validation positives `5/2`，所以不能
 
 下一步先跑与 v69 相同 8 题、相同 frozen plans 的 v71 smoke，验证 `EXPAND_TOPK=0`、cost 回落且质量不
 退化；不在该 smoke 上选择参数。详见 `docs/optimization-audit-v70.md`。
+
+## v71 No-top-k Smoke 结果（2026-07-27）
+
+有效目录 `runs/slotrag-qo-no-topk-global-smoke-v71`：32/32 ok、32 attempts、trace 完整、8/8 imported
+plans 有效、样本与 v63 overlap=0；gate 为 analysis-ready/nonpublication。run 启动时 revision
+`8e7336...`、dirty=true，完成后补丁由外部流程提交为 `da6dedd64f6f3d9d32772c55a08db5d51eea9b97`；
+提交未发生在 cell 执行中。
+
+两个数据集所有 treatment 相对 SlotRAG 为 `0/4/0`，answers/rows/evidence exact-match=1。no-top-k 使
+extra calls=0：2Wiki physical/QO calls/tokens=`1.25/2010`，Hotpot=`2.75/4286`、`2.75/4278`，基本
+回到 baseline，消除 v69 的成本膨胀。quality 仍完全 tie，不能声称提升。
+
+下一步按用户要求加速为 v72 大版本：通用 query rewrite + complementary retrieval + evidence-gain
+stopping；实验用 workers=64（实际取 job 数），客户端 64 并发，仍保持 provider RPM=30、operational
+RPM=20。最多 10 轮 development-only 迭代；不要用 evaluation 调参，不保证或制造 80% SOTA。详见
+`docs/optimization-audit-v71.md`。

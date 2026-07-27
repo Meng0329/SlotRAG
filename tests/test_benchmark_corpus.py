@@ -80,6 +80,58 @@ def test_shared_corpus_aggregates_full_split_and_records_query_telemetry(tmp_pat
     assert manifest["index_bytes"] > 0
 
 
+def test_shared_corpus_builds_and_reuses_bm25f_index(tmp_path):
+    questions = [
+        QuestionRecord(
+            id="q1",
+            question="What is Xylophone?",
+            passages=[
+                Passage(id="p1", doc_id="Xylophone", text="A musical instrument reference."),
+                Passage(id="p2", doc_id="Unrelated", text="xylophone xylophone in the body."),
+                Passage(id="p3", doc_id="Third", text="A separate document."),
+                Passage(id="p4", doc_id="Fourth", text="Another document."),
+                Passage(id="p5", doc_id="Fifth", text="One more document."),
+            ],
+        )
+    ]
+    retrieval = RetrievalConfig(
+        bm25_k=5,
+        dense_k=5,
+        final_k=2,
+        chunk_tokens=32,
+        chunk_overlap=0,
+        sparse_index_mode="bm25f",
+        sparse_title_weight=4.0,
+    )
+
+    first = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+    second = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+
+    assert first.manifest.sparse_index_mode == "bm25f"
+    assert first.search("xylophone")[0].passage.metadata["source_passage_id"] == "p1"
+    assert second.manifest.reused_persisted_index is True
+
+
 def test_shared_corpus_reuses_persisted_artifacts_without_reembedding(tmp_path):
     questions = [
         QuestionRecord(

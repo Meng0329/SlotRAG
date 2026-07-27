@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -57,6 +57,8 @@ class RetrievalConfig(BaseModel):
     dense_weight: float = Field(default=0.5, ge=0)
     chunk_tokens: int = Field(default=384, gt=0)
     chunk_overlap: int = Field(default=64, ge=0)
+    sparse_index_mode: Literal["body", "bm25f"] = "body"
+    sparse_title_weight: float = Field(default=2.0, gt=0, le=20)
 
 
 class ExecutionConfig(BaseModel):

@@ -31,6 +31,7 @@ def _safe_label(value: str) -> str:
 def _run_cell(
     stage: str,
     suite: Path,
+    config: Path,
     output_dir: Path,
     dataset: str,
     method: str,
@@ -48,6 +49,8 @@ def _run_cell(
         stage,
         "--suite",
         str(suite),
+        "--config",
+        str(config),
         "--output-dir",
         str(output_dir),
         "--dataset",
@@ -64,6 +67,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage")
     parser.add_argument("--suite", type=Path, required=True)
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=64)
     parser.add_argument("--dataset", action="append", dest="datasets", help="Restrict to one or more configured datasets")
@@ -100,6 +104,7 @@ def main() -> int:
         "started_at": datetime.now(timezone.utc).isoformat(),
         "stage": args.stage,
         "suite": str(args.suite),
+        "config": str(args.config),
         "output_dir": str(args.output_dir),
         "workers": min(args.workers, len(jobs)),
         "datasets": datasets,
@@ -123,7 +128,17 @@ def main() -> int:
     )
     with ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as executor:
         futures = {
-            executor.submit(_run_cell, args.stage, args.suite, args.output_dir, dataset, method, log_dir, env): (dataset, method)
+            executor.submit(
+                _run_cell,
+                args.stage,
+                args.suite,
+                args.config,
+                args.output_dir,
+                dataset,
+                method,
+                log_dir,
+                env,
+            ): (dataset, method)
             for dataset, method in jobs
         }
         for future in as_completed(futures):

@@ -367,6 +367,8 @@ def run(
                 dense_weight=cfg.retrieval.dense_weight,
                 rerank_enabled=cfg.reranker.enabled,
                 cache=EmbeddingCache(output_dir / "embedding_cache.json"),
+                sparse_index_mode=cfg.retrieval.sparse_index_mode,
+                sparse_title_weight=cfg.retrieval.sparse_title_weight,
             )
             if mode == "baseline":
                 result = run_whole_question_baseline(question, retriever, agnes)

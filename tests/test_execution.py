@@ -182,6 +182,41 @@ def test_materializer_exposes_ranked_retrieval_trace_without_passage_payloads():
     }]
 
 
+def test_materializer_executes_generic_query_variant_as_a_separate_physical_action():
+    class RecordingRetriever:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            return [
+                RetrievalResult(
+                    passage=Passage(id="p1", doc_id="Ada", text="Ada was born in London."),
+                    score=0.9,
+                )
+            ]
+
+    retriever = RecordingRetriever()
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"place": "London", "source_id": "p1"}]]),
+        retriever,
+        question_context="Where was Ada born?",
+    )
+
+    rows, metrics = materializer.materialize_many_with_query_variant(
+        Slot(id="S1", predicate="born_in", arguments=["Ada", "?place"]),
+        [{}],
+        query_variant="question_plus_lexical_slot",
+    )
+
+    assert retriever.queries == ["Where was Ada born? born in Ada"]
+    assert rows[0].bindings == {"place": "London"}
+    assert metrics.retrieval_calls == 1
+    assert materializer.last_materialization_traces[0].searches[0].query_variant == (
+        "question_plus_lexical_slot"
+    )
+
+
 def test_executor_persists_materialization_trace_on_execution_result():
     class RankedRetriever:
         def search(self, _query):
@@ -1020,6 +1055,74 @@ def test_executor_does_not_offer_topk_expansion_after_retrieval_budget_is_spent(
     assert "EXPAND_TOPK" not in {
         candidate.action for candidate in result.slot_traces[0].action_candidates
     }
+
+
+def test_executor_runs_one_complementary_query_and_stops_on_evidence_gain():
+    class ComplementaryMaterializer:
+        max_passages = 1
+
+        def __init__(self):
+            self.calls = []
+            self.last_evidence = []
+            self.last_materialization_traces = []
+            self.last_retrieval_results = []
+
+        def materialize(self, slot, bindings):
+            self.calls.append(("slot", slot.id, dict(bindings)))
+            self.last_retrieval_results = [
+                RetrievalResult(passage=Passage(id="noise", text="Noise"), score=0.1)
+            ]
+            return [], RunMetrics(retrieval_calls=1, passages_processed=1)
+
+        def materialize_many_with_query_variant(self, slot, contexts, *, query_variant):
+            self.calls.append((query_variant, slot.id, list(contexts)))
+            self.last_retrieval_results = [
+                RetrievalResult(
+                    passage=Passage(id="gold", text="Ada is the answer."), score=1.0
+                )
+            ]
+            self.last_evidence = []
+            return [
+                BindingRow(
+                    slot_id=slot.id,
+                    bindings={"answer": "Ada"},
+                    source_id="gold",
+                    source_span="Ada is the answer.",
+                    confidence=1.0,
+                    retrieval_score=1.0,
+                )
+            ], RunMetrics(retrieval_calls=1, passages_processed=1)
+
+        @staticmethod
+        def estimate_materialization_retrieval_calls(contexts):
+            return len(contexts or [{}])
+
+    materializer = ComplementaryMaterializer()
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],
+        "joins": [],
+        "outputs": ["?answer"],
+    })
+
+    result = AdaptiveExecutor(
+        materializer,
+        max_retrieval_calls=2,
+        action_policy=PhysicalActionPolicy(topk_expansion_mode="disabled"),
+        complementary_retrieval=True,
+    ).execute(plan)
+
+    assert result.status == "ok"
+    assert result.rows == [{"answer": "Ada"}]
+    assert [call[0] for call in materializer.calls] == [
+        "slot",
+        "question_plus_lexical_slot",
+    ]
+    assert result.metrics.complementary_retrieval_actions == 1
+    assert result.metrics.complementary_retrieval_novel_passages == 1
+    assert result.metrics.complementary_retrieval_novel_rows == 1
+    assert result.metrics.evidence_gain_stops == 1
+    assert result.slot_traces[0].action_query_variant == "question_plus_lexical_slot"
+    assert result.slot_traces[0].action_stop_reason == "sufficiency_improved"
 
 
 def test_slot_compiler_repairs_invalid_plan_once():

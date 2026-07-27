@@ -69,6 +69,7 @@ class MethodSpec:
     physical_action_policy: bool = False
     topk_expansion_mode: TopKExpansionMode = "utility"
     evidence_sufficiency: bool = False
+    complementary_retrieval: bool = False
     description: str = ""
 
 
@@ -149,7 +150,8 @@ METHODS: dict[str, MethodSpec] = {
         adaptive_binding_beam=True,
         physical_action_policy=True,
         topk_expansion_mode="disabled",
-        description="SlotRAG with physical planning and v70 development-selected no-top-k action policy",
+        complementary_retrieval=True,
+        description="SlotRAG with physical planning and bounded complementary query actions",
     ),
     "slotrag-qo": MethodSpec(
         "slotrag-qo",
@@ -159,6 +161,7 @@ METHODS: dict[str, MethodSpec] = {
         physical_action_policy=True,
         topk_expansion_mode="disabled",
         evidence_sufficiency=True,
+        complementary_retrieval=True,
         description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer",
     ),
     "slotrag-physical-policy-utility": MethodSpec(
@@ -1137,7 +1140,7 @@ def _run_slotrag(
         "max_passages": config.execution.materialization_top_k,
         "typed_extraction_contracts": spec.typed_extraction_contracts,
     }
-    if spec.question_grounded_retrieval:
+    if spec.question_grounded_retrieval or spec.complementary_retrieval:
         materializer_options["question_context"] = question.question
     if spec.dual_query_retrieval:
         materializer_options["dual_query_retrieval"] = True
@@ -1182,6 +1185,7 @@ def _run_slotrag(
             else None
         ),
         sufficiency_calibrator=(sufficiency_calibrator if spec.evidence_sufficiency else None),
+        complementary_retrieval=spec.complementary_retrieval,
         retrieval_backend=("bm25" if getattr(retriever, "dense_enabled", None) is False else "hybrid"),
         random_seed=seed,
         options=spec.options,
