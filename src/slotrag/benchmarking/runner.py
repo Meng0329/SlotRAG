@@ -202,6 +202,12 @@ class BenchmarkRunner:
     def _sample_path(self, stage: str, dataset: str) -> Path:
         return self.output_dir / "samples" / stage / f"{dataset}.jsonl"
 
+    def _artifact_reference(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.output_dir))
+        except ValueError:
+            return str(path)
+
     def _plan_snapshot_path(self, stage: str, dataset: str, question_id: str) -> Path:
         return self.output_dir / "plans" / stage / dataset / f"{_safe_id(question_id)}.json"
 
@@ -255,21 +261,32 @@ class BenchmarkRunner:
             cache=self.embedding_cache,
         )
 
-    def _build_shared_index(self, stage_name: str, dataset: str, split: str) -> SharedCorpusIndex:
-        questions = load_all_questions(DATASETS[dataset], self.suite.benchmark_root, split=split)
-        manifest_path = self.output_dir / "corpus" / stage_name / dataset / "manifest.json"
+    def _build_shared_index(self, stage_name: str, dataset: str, stage: Any) -> SharedCorpusIndex:
+        questions = load_all_questions(DATASETS[dataset], self.suite.benchmark_root, split=stage.split)
+        index_root = stage.shared_index_dir or (self.output_dir / "corpus")
+        index_dir = Path(index_root) / stage_name / dataset
+        manifest_path = index_dir / "manifest.json"
+        backend = stage.retrieval_backend
+        operational_rpm = (
+            self.app_config.rate_limit.embedding_operational_rpm
+            or self.app_config.rate_limit.operational_rpm
+        )
         return SharedCorpusIndex.from_questions(
             questions,
             dataset=dataset,
-            split=split,
+            split=stage.split,
             retrieval=self.app_config.retrieval,
-            embedding_client=self.embedding,
-            reranker_client=self.reranker,
-            rerank_enabled=self.app_config.reranker.enabled,
-            cache=self.embedding_cache,
+            embedding_client=self.embedding if backend == "hybrid" else None,
+            reranker_client=self.reranker if backend == "hybrid" else None,
+            rerank_enabled=self.app_config.reranker.enabled and backend == "hybrid",
             manifest_path=manifest_path,
             source_scope="full_split",
             embedding_dimension=self.app_config.embedding.dimension,
+            retrieval_backend=backend,
+            index_dir=index_dir,
+            max_build_minutes=stage.max_corpus_build_minutes,
+            operational_rpm=operational_rpm,
+            embedding_batch_size=self.app_config.embedding.batch_size,
         )
 
     def _provider_snapshot(self) -> dict[str, tuple[int, int, int, float, tuple[str, ...]]]:
@@ -538,7 +555,7 @@ class BenchmarkRunner:
                 self._shared_indices[(stage_name, dataset)] = self._build_shared_index(
                     stage_name,
                     dataset,
-                    stage.split,
+                    stage,
                 )
         self._write_manifest(stage_name, selected_datasets, selected_methods)
         for dataset in selected_datasets:
@@ -716,7 +733,7 @@ class BenchmarkRunner:
                         if trace_info["enabled"]:
                             trace_info["path"] = str(trace_path.relative_to(self.output_dir))
                         corpus_manifest = (
-                            str(shared_index.manifest_path.relative_to(self.output_dir))
+                            self._artifact_reference(shared_index.manifest_path)
                             if shared_index is not None and shared_index.manifest_path is not None
                             else None
                         )
@@ -730,6 +747,7 @@ class BenchmarkRunner:
                             "question_id": question.id,
                             "stratum": question.metadata.get("stratum"),
                             "retrieval_protocol": stage.retrieval_protocol,
+                            "retrieval_backend": stage.retrieval_backend,
                             "corpus_manifest": corpus_manifest,
                             "attempt_index": attempt_index,
                             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -850,7 +868,7 @@ class BenchmarkRunner:
             },
             "suite": self.suite.model_dump(mode="json"),
             "corpus_manifests": {
-                f"{stage_name}/{dataset}": str(index.manifest_path.relative_to(self.output_dir))
+                f"{stage_name}/{dataset}": self._artifact_reference(index.manifest_path)
                 for (index_stage, dataset), index in self._shared_indices.items()
                 if index_stage == stage_name and index.manifest_path is not None
             },

@@ -3401,3 +3401,107 @@ analysis_ready=false。没有 global quality 数字，不能计算 local/global 
 离线预构建或明确的稀疏 smoke 协议），再进入论文级 global-corpus 实验；不能通过降低 RPM、删题
 或偷换成 per-question corpus 来伪造完成。v56 后暂停，下一步再设计可复现的 offline index build
 与 LogicalPlan/PhysicalPlan，尚未开始 `slotrag-qo`。
+
+---
+
+# v57 Persistent Shared Index：成本门禁与 global-corpus sparse smoke（2026-07-27）
+
+v57 先补齐 v56 暴露的工程瓶颈，没有开始 predicate-specific repair、LogicalPlan/PhysicalPlan
+或 2×2 方法消融。实现范围是可复用的 shared-corpus artifact 和显式的低成本协议后端：
+
+* `HybridRetriever` 增加 `dense_enabled`；`retrieval_backend=bm25` 时只用 BM25，不创建或查询向量，且强制关闭 reranker。
+* `SharedCorpusIndex` 增加稳定 `index_id`、`passages.jsonl`、可选 `embeddings.json`、artifact 复用和
+  `reused_persisted_index` manifest 字段；索引指纹包含 dataset/split、检索配置和所有 passage 内容。
+* 增加 `estimate_corpus_build` 与 `CorpusBuildCostError`。在 dense backend 建索引前按 chunk 数、batch size
+  和 operational RPM 计算 embedding batches 与理论最低分钟数；超过 `max_corpus_build_minutes` 时在
+  provider 调用前失败。
+* `StageConfig` 增加 `retrieval_backend`、`shared_index_dir`、`max_corpus_build_minutes`；runner 对外部复用
+  artifact 保存显式路径，避免把外部 manifest 错写成当前 run 的相对路径。
+* 修复 global corpus 的 evidence metric 前缀问题：共享索引的 `dataset:doc:local_id` 会在评分时还原到
+  题目级 local passage id，避免把正确证据记成 recall=0。
+
+## v57 真实实验
+
+第一次 v57 run 使用完整 HotpotQA evaluation split 的 BM25 shared corpus，完成了 full-split index，
+但发现 evidence 评分没有剥离 global id 前缀。原 run 保留为不可变的 bug-observed artifact，不作为最终数字。
+
+校正 run 使用已构建的 immutable index，配置为 `global_corpus`、HotpotQA evaluation、2 个固定 smoke
+questions、adapted `hybrid` answer method 和 `retrieval_backend=bm25`；manifest 显示
+`reused_persisted_index=true`。full split 规模与工件如下：
+
+| 项目 | 实际值 |
+|---|---:|
+| source questions | 7,405 |
+| 原始 passages（v56 计数） | 73,700 |
+| 去重/分块后 index chunks | 66,738 |
+| unique documents | 66,581 |
+| persisted artifact bytes | 58,572,203 |
+| 首次 BM25 build | 5,484.69 ms |
+| 复用时 load + BM25 materialization | 7,907.50 ms |
+| 查询数 | 2 |
+| 累计查询延迟 | 961.31 ms |
+| embedding calls / reranker calls | 0 / 0 |
+| Agnes generation calls | 2 |
+
+校正 run 的逐题结果（`n=2`，仅 smoke，不做显著性推断）：
+
+| question | F1/primary | EM | evidence recall | R@1 | R@5 | R@10 | answer scored |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `5add23d05542994734353871` | 0.0 | 0.0 | 1.0 | 0.5 | 1.0 | 1.0 | `guarding` |
+| `5ae0d4c9554299603e418468` | 0.0 | 0.0 | 0.5 | 0.5 | 0.5 | 0.5 | `1969-1974` |
+
+均值 primary/F1=`0.0`、EM=`0.0`、evidence recall=`0.75`、R@1=`0.5`、R@5/R@10=`0.75`；平均
+prompt/completion tokens=`2498.5/6.5`，查询延迟约 `480.65 ms`。两题答案生成仍有表达/格式不匹配，
+因此不能把 sparse smoke 的 evidence 命中写成回答质量提升。
+
+`records-audit` 为 `complete=true`、`final_count=2`、无 retry/timeout；`gate` 为
+`analysis_ready=true` 但 `publication_ready=false`，阻塞原因为 smoke stage。该 cell 只证明
+`global_corpus` 的跨题 distractor、索引持久化/复用和计分对齐已经可运行；没有 dense global 质量结果，
+没有 SlotRAG-QO 结果，也没有与 local_context 的可比主结论。下一版本才进入 LogicalPlan/PhysicalPlan
+和 Evidence-Sufficiency-guided physical policy；在此之前不启动昂贵的完整 dense 矩阵。
+
+v57 验证：`PYTHONPATH=src:. pytest -q` 为 `262 passed, 1 skipped`；
+`PYTHONPATH=src:. python -m compileall -q src benchmark tools` 与 `git diff --check` 通过。
+
+---
+
+# v58 `slotrag-qo` 逻辑/物理计划边界（2026-07-27）
+
+v58 实现了新核心方法的第一条离线可验证链路，没有调用 provider，也没有修改现有
+`AdaptiveExecutor`。新增模块为 `src/slotrag/qo.py`，公开两个入口：
+
+* `logical_plan_from_slot_plan`：把当前 planner 的 `SlotPlan` 转为 optimizer-owned `LogicalPlan`，包含 typed variables、subgoals、canonical predicate 输入、dependency edges、join edges、answer variable/type 和 semantic constraints。
+* `compile_physical_plan`：验证逻辑计划并生成 `PhysicalPlan`，包含 slot execution order、retrieval strategy、query formulation、top-k、reranker usage、binding beam width、expansion/backtracking policy、stopping rule、per-slot budget allocation 和 `PlanTelemetry`。
+
+编译器统一执行 predicate canonicalization，并检查：变量来源、重复 slot、不可执行 slot、join slot/variable
+引用、join graph 连通性、answer variable 可达性、dependency cycle、estimated cardinality/cost 和
+selectivity。非法计划抛出 `PlanValidationError`，异常携带完整 telemetry，而不是丢失失败原因。
+依赖环当前记为 warning（查询 join 环可能是合法语义），其余结构性问题阻止物理计划生成。
+
+## v58 provider-free smoke
+
+命令：
+
+```bash
+PYTHONPATH=src:. python tools/run_qo_compile_smoke.py \
+  --output-dir runs/slotrag-qo-compile-smoke-v58
+```
+
+工件：`runs/slotrag-qo-compile-smoke-v58/summary.json`，`provider_calls=0`。
+
+合法两槽位计划的实际结果：`Born In`/`Located-In` 被规范化为 `born_in`/`located_in`，物理顺序为
+`S2 -> S1`（按 estimated cardinality×cost），top-k=`8`，reranker=`true`，binding beam=`3`，
+`validation_status=valid`、errors=`[]`、canonicalized predicates=`2`。由于当前 `SlotPlan` 还没有
+selectivity 估计，telemetry 明确记录两个 `MISSING_SELECTIVITY` warnings。
+
+非法计划的 telemetry 同时记录了 `INVALID_CARDINALITY`、`INVALID_COST`、`ANSWER_UNREACHABLE`、
+`JOIN_GRAPH_DISCONNECTED`，并检测到 dependency cycle `S1,S2`。该 smoke 证明计划边界和失败可追踪性，
+不证明 retrieval、executor 或 answer quality 提升。
+
+v58 新增 `tests/test_qo.py`，并把 `LogicalPlan`/`PhysicalPlan` 导出到 `slotrag` 公共包。当前仍未
+把 physical order 接入 runtime executor，未实现 Evidence Sufficiency、physical action policy、
+adaptive binding beam 或 `slotrag-qo` benchmark method；这些属于后续独立版本，避免同时改变多个不可
+独立消融的模块。
+
+验证：`PYTHONPATH=src:. pytest -q` 为 `264 passed, 1 skipped`；compileall 与 `git diff --check`
+通过。v58 到此暂停，不启动 provider 全矩阵。

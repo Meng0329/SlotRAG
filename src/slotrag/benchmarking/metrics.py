@@ -156,7 +156,11 @@ def boolean_accuracy(prediction: str, answers: list[str]) -> float:
 
 
 def _canonical_source_id(source_id: str) -> str:
-    return source_id.split("#chunk-", 1)[0]
+    canonical = source_id.split("#chunk-", 1)[0]
+    # Shared-corpus indexes prefix local passage ids with ``dataset:doc:``.
+    # Metrics remain question-local, so compare the original passage suffix.
+    parts = canonical.split(":")
+    return parts[-1] if len(parts) >= 3 else canonical
 
 
 def evidence_scores(result: ExecutionResult, question: QuestionRecord) -> dict[str, Any]:

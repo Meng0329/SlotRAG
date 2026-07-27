@@ -66,3 +66,13 @@ def test_evidence_quality_metrics_cover_ranked_cutoffs():
     assert scores["evidence_precision_at_5"] == 0.4
     assert scores["evidence_mrr"] == 1.0
     assert scores["evidence_ndcg_at_10"] > 0.0
+
+
+def test_evidence_quality_metrics_strip_shared_corpus_prefix():
+    scores = score_record(
+        "hotpotqa",
+        _question(available=True, gold=["Austrian Pinscher#0"]),
+        _result("hotpotqa:Austrian Pinscher:Austrian Pinscher#0"),
+    )
+    assert scores["evidence_recall"] == 1.0
+    assert scores["evidence_hit_at_1"] == 1.0

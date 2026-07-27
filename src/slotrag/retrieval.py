@@ -68,7 +68,7 @@ class HybridRetriever:
     def __init__(
         self,
         passages: list[Passage],
-        embedding_client: EmbeddingClient,
+        embedding_client: EmbeddingClient | None,
         reranker_client: RerankerClient | None = None,
         *,
         bm25_k: int = 50,
@@ -79,6 +79,7 @@ class HybridRetriever:
         dense_weight: float = 0.5,
         rerank_enabled: bool = True,
         cache: EmbeddingCache | None = None,
+        dense_enabled: bool = True,
     ) -> None:
         self.passages = passages
         self.embedding_client = embedding_client
@@ -86,11 +87,16 @@ class HybridRetriever:
         self.bm25_k, self.dense_k, self.final_k, self.rrf_k = bm25_k, dense_k, final_k, rrf_k
         self.bm25_weight, self.dense_weight = bm25_weight, dense_weight
         self.rerank_enabled = rerank_enabled
+        self.dense_enabled = dense_enabled
         self.cache = cache or EmbeddingCache()
         self._bm25 = BM25Okapi([tokenize(p.text) for p in passages]) if passages else None
         self._passage_vectors: list[list[float]] | None = None
 
     def _ensure_vectors(self) -> list[list[float]]:
+        if not self.dense_enabled:
+            return []
+        if self.embedding_client is None:
+            raise RuntimeError("dense retrieval is enabled but no embedding client was provided")
         if self._passage_vectors is None:
             missing = [p.text for p in self.passages if self.cache.get(p.text) is None]
             if missing:
@@ -106,7 +112,8 @@ class HybridRetriever:
 
     def build_index(self) -> None:
         """Materialize the shared passage index before online query timing starts."""
-        self._ensure_vectors()
+        if self.dense_enabled:
+            self._ensure_vectors()
 
     @staticmethod
     def _cosine(query: list[float], values: list[list[float]]) -> np.ndarray:
@@ -131,12 +138,15 @@ class HybridRetriever:
             bm25_ranks = {index: rank for rank, index in enumerate(bm25_order)}
             for index in bm25_order:
                 candidate_scores[int(index)]["bm25"] = float(bm25_scores[index])
-        query_vector = self.embedding_client.embed(query)[0]
-        dense_scores = self._cosine(query_vector, self._ensure_vectors())
-        dense_order = [int(index) for index in np.argsort(-dense_scores, kind="stable")[:self.dense_k]]
-        dense_ranks = {index: rank for rank, index in enumerate(dense_order)}
-        for index in dense_order:
-            candidate_scores[int(index)]["dense"] = float(dense_scores[index])
+        if self.dense_enabled:
+            if self.embedding_client is None:
+                raise RuntimeError("dense retrieval is enabled but no embedding client was provided")
+            query_vector = self.embedding_client.embed(query)[0]
+            dense_scores = self._cosine(query_vector, self._ensure_vectors())
+            dense_order = [int(index) for index in np.argsort(-dense_scores, kind="stable")[:self.dense_k]]
+            dense_ranks = {index: rank for rank, index in enumerate(dense_order)}
+            for index in dense_order:
+                candidate_scores[int(index)]["dense"] = float(dense_scores[index])
         ranked = []
         for index, scores in candidate_scores.items():
             score = 0.0

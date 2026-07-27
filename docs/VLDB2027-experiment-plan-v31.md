@@ -629,3 +629,63 @@ RPM=20 下理论构建下界约 115.5 分钟，超过受控 smoke 成本门禁�
 结论：full-split global corpus 的主要下一步是离线/持久化索引构建及可复用向量 manifest，而不是
 继续增加在线 guard。v56 不晋级 publication，不启动完整 global 矩阵；先完成成本方案与
 LogicalPlan/PhysicalPlan 设计，再进入 `slotrag-qo`。
+
+## v57 持久化索引与 sparse global smoke（2026-07-27）
+
+v57 的目标是解决 v56 的可复现成本瓶颈，而不是制造质量正结果。`SharedCorpusIndex` 现在把
+dataset/split、检索配置和完整 passage 内容哈希为 `index_id`，并持久化 `passages.jsonl`；dense
+backend 额外持久化 embedding cache。再次运行同一 corpus 时，manifest 标记
+`reused_persisted_index=true`，不重复 embedding 已完成的 passages。`estimate_corpus_build` 在
+构建前给出 chunk 数、embedding batches、operational RPM 和理论最低分钟数；
+`max_corpus_build_minutes` 超限则在 provider 调用前抛出成本门禁异常。
+
+为验证协议而非质量，新增 `retrieval_backend=bm25`：它关闭 dense/reranker，仅保留共享 BM25
+检索，允许 full-split global corpus 在不触发约 2,310 个 dense batch 的情况下完成受控 smoke。
+最终工件为 `runs/slotrag-retrieval-global-sparse-smoke-v57-corrected/`，首次构建工件
+`runs/slotrag-retrieval-global-sparse-smoke-v57/` 保留为发现 evidence id 前缀 bug 的不可变记录。
+
+full-split 实际为 7,405 questions、73,700 raw passages、66,738 chunks、66,581 documents、
+58,572,203 artifact bytes。首次 BM25 build 为 5,484.69 ms；校正 run 复用 manifest，
+`reused_persisted_index=true`，load + BM25 materialization 为 7,907.50 ms。2 个固定题的最终
+平均 F1/primary=`0.0`、EM=`0.0`、evidence recall=`0.75`、R@1=`0.5`、R@5/R@10=`0.75`；
+embedding/reranker calls=`0/0`、Agnes calls=`2`。其中一题证据 recall=1.0 但答案为 `guarding`，
+gold 为 `to guard`；另一题 evidence recall=0.5、答案为 `1969-1974`，gold 为
+`1969 until 1974`。这表明当前 smoke 的主要可观测问题仍在答案组织/评分，不是足以支持方法质量
+结论的样本。
+
+首次 run 暴露的 global id 前缀计分 bug 已由回归测试固定，并在校正 run 重跑；外部 shared index
+路径写入 bug 也已修复。校正 run 的 records-audit 为 complete、2 final、0 retry/timeout；gate
+为 analysis-ready 但 publication=false（smoke stage）。因此 v57 仅通过 global protocol/cost
+gate，不进入主表，不声称 dense/global 或 SlotRAG-QO 提升。
+
+验证命令：`PYTHONPATH=src:. pytest -q`（`262 passed, 1 skipped`）、
+`PYTHONPATH=src:. python -m compileall -q src benchmark tools`、`git diff --check`。下一步是
+在不改 evaluation split 的 development 数据上实现并校准 `LogicalPlan`、`PhysicalPlan`、
+Evidence Sufficiency 和 adaptive binding beam，再以冻结协议做 2×2 ablation。
+
+## v58 `slotrag-qo` 计划边界 smoke（2026-07-27）
+
+v58 只实现离线计划层，不调用 provider、不修改现有 `AdaptiveExecutor`，以避免把逻辑计划、物理
+执行、sufficiency、binding beam 同时改动而无法消融。新增 `src/slotrag/qo.py`：
+
+* `LogicalPlan`：typed variables、subgoals、predicate 输入、dependency edges、join edges、answer variable/type、semantic constraints。
+* `PhysicalPlan`：slot order、retrieval strategy、query formulation、top-k、reranker usage、binding beam width、expansion policy、stopping rule、per-slot budget allocation。
+* `PlanTelemetry`/`PlanValidationError`：记录 canonicalization、估计 rows/cost、重复 slot、不可执行 slot、变量来源、join 连通性、answer 可达性、cycle 和所有 validation error/warning。
+
+离线 smoke 命令：
+
+```bash
+PYTHONPATH=src:. python tools/run_qo_compile_smoke.py \
+  --output-dir runs/slotrag-qo-compile-smoke-v58
+```
+
+结果保存在 `summary.json`，provider calls=`0`。合法计划 canonicalized predicates=`2`，物理顺序
+`S2 -> S1`，top-k=`8`、reranker=true、binding beam=3、validation errors 为空；缺少 selectivity
+的事实以两个 warnings 保存。非法计划一次性暴露 `INVALID_CARDINALITY`、`INVALID_COST`、
+`ANSWER_UNREACHABLE`、`JOIN_GRAPH_DISCONNECTED`，并检测 dependency cycle `S1,S2`。
+
+该结果只证明新计划边界可独立测试、失败原因可审计，不代表任何 retrieval/executor/generator
+收益。下一版本先在 development split 以该接口接入 physical executor，再单独实现 Evidence
+Sufficiency 和 action policy；完成每条垂直链路后分别 smoke，最后才做冻结协议上的 2×2 ablation。
+
+验证：`PYTHONPATH=src:. pytest -q`（`264 passed, 1 skipped`）、compileall、`git diff --check`。

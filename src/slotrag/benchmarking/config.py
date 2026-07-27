@@ -18,6 +18,9 @@ class StageConfig(BaseModel):
     sample_size: int = Field(gt=0)
     methods: list[str] = Field(min_length=1)
     retrieval_protocol: Literal["local_context", "global_corpus"] = "local_context"
+    retrieval_backend: Literal["hybrid", "bm25"] = "hybrid"
+    shared_index_dir: Path | None = None
+    max_corpus_build_minutes: float | None = Field(default=None, gt=0)
     frozen_plan_source: str | None = None
     frozen_plan_import_dir: Path | None = None
 

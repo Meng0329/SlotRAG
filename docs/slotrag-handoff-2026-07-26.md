@@ -170,3 +170,81 @@ global 质量结果，不得计算 local/global 差异。
 下一轮从“离线/持久化 shared index + immutable vector manifest”开始，再实现 LogicalPlan/
 PhysicalPlan 与 `slotrag-qo`；不要为了完成 smoke 把 full split 改回 per-question 或删除跨题
 distractors。v56 已完成并暂停。
+
+## v57 persistent shared index 与 global sparse smoke（2026-07-27）
+
+v57 已完成并按要求暂停。实现集中在协议/成本层，没有开始 `slotrag-qo`：
+
+* `HybridRetriever(..., dense_enabled=False)` 支持 BM25-only，无 embedding client 访问；默认 dense 行为不变。
+* `SharedCorpusIndex` 增加 `index_id`、`passages.jsonl`、dense 时的 `embeddings.json`、复用标志和
+  `estimate_corpus_build`/`CorpusBuildCostError` 成本门禁。
+* `StageConfig` 增加 `retrieval_backend`、`shared_index_dir`、`max_corpus_build_minutes`。
+* runner 对 external shared index 使用绝对/显式路径引用；evidence metrics 去掉
+  `dataset:doc:` global prefix 后再和题目级 gold 对齐。
+
+### v57 实验工件
+
+首次 full-split BM25 smoke：
+`runs/slotrag-retrieval-global-sparse-smoke-v57/`。它完成了 7,405 question、66,738 chunk、66,581
+document 的共享索引，但保留了一个已发现的 evidence prefix 计分 bug，不能使用其质量数字。
+
+校正后的最终 smoke：
+`runs/slotrag-retrieval-global-sparse-smoke-v57-corrected/`，配置
+`configs/experiments/retrieval-protocol-sparse-smoke-v57-corrected.yaml`。它复用首次 run 的
+`corpus/global_corpus_sparse_smoke_v57/hotpotqa/` artifact，manifest 的
+`reused_persisted_index=true`，2/2 fixed questions 完成，0 retry/timeout，embedding/reranker
+calls=`0/0`，Agnes calls=`2`。
+
+最终 smoke 数字：artifact bytes=`58,572,203`，首次 build=`5,484.69 ms`，复用 load + BM25
+materialization=`7,907.50 ms`，累计 query latency=`961.31 ms`。F1/primary 均值=`0.0`、EM=`0.0`、
+evidence recall=`0.75`、R@1=`0.5`、R@5/R@10=`0.75`；题 1 的 evidence recall=1.0 但输出
+`guarding`（gold `to guard`），题 2 evidence recall=0.5、输出 `1969-1974`（gold
+`1969 until 1974`）。records-audit=`complete=true`、final=`2`；gate=`analysis_ready=true`、
+`publication_ready=false`，阻塞原因为 smoke stage。它只验证 full-split global protocol、artifact
+复用和计分对齐，不能作为 SlotRAG-QO 或 dense retrieval 质量结果。
+
+### v57 修改/验证清单
+
+修改：`src/slotrag/retrieval.py`、`src/slotrag/benchmarking/corpus.py`、
+`src/slotrag/benchmarking/config.py`、`src/slotrag/benchmarking/runner.py`、
+`src/slotrag/benchmarking/metrics.py`；测试：`tests/test_retrieval.py`、
+`tests/test_benchmark_corpus.py`、`tests/test_benchmark_metrics.py`；配置：
+`configs/experiments/retrieval-protocol-sparse-smoke-v57*.yaml`。
+
+验证：`PYTHONPATH=src:. pytest -q` 为 `262 passed, 1 skipped`；compileall 和 `git diff --check`
+通过。下一轮只能从 development split 开始实现 LogicalPlan/PhysicalPlan、sufficiency calibration
+和 physical action policy；先做单模块测试/小规模 smoke，再停下来汇报，不得把 v57 smoke 写成论文
+主结果。
+
+## v58 `slotrag-qo` 计划层 smoke（2026-07-27）
+
+v58 已完成并暂停。新增 `src/slotrag/qo.py`，不调用 provider，也没有接入现有 executor：
+
+* `logical_plan_from_slot_plan` 将旧 `SlotPlan` 转为带 typed variables、subgoals、dependency/join edges、answer variable/type 和 semantic constraints 的 `LogicalPlan`。
+* `compile_physical_plan` 生成包含 slot order、retrieval strategy、query formulation、top-k、reranker、binding beam、expansion policy、stopping rule 和 budget allocation 的 `PhysicalPlan`。
+* `PlanTelemetry` 记录 canonicalization、cardinality/cost/selectivity、变量来源、join graph、answer 可达性、cycle、重复/不可执行 slot 和 validation errors/warnings；`PlanValidationError.telemetry` 保留非法计划完整原因。
+* `LogicalPlan`/`PhysicalPlan` 已从 `slotrag` 公共包导出。
+
+### Smoke 工件
+
+命令：
+
+```bash
+PYTHONPATH=src:. python tools/run_qo_compile_smoke.py \
+  --output-dir runs/slotrag-qo-compile-smoke-v58
+```
+
+`summary.json` 显示 provider_calls=`0`。合法两槽位计划 canonicalized=`2`，顺序为 `S2 -> S1`，
+top-k=`8`、reranker=true、beam=3、validation errors=[]；缺少 selectivity 的两个 warnings 被保留。
+非法计划 telemetry 同时包含 `INVALID_CARDINALITY`、`INVALID_COST`、`ANSWER_UNREACHABLE`、
+`JOIN_GRAPH_DISCONNECTED`，并检测 dependency cycle `S1,S2`。
+
+### 修改和验证
+
+新增：`src/slotrag/qo.py`、`tools/run_qo_compile_smoke.py`、`tests/test_qo.py`；修改：
+`src/slotrag/__init__.py`。全量测试：`264 passed, 1 skipped`；compileall 和 `git diff --check`
+通过。
+
+下一步不得直接跑全矩阵。先在 development 数据把 `PhysicalPlan.slot_execution_order` 接到 executor，
+单独记录执行 telemetry；再实现 Evidence Sufficiency、physical action policy、adaptive binding beam，
+每完成一条独立链路就做一次离线/小规模 smoke 并停下来汇报，最后再做冻结 evaluation 的 2×2 ablation。

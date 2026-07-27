@@ -12,6 +12,7 @@ from .models import (
     Slot,
     SlotPlan,
 )
+from .qo import LogicalPlan, PhysicalPlan
 
 __all__ = [
     "BindingRow",
@@ -22,4 +23,6 @@ __all__ = [
     "RelationalOperator",
     "Slot",
     "SlotPlan",
+    "LogicalPlan",
+    "PhysicalPlan",
 ]

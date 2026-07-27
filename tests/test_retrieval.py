@@ -38,6 +38,27 @@ def test_hybrid_retriever_builds_passage_index_before_query():
     assert embedding.calls == [["alpha fact", "beta fact"], ["alpha"]]
 
 
+def test_bm25_only_retrieval_does_not_call_embedding_client():
+    embedding = FakeEmbedding()
+    passages = [Passage(id="p1", text="alpha fact"), Passage(id="p2", text="beta fact")]
+    retriever = HybridRetriever(
+        passages,
+        embedding_client=None,
+        reranker_client=None,
+        final_k=2,
+        bm25_k=2,
+        dense_k=0,
+        rerank_enabled=False,
+        dense_enabled=False,
+    )
+
+    retriever.build_index()
+    results = retriever.search("alpha")
+
+    assert [item.passage.id for item in results] == ["p1", "p2"]
+    assert embedding.calls == []
+
+
 def test_embedding_cache_flush_merges_entries_from_concurrent_instances(tmp_path):
     path = tmp_path / "embeddings.json"
     first = EmbeddingCache(path)
