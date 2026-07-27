@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
+from slotrag.action_policy import PhysicalActionPolicy
 from slotrag.planner import (
     AdaptiveExecutor,
     ExecutionOptions,
@@ -763,6 +764,35 @@ def test_executor_prunes_binding_fanout_to_runtime_budget():
     result = AdaptiveExecutor(materializer, max_binding_contexts=1, max_retrieval_calls=2).execute(plan)
     assert result.rows == [{"person": "Ada", "company": "X"}]
     assert result.metrics.binding_contexts_pruned == 1
+
+
+def test_executor_records_adaptive_beam_and_action_policy_telemetry():
+    materializer = MultiBindingMaterializer()
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Founder", "arguments": ["?person", "OpenAI"]},
+            {"id": "S2", "predicate": "Founded", "arguments": ["?person", "?company"]},
+        ],
+        "joins": [["S1.person", "S2.person"]],
+        "outputs": ["?person", "?company"],
+    })
+
+    result = AdaptiveExecutor(
+        materializer,
+        max_binding_contexts=2,
+        max_retrieval_calls=2,
+        adaptive_binding_beam=True,
+        action_policy=PhysicalActionPolicy(),
+    ).execute(plan)
+
+    assert result.status == "ok"
+    assert result.metrics.binding_beam_decisions == 1
+    assert result.metrics.binding_beam_widths == [2]
+    assert result.metrics.binding_candidates_considered == 2
+    assert result.metrics.binding_candidates_pruned == 0
+    assert result.metrics.physical_action_decisions == 2
+    assert len(result.metrics.physical_action_selected) == 2
+    assert result.metrics.physical_action_policy == "utility"
 
 
 def test_slot_compiler_repairs_invalid_plan_once():

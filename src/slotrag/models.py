@@ -294,6 +294,17 @@ class RunMetrics(StrictModel):
     materialization_requests: int = 0
     materialization_cache_hits: int = 0
     binding_contexts_pruned: int = 0
+    binding_beam_decisions: int = 0
+    binding_beam_widths: list[int] = Field(default_factory=list)
+    binding_candidates_considered: int = 0
+    binding_candidates_pruned: int = 0
+    binding_correct_path_pruned: int = 0
+    binding_pruned_source_ids: list[str] = Field(default_factory=list)
+    physical_action_decisions: int = 0
+    physical_action_policy: str | None = None
+    physical_action_selected: list[str] = Field(default_factory=list)
+    physical_action_utilities: list[float] = Field(default_factory=list)
+    physical_action_candidate_counts: list[int] = Field(default_factory=list)
     evidence_only_fallbacks: int = 0
     answer_reconciliations: int = 0
     answer_span_normalizations: int = 0

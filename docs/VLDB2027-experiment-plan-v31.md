@@ -711,3 +711,93 @@ calibration，再单独实现 physical action policy 和 adaptive binding beam�
 2×2 或 global-corpus dense 矩阵。
 
 验证：`PYTHONPATH=src:. pytest -q` 为 `267 passed, 1 skipped`；compileall 与 `git diff --check` 通过。
+
+## v60 Evidence Sufficiency 特征与校准（2026-07-27）
+
+新增 `src/slotrag/sufficiency.py`，定义 `EvidenceContext`、`SufficiencyFeatures`、三态
+`SufficiencyPrediction` 和 development-only `EvidenceSufficiencyCalibrator`。特征覆盖 top-1/top-k
+score、margin、entropy、sparse/dense/reranker agreement、新实体/source/predicate/bound/join 覆盖、
+extraction consistency、rows、remaining depth 和 budget。校准输出 Brier、ECE、reliability bins、
+precision、recall、accuracy；模型参数、输入 hash、逐题 prediction 和分箱结果分开落盘。
+
+输入工具：
+
+```bash
+PYTHONPATH=src:. python tools/calibrate_evidence_sufficiency.py \
+  --input-jsonl <development-sufficiency-examples.jsonl> \
+  --output-dir <calibration-output>
+```
+
+provider-free smoke：
+
+```bash
+PYTHONPATH=src:. python tools/run_sufficiency_smoke.py \
+  --output-dir runs/slotrag-sufficiency-smoke-v60
+```
+
+20 条合成样例按稳定 ID 分为 15/5；calibration Brier=`0.00000187`、ECE=`0.0013433`，precision/recall
+均为 `1.0`。这些数字只验证实现，不进入论文主表。历史脱敏 trace 缺少逐候选 score 序列，尚未声称
+真实 development calibration；下一门禁是生成 enriched score JSONL，并在其上冻结参数后再接 action
+policy。v60 不改变 executor，不启动 provider 矩阵。
+
+验证：`PYTHONPATH=src:. pytest -q` 为 `269 passed, 1 skipped`；compileall 与 `git diff --check` 通过。
+
+## v61 Evidence Sufficiency 接入 physical action policy（2026-07-27）
+
+v61 在不调用 provider 的前提下新增 `src/slotrag/action_policy.py`，把 v60 校准状态映射为有限动作
+集合，并显式计算质量-成本 utility。动作包含停止、slot-only/question+slot 检索、扩展 top-k、query
+rewrite、切换 retriever、扩大 binding beam、backtrack、answer 和 abstain；每个候选保留预计质量增益、
+calls、tokens、latency 与 rationale。保留 `utility`、`rule`、`fixed_topk`、`legacy` 和 action-quality
+`oracle` 五种策略，oracle 只作为上界/回归检查。
+
+provider-free smoke：
+
+```bash
+PYTHONPATH=src:. python tools/run_action_policy_smoke.py \
+  --output-dir runs/slotrag-action-policy-smoke-v61
+```
+
+`summary.json` 实际包含 12 个 synthetic examples，`provider_calls=0`、`simulation_only=true`。utility
+的 action accuracy=`0.75`、mean quality=`0.625`、mean regret=`0.1875`、平均 calls/tokens/latency
+=`0.75/296.0/83.75 ms`；rule 和 fixed-top-k 均为 quality=`0.55`、regret=`0.2625`；legacy quality
+=`0.25`、regret=`0.5625`；oracle quality=`0.8125`、regret=`0`。该表只验证动作选择、成本扣分和
+oracle regret 计算，不进入论文主结果，也不证明真实数据集提升。
+
+当前 gate：合成 smoke 通过，但尚未具备 development enriched trace 的动作质量校准，因此不能启动
+昂贵 provider 矩阵。下一步先增加 runtime action telemetry 并实现 adaptive binding beam，逐模块做
+focused test/smoke；development 复现、unsupported-answer 检查和成本收益 gate 全部通过后，才做冻结
+`local_context`/`global_corpus` 的 2×2 ablation。
+
+修改：`src/slotrag/action_policy.py`、`tests/test_action_policy.py`、`tools/run_action_policy_smoke.py`。
+
+验证：focused tests `4 passed`；全量 `PYTHONPATH=src:. pytest -q` 为 `273 passed, 1 skipped`，compileall
+与 `git diff --check` 通过。按版本门禁，v61 到此暂停，不启动 provider 或完整实验矩阵。
+
+## v62 Runtime Action Telemetry 与 Adaptive Binding Beam（2026-07-27）
+
+v62 新增独立 `AdaptiveBindingBeam` selector，按 evidence confidence、join compatibility、source
+diversity、downstream reachability、duplicate penalty 和 estimated execution cost 排序并去重 binding
+contexts；beam width 由置信度不确定性和剩余预算决定。executor 默认路径不变，只有 `slotrag-qo`
+opt-in 使用 adaptive beam。`RunMetrics` 增加 beam decisions、widths、considered/pruned candidates、
+correct-path-pruned 计数和 source ids。
+
+`PhysicalActionPolicy` 现在也可通过 `slotrag-qo` 显式接入 runtime telemetry。每次 materialization 后
+记录 proxy sufficiency、动作候选数、selected action 和 utility。proxy 的原因已写入代码和 trace：
+当前 runtime boundary 没有完整 ranked sparse/dense/reranker score，不能把 proxy 当作 calibrated
+development confidence，也不能据此调 evaluation 阈值。
+
+provider-free smoke：
+
+```bash
+PYTHONPATH=src:. python tools/run_runtime_telemetry_smoke.py \
+  --output-dir runs/slotrag-runtime-telemetry-smoke-v62
+```
+
+实际 `provider_calls=0`、`simulation_only=true`；legacy/adaptive 均 `ok`。adaptive beam decision=`1`、
+width=`[2]`、considered/pruned=`3/1`、`binding_contexts_pruned=1`；action decisions=`2`，动作
+`EXPAND_TOPK -> ANSWER`，utilities=`[0.1785667, 0.7909000]`，candidate counts=`[6, 7]`。
+`binding_correct_path_pruned=0` 仅因 smoke 未提供 oracle path，不能解释为真实剪枝安全性。
+
+该版本只完成 telemetry/兼容性 gate，不启动 provider，不改变 evaluation split，不进入 2×2 主实验。
+验证：focused tests `3 passed`；全量 `276 passed, 1 skipped`，compileall 与 `git diff --check` 通过。
+下一门禁是 development enriched trace 的 action-gain calibration 和 oracle binding recall 审计。

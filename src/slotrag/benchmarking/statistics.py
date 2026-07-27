@@ -82,6 +82,13 @@ METRICS = [
     "materialization_requests",
     "materialization_cache_hits",
     "binding_contexts_pruned",
+    "binding_beam_decisions",
+    "binding_candidates_considered",
+    "binding_candidates_pruned",
+    "binding_correct_path_pruned",
+    "physical_action_decisions",
+    "physical_action_mean_utility",
+    "physical_action_mean_candidate_count",
     "evidence_only_fallbacks",
     "answer_reconciliations",
     "answer_span_normalizations",
@@ -505,6 +512,14 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         for token_type in ("prompt", "completion")
     )
     total_tokens = metrics["prompt_tokens"] + metrics["completion_tokens"]
+    metrics["physical_action_mean_utility"] = (
+        float(np.mean(metrics["physical_action_utilities"]))
+        if metrics.get("physical_action_utilities") else None
+    )
+    metrics["physical_action_mean_candidate_count"] = (
+        float(np.mean(metrics["physical_action_candidate_counts"]))
+        if metrics.get("physical_action_candidate_counts") else None
+    )
     plan_provenance = record.get("plan_provenance") or {}
     shared_compiler_metrics: RunMetrics | None = None
     if metrics["frozen_plan_replays"] and isinstance(plan_provenance, dict):

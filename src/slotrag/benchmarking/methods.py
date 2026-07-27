@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..config import AppConfig
 from ..generation import generate_answer_response
+from ..action_policy import PhysicalActionPolicy
 from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
 from ..planner import (
     AdaptiveExecutor,
@@ -63,6 +64,8 @@ class MethodSpec:
     dual_query_evidence_guard: bool = False
     dual_query_evidence_guard_disjoint_only: bool = True
     physical_plan: bool = False
+    adaptive_binding_beam: bool = False
+    physical_action_policy: bool = False
     description: str = ""
 
 
@@ -121,7 +124,9 @@ METHODS: dict[str, MethodSpec] = {
         "slotrag-qo",
         "slotrag",
         physical_plan=True,
-        description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer (initial physical-order slice)",
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer (physical order, action telemetry, adaptive binding beam)",
     ),
     "hybrid": MethodSpec("hybrid", "hybrid", description="whole-question hybrid retrieval"),
     "ircot": MethodSpec("ircot", "ircot", description="interleaved reasoning and retrieval, adapted"),
@@ -510,6 +515,11 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
         "physical_plan_validation_warnings",
         "extraction_finish_reasons",
         "extraction_validation_errors",
+        "binding_beam_widths",
+        "binding_pruned_source_ids",
+        "physical_action_selected",
+        "physical_action_utilities",
+        "physical_action_candidate_counts",
     }
     replace_lists = {"physical_plan_order"}
     max_fields = {
@@ -542,6 +552,9 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
                 data[key] = max(data[key], item)
             elif key in nullable:
                 if item is not None:
+                    data[key] = item
+            elif key == "physical_action_policy":
+                if item:
                     data[key] = item
             elif isinstance(item, (int, float)):
                 data[key] += item
@@ -1106,6 +1119,8 @@ def _run_slotrag(
         max_replans=min(config.execution.max_replans, max_steps),
         max_retrieval_calls=max_retrieval_calls,
         max_binding_contexts=config.execution.max_binding_contexts,
+        adaptive_binding_beam=spec.adaptive_binding_beam,
+        action_policy=PhysicalActionPolicy() if spec.physical_action_policy else None,
         random_seed=seed,
         options=spec.options,
     )

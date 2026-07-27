@@ -15,6 +15,8 @@ import unicodedata
 from pydantic import BaseModel, Field, ValidationError
 
 from .errors import SchemaError
+from .action_policy import ActionPolicyContext, PhysicalActionPolicy, make_runtime_sufficiency_prediction
+from .binding import AdaptiveBindingBeam
 from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
@@ -1997,6 +1999,8 @@ class AdaptiveExecutor:
         max_replans: int = 16,
         max_retrieval_calls: int = 4,
         max_binding_contexts: int = 2,
+        adaptive_binding_beam: bool = False,
+        action_policy: PhysicalActionPolicy | None = None,
         random_seed: int = 2027,
         options: ExecutionOptions | None = None,
     ) -> None:
@@ -2006,8 +2010,44 @@ class AdaptiveExecutor:
         self.max_replans = max_replans
         self.max_retrieval_calls = max_retrieval_calls
         self.max_binding_contexts = max_binding_contexts
+        self.adaptive_binding_beam = adaptive_binding_beam
+        self.binding_beam = AdaptiveBindingBeam(max_width=max_binding_contexts)
+        self.action_policy = action_policy
         self.random = random.Random(random_seed)
         self.options = options or ExecutionOptions()
+
+    def _record_action_policy(
+        self,
+        metrics: RunMetrics,
+        rows: list[BindingRow],
+        *,
+        remaining_plan_depth: int,
+        budget_remaining: int,
+        binding_beam_width: int,
+    ) -> RunMetrics:
+        if self.action_policy is None:
+            return metrics
+        prediction = make_runtime_sufficiency_prediction(
+            rows,
+            remaining_plan_depth=remaining_plan_depth,
+            budget_remaining=budget_remaining,
+        )
+        decision = self.action_policy.decide(ActionPolicyContext(
+            sufficiency=prediction,
+            has_rows=bool(rows),
+            answerable=bool(rows) and remaining_plan_depth == 0,
+            retrieval_calls_used=metrics.retrieval_calls,
+            retrieval_call_budget=self.max_retrieval_calls,
+            binding_beam_width=binding_beam_width,
+            max_binding_beam_width=self.binding_beam.max_width,
+        ))
+        return metrics.model_copy(update={
+            "physical_action_decisions": metrics.physical_action_decisions + 1,
+            "physical_action_policy": decision.policy_name,
+            "physical_action_selected": metrics.physical_action_selected + [decision.action],
+            "physical_action_utilities": metrics.physical_action_utilities + [decision.selected.utility],
+            "physical_action_candidate_counts": metrics.physical_action_candidate_counts + [len(decision.candidates)],
+        })
 
     def _choose_slot(
         self,
@@ -2148,20 +2188,6 @@ class AdaptiveExecutor:
                 })
             remaining.remove(slot)
             order.append(slot.id)
-            if current is None or not self.options.binding_propagation or self.options.eager_materialization:
-                binding_contexts = [{}]
-            else:
-                relevant = slot.variables & set(current[0].bindings)
-                binding_contexts = []
-                seen_contexts: set[tuple[tuple[str, str], ...]] = set()
-                for current_row in current:
-                    context = {key: value for key, value in current_row.bindings.items() if key in relevant}
-                    context_key = tuple(sorted(context.items()))
-                    if context_key not in seen_contexts:
-                        seen_contexts.add(context_key)
-                        binding_contexts.append(context)
-                if not binding_contexts:
-                    binding_contexts = [{}]
             remaining_retrieval_calls = self.max_retrieval_calls - metrics.retrieval_calls
             if remaining_retrieval_calls <= 0:
                 return ExecutionResult(
@@ -2172,12 +2198,49 @@ class AdaptiveExecutor:
                     status="budget_exceeded",
                     error=f"retrieval call budget exceeded ({self.max_retrieval_calls})",
                 )
-            context_limit = min(self.max_binding_contexts, remaining_retrieval_calls)
-            if len(binding_contexts) > context_limit:
-                metrics = metrics.model_copy(update={
-                    "binding_contexts_pruned": metrics.binding_contexts_pruned + len(binding_contexts) - context_limit,
-                })
-                binding_contexts = binding_contexts[:context_limit]
+            adaptive_beam_width = 1
+            if current is None or not self.options.binding_propagation or self.options.eager_materialization:
+                binding_contexts = [{}]
+            else:
+                relevant = slot.variables & set(current[0].bindings)
+                if self.adaptive_binding_beam:
+                    beam_decision = self.binding_beam.select(
+                        current,
+                        relevant_variables=relevant,
+                        budget_remaining=min(self.max_binding_contexts, remaining_retrieval_calls),
+                    )
+                    adaptive_beam_width = beam_decision.width
+                    binding_contexts = [
+                        {key: value for key, value in row.bindings.items() if key in relevant}
+                        for row in beam_decision.selected
+                    ] or [{}]
+                    metrics = metrics.model_copy(update={
+                        "binding_contexts_pruned": metrics.binding_contexts_pruned + beam_decision.pruned_count,
+                        "binding_beam_decisions": metrics.binding_beam_decisions + 1,
+                        "binding_beam_widths": metrics.binding_beam_widths + [beam_decision.width],
+                        "binding_candidates_considered": metrics.binding_candidates_considered + beam_decision.considered_count,
+                        "binding_candidates_pruned": metrics.binding_candidates_pruned + beam_decision.pruned_count,
+                        "binding_correct_path_pruned": metrics.binding_correct_path_pruned + int(beam_decision.correct_path_pruned),
+                        "binding_pruned_source_ids": metrics.binding_pruned_source_ids + beam_decision.pruned_source_ids,
+                    })
+                else:
+                    binding_contexts = []
+                    seen_contexts: set[tuple[tuple[str, str], ...]] = set()
+                    for current_row in current:
+                        context = {key: value for key, value in current_row.bindings.items() if key in relevant}
+                        context_key = tuple(sorted(context.items()))
+                        if context_key not in seen_contexts:
+                            seen_contexts.add(context_key)
+                            binding_contexts.append(context)
+                    if not binding_contexts:
+                        binding_contexts = [{}]
+            if not self.adaptive_binding_beam:
+                context_limit = min(self.max_binding_contexts, remaining_retrieval_calls)
+                if len(binding_contexts) > context_limit:
+                    metrics = metrics.model_copy(update={
+                        "binding_contexts_pruned": metrics.binding_contexts_pruned + len(binding_contexts) - context_limit,
+                    })
+                    binding_contexts = binding_contexts[:context_limit]
             materialize_many = getattr(self.materializer, "materialize_many", None)
             materialization_started = time.perf_counter()
             if materialize_many is not None:
@@ -2249,6 +2312,13 @@ class AdaptiveExecutor:
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + slot_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + slot_metrics.extraction_validation_errors,
             })
+            metrics = self._record_action_policy(
+                metrics,
+                rows,
+                remaining_plan_depth=len(remaining),
+                budget_remaining=max(self.max_retrieval_calls - metrics.retrieval_calls, 0),
+                binding_beam_width=adaptive_beam_width,
+            )
             if not rows:
                 return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")
             if current is None:

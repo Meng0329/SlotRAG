@@ -13,6 +13,8 @@ from .models import (
     SlotPlan,
 )
 from .qo import LogicalPlan, PhysicalPlan
+from .action_policy import ActionDecision, ActionPolicyContext, PhysicalActionPolicy
+from .binding import AdaptiveBindingBeam, BindingBeamDecision
 
 __all__ = [
     "BindingRow",
@@ -25,4 +27,9 @@ __all__ = [
     "SlotPlan",
     "LogicalPlan",
     "PhysicalPlan",
+    "ActionDecision",
+    "ActionPolicyContext",
+    "PhysicalActionPolicy",
+    "AdaptiveBindingBeam",
+    "BindingBeamDecision",
 ]
