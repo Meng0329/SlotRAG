@@ -318,6 +318,7 @@ class EvidenceSufficiencyCalibrator:
         cls,
         examples: Sequence[SufficiencyExample],
         *,
+        feature_names: Sequence[str] | None = None,
         learning_rate: float = 0.15,
         epochs: int = 800,
         l2: float = 1e-3,
@@ -326,7 +327,12 @@ class EvidenceSufficiencyCalibrator:
             raise ValueError("at least one development example is required")
         if learning_rate <= 0 or epochs <= 0 or l2 < 0:
             raise ValueError("learning_rate and epochs must be positive; l2 must be non-negative")
-        feature_names = SUFFICIENCY_FEATURE_NAMES
+        feature_names = tuple(feature_names or SUFFICIENCY_FEATURE_NAMES)
+        if not feature_names:
+            raise ValueError("at least one sufficiency feature is required")
+        unknown_features = sorted(set(feature_names) - set(SufficiencyFeatures.model_fields))
+        if unknown_features:
+            raise ValueError(f"unknown sufficiency features: {', '.join(unknown_features)}")
         matrix = np.asarray([
             extract_features(example.context).vector(feature_names)
             for example in examples

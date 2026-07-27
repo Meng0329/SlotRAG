@@ -343,10 +343,24 @@ def test_calibration_uses_question_disjoint_fit_and_holdout():
     )
 
     dataset_report = calibration["datasets"]["hotpotqa"]
+    assert calibration["schema_version"] == 2
+    assert calibration["feature_schema_version"] == 2
+    assert "backend_top1_score" in calibration["feature_names"]
     assert set(dataset_report["fit_question_ids"]).isdisjoint(dataset_report["holdout_question_ids"])
     assert dataset_report["fit_example_count"] + dataset_report["holdout_example_count"] == 20
     assert dataset_report["holdout"]["example_count"] == dataset_report["holdout_example_count"]
+    assert len(dataset_report["fit_predictions"]) == dataset_report["fit_example_count"]
+    assert len(dataset_report["holdout_predictions"]) == dataset_report["holdout_example_count"]
+    assert {
+        row["question_id"] for row in dataset_report["holdout_predictions"]
+    } == set(dataset_report["holdout_question_ids"])
+    assert all(
+        row["features"]["score_source_bm25"] == 1.0
+        for row in dataset_report["holdout_predictions"]
+    )
     assert artifact.source_split == "train"
+    assert artifact.schema_version == 2
+    assert artifact.feature_schema_version == 2
     assert artifact.retrieval_protocol == "global_corpus"
     assert artifact.retrieval_backend == "bm25"
     assert artifact.example_counts == {"hotpotqa": dataset_report["fit_example_count"]}

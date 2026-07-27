@@ -13,6 +13,8 @@ from ..models import BindingRow, Passage, RetrievalResult, Slot
 from ..sufficiency import (
     EvidenceContext,
     EvidenceSufficiencyCalibrator,
+    SUFFICIENCY_FEATURE_NAMES,
+    SUFFICIENCY_FEATURE_SCHEMA_VERSION,
     SufficiencyCalibrationArtifact,
     SufficiencyExample,
 )
@@ -331,6 +333,11 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
                     label = int(_answer_in_text(answers, selected_text) and _answer_in_text(answers, rows_text))
                 context = EvidenceContext(
                     retrieval_results=selected,
+                    retrieval_backend=(
+                        str(item.get("retrieval_backend"))
+                        if item.get("retrieval_backend") in {"bm25", "hybrid"}
+                        else "unknown"
+                    ),
                     predicate=slot.predicate,
                     requested_variables=sorted(slot.variables),
                     bound_variables=binding_context,
@@ -370,7 +377,7 @@ def analyze_development_run(run_dir: Path, *, stage: str) -> dict[str, Any]:
             oracle["available_answer_retrieval_miss"] += 1
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_dir": str(run_dir),
         "stage": stage,
         "record_count": len(items),
@@ -432,7 +439,9 @@ def calibrate_development_report(
     reports: dict[str, dict[str, Any]] = {}
     example_counts: dict[str, int] = {}
     calibration: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "feature_schema_version": SUFFICIENCY_FEATURE_SCHEMA_VERSION,
+        "feature_names": list(SUFFICIENCY_FEATURE_NAMES),
         "source_split": "train",
         "retrieval_protocol": protocol,
         "retrieval_backend": backend,
@@ -471,6 +480,26 @@ def calibrate_development_report(
         calibrator = EvidenceSufficiencyCalibrator.fit(fit_examples)
         fit_report = calibrator.evaluate(fit_examples).model_dump(mode="json")
         holdout_report = calibrator.evaluate(holdout_examples).model_dump(mode="json")
+
+        def prediction_rows(
+            raw_rows: list[dict[str, Any]],
+            parsed_examples: list[SufficiencyExample],
+        ) -> list[dict[str, Any]]:
+            output: list[dict[str, Any]] = []
+            for raw_row, example in zip(raw_rows, parsed_examples, strict=True):
+                prediction = calibrator.predict(example.context)
+                output.append({
+                    "example_id": example.example_id,
+                    "question_id": str(raw_row["question_id"]),
+                    "slot_id": str(raw_row["slot_id"]),
+                    "label": example.label,
+                    "probability": prediction.probability,
+                    "status": prediction.status,
+                    "raw_logit": prediction.raw_logit,
+                    "features": prediction.features.model_dump(mode="json"),
+                })
+            return output
+
         fit_question_ids = sorted({str(row["question_id"]) for row in fit_rows})
         holdout_question_ids = sorted({str(row["question_id"]) for row in holdout_rows})
         dataset_report = {
@@ -483,6 +512,8 @@ def calibrate_development_report(
             "holdout_label_counts": dict(Counter(example.label for example in holdout_examples)),
             "fit": fit_report,
             "holdout": holdout_report,
+            "fit_predictions": prediction_rows(fit_rows, fit_examples),
+            "holdout_predictions": prediction_rows(holdout_rows, holdout_examples),
         }
         calibrators[dataset] = calibrator.to_dict()
         reports[dataset] = dataset_report

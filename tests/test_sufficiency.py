@@ -203,6 +203,23 @@ def test_calibrator_reports_probability_quality_and_three_state_prediction():
     assert report.binary_recall > 0.8
 
 
+def test_calibrator_fit_supports_a_preregistered_feature_subset():
+    examples = [_calibration_example(index, index % 2 == 0) for index in range(12)]
+    feature_names = ("backend_top1_score", "extraction_consistency", "row_count")
+
+    calibrator = EvidenceSufficiencyCalibrator.fit(
+        examples,
+        feature_names=feature_names,
+    )
+
+    assert calibrator.feature_names == feature_names
+    assert calibrator.feature_schema_version == 2
+    assert len(calibrator.weights) == len(feature_names)
+    assert calibrator.predict(examples[0].context).probability > calibrator.predict(
+        examples[1].context
+    ).probability
+
+
 def test_calibration_artifact_loads_dataset_models_and_hash(tmp_path):
     calibrator = EvidenceSufficiencyCalibrator(intercept=1.5)
     artifact = SufficiencyCalibrationArtifact(
