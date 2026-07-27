@@ -80,6 +80,20 @@ def _passage_from_mapping(value: dict[str, Any]) -> Passage | None:
     )
 
 
+def _resolve_artifact_reference(run_dir: Path, value: object) -> Path:
+    reference = Path(str(value))
+    if reference.is_absolute():
+        return reference
+    candidates = (run_dir / reference, Path.cwd() / reference)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    attempted = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(
+        f"artifact reference {reference} was not found; checked: {attempted}"
+    )
+
+
 def _passage_lookup(
     run_dir: Path,
     samples: dict[tuple[str, str], dict[str, Any]],
@@ -107,10 +121,7 @@ def _passage_lookup(
                     )
         manifest_value = item.get("corpus_manifest")
         if manifest_value:
-            manifest_path = Path(str(manifest_value))
-            if not manifest_path.is_absolute():
-                manifest_path = run_dir / manifest_path
-            corpus_manifests.add(manifest_path)
+            corpus_manifests.add(_resolve_artifact_reference(run_dir, manifest_value))
     missing = wanted - set(lookup)
     for manifest_path in sorted(corpus_manifests):
         manifest = _read_json(manifest_path)

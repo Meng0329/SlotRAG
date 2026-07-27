@@ -94,6 +94,75 @@ def test_development_analysis_builds_strong_examples_and_topk_oracle(tmp_path):
     assert report["oracle_headroom"]["evidence_selected_extraction_failed"] == 0
 
 
+def test_development_analysis_resolves_workspace_relative_external_corpus(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "run"
+    stage = "dev"
+    _write_jsonl(run_dir / "samples" / stage / "hotpotqa.jsonl", [{
+        "id": "q1",
+        "question": "Who founded Alpha?",
+        "answers": ["Ada"],
+        "passages": [],
+        "gold_evidence": ["Alpha#0"],
+        "metadata": {"dataset": "hotpotqa", "split": "train", "stratum": "bridge"},
+    }])
+    _write_json(tmp_path / "shared" / "corpus" / "manifest.json", {
+        "passage_artifact": "passages.jsonl",
+    })
+    _write_jsonl(tmp_path / "shared" / "corpus" / "passages.jsonl", [{
+        "id": "Alpha#0",
+        "doc_id": "Alpha",
+        "text": "Ada founded Alpha.",
+    }])
+    _write_json(run_dir / "items" / stage / "hotpotqa" / "slotrag" / "q1.json", {
+        "stage": stage,
+        "dataset": "hotpotqa",
+        "method": "slotrag",
+        "question_id": "q1",
+        "retrieval_protocol": "global_corpus",
+        "retrieval_backend": "bm25",
+        "corpus_manifest": "shared/corpus/manifest.json",
+        "budget": {"max_retrieval_calls": 4},
+        "result": {
+            "status": "ok",
+            "answer": "Ada",
+            "rows": [{"founder": "Ada"}],
+            "evidence": [{"source_id": "Alpha#0", "source_span": "Ada founded Alpha."}],
+            "plan": {
+                "slots": [{"id": "S1", "predicate": "Founded", "arguments": ["Alpha", "?founder"]}],
+                "joins": [], "operators": [], "outputs": ["?founder"],
+            },
+            "slot_traces": [{
+                "step": 0, "slot_id": "S1", "predicate": "Founded",
+                "materializations": [{
+                    "slot_id": "S1", "predicate": "Founded", "binding_context": {},
+                    "retrieval_calls": 1, "selected_source_ids": ["Alpha#0"],
+                    "searches": [{
+                        "query": "Founded Alpha ?founder",
+                        "query_variant": "slot",
+                        "candidates": [{
+                            "rank": 1, "source_id": "Alpha#0", "doc_id": "Alpha",
+                            "score": 1.0, "bm25_score": 1.0,
+                        }],
+                    }],
+                    "extracted_rows": [{
+                        "source_id": "Alpha#0", "bindings": {"founder": "Ada"},
+                        "confidence": 1.0, "retrieval_score": 1.0,
+                    }],
+                }],
+            }],
+        },
+        "scores": {"prediction_scored": "Ada", "primary_score": 1.0},
+    })
+
+    report = analyze_development_run(run_dir, stage=stage)
+
+    assert report["missing_source_count"] == 0
+    assert report["example_count"] == 1
+    assert report["examples"][0]["label"] == 1
+    assert report["examples"][0]["context"]["retrieval_results"][0]["passage"]["text"] == "Ada founded Alpha."
+
+
 def test_development_analysis_keeps_weak_supervision_out_of_strong_inventory(tmp_path):
     run_dir = tmp_path / "run"
     stage = "dev"
