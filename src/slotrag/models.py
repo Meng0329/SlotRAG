@@ -243,6 +243,66 @@ class RetrievalResult(StrictModel):
     rerank_score: float | None = None
 
 
+class RetrievalCandidateTrace(StrictModel):
+    rank: int = Field(ge=1)
+    source_id: str
+    doc_id: str | None = None
+    score: float
+    bm25_score: float | None = None
+    dense_score: float | None = None
+    rerank_score: float | None = None
+
+
+class RetrievalSearchTrace(StrictModel):
+    query: str
+    query_variant: Literal["slot", "question_plus_slot"]
+    candidates: list[RetrievalCandidateTrace] = Field(default_factory=list)
+
+
+class ExtractedBindingTrace(StrictModel):
+    source_id: str
+    bindings: dict[str, str]
+    confidence: float = Field(ge=0, le=1)
+    retrieval_score: float | None = None
+
+
+class MaterializationTrace(StrictModel):
+    slot_id: str
+    predicate: str
+    binding_context: dict[str, str] = Field(default_factory=dict)
+    retrieval_calls: int = Field(default=0, ge=0)
+    searches: list[RetrievalSearchTrace] = Field(default_factory=list)
+    selected_source_ids: list[str] = Field(default_factory=list)
+    extracted_rows: list[ExtractedBindingTrace] = Field(default_factory=list)
+
+
+class PhysicalActionCandidateTrace(StrictModel):
+    action: str
+    expected_quality_gain: float
+    retrieval_calls: float = 0.0
+    tokens: float = 0.0
+    latency_ms: float = 0.0
+    utility: float
+    rationale: str
+
+
+class SlotExecutionTrace(StrictModel):
+    step: int = Field(ge=0)
+    slot_id: str
+    predicate: str
+    binding_contexts: list[dict[str, str]] = Field(default_factory=list)
+    materializations: list[MaterializationTrace] = Field(default_factory=list)
+    extracted_row_count: int = Field(default=0, ge=0)
+    rows_after_join: int = Field(default=0, ge=0)
+    sufficiency_model: str | None = None
+    sufficiency_status: Literal["SUFFICIENT", "PARTIAL", "INSUFFICIENT"] | None = None
+    sufficiency_probability: float | None = Field(default=None, ge=0, le=1)
+    sufficiency_features: dict[str, float | int] = Field(default_factory=dict)
+    action_selected: str | None = None
+    action_utility: float | None = None
+    action_candidates: list[PhysicalActionCandidateTrace] = Field(default_factory=list)
+
+
 class RunMetrics(StrictModel):
     documents_accessed: int = 0
     unique_documents_accessed: int = 0
@@ -305,6 +365,10 @@ class RunMetrics(StrictModel):
     physical_action_selected: list[str] = Field(default_factory=list)
     physical_action_utilities: list[float] = Field(default_factory=list)
     physical_action_candidate_counts: list[int] = Field(default_factory=list)
+    evidence_sufficiency_decisions: int = 0
+    evidence_sufficiency_model: str | None = None
+    evidence_sufficiency_statuses: list[str] = Field(default_factory=list)
+    evidence_sufficiency_probabilities: list[float] = Field(default_factory=list)
     evidence_only_fallbacks: int = 0
     answer_reconciliations: int = 0
     answer_span_normalizations: int = 0
@@ -388,6 +452,7 @@ class ExecutionResult(StrictModel):
     answer: str | None = None
     order: list[str] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
+    slot_traces: list[SlotExecutionTrace] = Field(default_factory=list)
     status: Literal["ok", "empty", "failed", "budget_exceeded", "unsupported_operation"] = "ok"
     error: str | None = None
     plan: SlotPlan | None = None

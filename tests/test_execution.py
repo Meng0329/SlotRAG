@@ -17,6 +17,7 @@ from slotrag.planner import (
 )
 from slotrag.providers import ChatResult, ToolCall, Usage
 from slotrag.qo import compile_physical_plan, logical_plan_from_slot_plan
+from slotrag.sufficiency import EvidenceSufficiencyCalibrator
 
 
 class FakeMaterializer:
@@ -123,6 +124,136 @@ def test_materializer_dual_query_retrieval_merges_and_accounts_for_both_searches
     assert metrics.retrieval_calls == 2
     assert materializer.accessed_passage_ids == {"slot", "shared", "question"}
     assert [item.source_id for item in materializer.last_evidence].count("shared") == 1
+
+
+def test_materializer_exposes_ranked_retrieval_trace_without_passage_payloads():
+    class RankedRetriever:
+        def search(self, query):
+            assert query == "Founded Alpha ?founder"
+            return [
+                RetrievalResult(
+                    passage=Passage(id="p1", doc_id="d1", text="Ada founded Alpha."),
+                    score=0.91,
+                    bm25_score=4.2,
+                    dense_score=0.82,
+                    rerank_score=0.94,
+                ),
+                RetrievalResult(
+                    passage=Passage(id="p2", doc_id="d2", text="An unrelated fact."),
+                    score=0.21,
+                    bm25_score=1.1,
+                    dense_score=0.18,
+                    rerank_score=0.20,
+                ),
+            ]
+
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "p1"}]]),
+        RankedRetriever(),
+    )
+
+    rows, _metrics = materializer.materialize(
+        Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]),
+        {},
+    )
+
+    trace = materializer.last_materialization_traces[0]
+    assert trace.slot_id == "S1"
+    assert trace.predicate == "Founded"
+    assert trace.binding_context == {}
+    assert trace.retrieval_calls == 1
+    assert trace.searches[0].query == "Founded Alpha ?founder"
+    assert trace.searches[0].query_variant == "slot"
+    assert trace.searches[0].candidates[0].model_dump() == {
+        "rank": 1,
+        "source_id": "p1",
+        "doc_id": "d1",
+        "score": 0.91,
+        "bm25_score": 4.2,
+        "dense_score": 0.82,
+        "rerank_score": 0.94,
+    }
+    assert trace.selected_source_ids == ["p1", "p2"]
+    assert [item.model_dump() for item in trace.extracted_rows] == [{
+        "source_id": rows[0].source_id,
+        "bindings": rows[0].bindings,
+        "confidence": rows[0].confidence,
+        "retrieval_score": rows[0].retrieval_score,
+    }]
+
+
+def test_executor_persists_materialization_trace_on_execution_result():
+    class RankedRetriever:
+        def search(self, _query):
+            return [RetrievalResult(
+                passage=Passage(id="p1", doc_id="d1", text="Ada founded Alpha."),
+                score=0.91,
+                bm25_score=4.2,
+                dense_score=0.82,
+                rerank_score=0.94,
+            )]
+
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "p1"}]]),
+        RankedRetriever(),
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Founded", "arguments": ["Alpha", "?founder"]}],
+        "outputs": ["?founder"],
+    })
+
+    result = AdaptiveExecutor(materializer).execute(plan)
+
+    assert result.status == "ok"
+    assert len(result.slot_traces) == 1
+    trace = result.slot_traces[0]
+    assert trace.step == 0
+    assert trace.slot_id == "S1"
+    assert trace.binding_contexts == [{}]
+    assert trace.materializations[0].searches[0].candidates[0].rerank_score == 0.94
+    assert trace.extracted_row_count == 1
+    assert trace.rows_after_join == 1
+
+
+def test_executor_records_calibrated_sufficiency_and_action_candidates():
+    class RankedRetriever:
+        def search(self, _query):
+            return [RetrievalResult(
+                passage=Passage(id="p1", doc_id="d1", text="Ada founded Alpha."),
+                score=0.91,
+                bm25_score=4.2,
+                dense_score=0.82,
+                rerank_score=0.94,
+            )]
+
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "p1"}]]),
+        RankedRetriever(),
+    )
+    plan = SlotPlan.model_validate({
+        "slots": [{"id": "S1", "predicate": "Founded", "arguments": ["Alpha", "?founder"]}],
+        "outputs": ["?founder"],
+    })
+    calibrator = EvidenceSufficiencyCalibrator(
+        intercept=2.0,
+        sufficient_threshold=0.5,
+        partial_threshold=0.3,
+    )
+
+    result = AdaptiveExecutor(
+        materializer,
+        action_policy=PhysicalActionPolicy(),
+        sufficiency_calibrator=calibrator,
+    ).execute(plan)
+
+    trace = result.slot_traces[0]
+    assert trace.sufficiency_model == "development_logistic"
+    assert trace.sufficiency_status == "SUFFICIENT"
+    assert trace.sufficiency_probability == pytest.approx(0.880797, abs=1e-6)
+    assert trace.sufficiency_features["top1_score"] == 0.94
+    assert trace.action_selected == "ANSWER"
+    assert "EXPAND_TOPK" in {item.action for item in trace.action_candidates}
+    assert result.metrics.evidence_sufficiency_decisions == 1
 
 
 def test_materializer_adaptive_dual_query_skips_question_query_for_bound_slots():

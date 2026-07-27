@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any, Literal, Sequence
 
 import numpy as np
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .models import BindingRow, RetrievalResult, StrictModel
 
@@ -101,6 +104,46 @@ class CalibrationReport(StrictModel):
     positive_count: int
     negative_count: int
     reliability_bins: list[ReliabilityBin]
+
+
+class SufficiencyCalibrationArtifact(StrictModel):
+    schema_version: int = 1
+    created_at: str
+    source_split: Literal["train"]
+    retrieval_protocol: Literal["local_context", "global_corpus"]
+    retrieval_backend: Literal["bm25", "hybrid"]
+    training_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label_definition: str = Field(min_length=1)
+    calibrators: dict[str, dict[str, Any]]
+    reports: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    example_counts: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_dataset_inventory(self) -> "SufficiencyCalibrationArtifact":
+        if not self.calibrators:
+            raise ValueError("calibrators must contain at least one dataset")
+        missing = sorted(set(self.calibrators) - set(self.example_counts))
+        if missing:
+            raise ValueError(f"example_counts missing datasets: {', '.join(missing)}")
+        if any(self.example_counts[dataset] <= 0 for dataset in self.calibrators):
+            raise ValueError("every dataset calibrator requires positive development examples")
+        return self
+
+    def calibrator_for(self, dataset: str) -> "EvidenceSufficiencyCalibrator":
+        try:
+            payload = self.calibrators[dataset]
+        except KeyError as exc:
+            raise ValueError(f"calibration artifact does not contain dataset: {dataset}") from exc
+        return EvidenceSufficiencyCalibrator.from_dict(payload)
+
+
+def load_calibration_artifact(
+    path: str | Path,
+) -> tuple[SufficiencyCalibrationArtifact, str]:
+    source = Path(path)
+    payload = source.read_bytes()
+    artifact = SufficiencyCalibrationArtifact.model_validate(json.loads(payload))
+    return artifact, hashlib.sha256(payload).hexdigest()
 
 
 def _sigmoid(value: float | np.ndarray) -> float | np.ndarray:
@@ -426,5 +469,7 @@ __all__ = [
     "SufficiencyFeatures",
     "SufficiencyPrediction",
     "SufficiencyStatus",
+    "SufficiencyCalibrationArtifact",
     "extract_features",
+    "load_calibration_artifact",
 ]

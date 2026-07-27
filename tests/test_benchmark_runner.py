@@ -18,6 +18,7 @@ from slotrag.benchmarking.runner import (
 from slotrag.config import AppConfig
 from slotrag.models import ExecutionResult, Passage, QuestionRecord, RunMetrics, SlotPlan
 from slotrag.providers import ChatResult, ProviderStats, Usage
+from slotrag.sufficiency import EvidenceSufficiencyCalibrator, SufficiencyCalibrationArtifact
 
 
 class _FakeAgnes:
@@ -73,6 +74,158 @@ def test_retrieval_budget_blocks_calls_before_execution():
     with pytest.raises(BenchmarkBudgetExceeded):
         guarded.search("two")
     assert retriever.calls == 1
+
+
+def test_local_context_bm25_backend_disables_dense_and_reranker(tmp_path, monkeypatch):
+    captured = {}
+
+    class Retriever:
+        def __init__(self, _passages, embedding, reranker, **kwargs):
+            captured.update({"embedding": embedding, "reranker": reranker, **kwargs})
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.HybridRetriever", Retriever)
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train", sample_size=1, methods=["hybrid"],
+            retrieval_protocol="local_context", retrieval_backend="bm25",
+        )},
+    )
+    runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
+
+    runner._retriever(
+        QuestionRecord(id="q", question="Alpha?", passages=[Passage(id="p", text="Alpha")]),
+        retrieval_backend="bm25",
+    )
+
+    assert captured["embedding"] is None
+    assert captured["reranker"] is None
+    assert captured["dense_enabled"] is False
+    assert captured["rerank_enabled"] is False
+
+
+def test_local_context_bm25_records_no_dense_provider_work(tmp_path, monkeypatch):
+    benchmark_root = tmp_path / "benchmark"
+    benchmark_root.mkdir()
+    passage_text = "Alpha is the answer."
+    (benchmark_root / "toy.jsonl").write_text(json.dumps({
+        "id": "q1",
+        "question": "What is named Alpha?",
+        "answers": ["Alpha"],
+        "passages": [{"id": "p1", "doc_id": "d1", "text": passage_text}],
+        "type": "bridge",
+    }) + "\n", encoding="utf-8")
+    spec = DatasetSpec("hotpotqa", "toy.jsonl", "toy.jsonl", "f1", lambda record: record["type"])
+    monkeypatch.setitem(__import__("slotrag.benchmarking.runner", fromlist=["DATASETS"]).DATASETS, "hotpotqa", spec)
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+
+    def fake_run_method(_method, **kwargs):
+        results = kwargs["retriever"].search(kwargs["question"].question)
+        return ExecutionResult(answer="Alpha", evidence=[item.passage for item in results])
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.run_method", fake_run_method)
+    suite = BenchmarkSuite(
+        benchmark_root=benchmark_root,
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train", sample_size=1, methods=["hybrid"],
+            retrieval_protocol="local_context", retrieval_backend="bm25",
+        )},
+    )
+
+    runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
+    assert runner.run("test")["completed"] == 1
+
+    record_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["retrieval_backend"] == "bm25"
+    assert record["index_provider_delta"]["embedding"]["attempts"] == 0
+    assert record["index_provider_delta"]["reranker"]["attempts"] == 0
+    assert record["provider_delta"]["embedding"]["attempts"] == 0
+    assert record["provider_delta"]["reranker"]["attempts"] == 0
+    assert record["result"]["metrics"]["index_bytes"] == len(passage_text.encode("utf-8"))
+
+
+def test_stage_requires_calibration_artifact_for_sufficiency_methods():
+    with pytest.raises(ValueError, match="sufficiency_calibrator_path"):
+        StageConfig(
+            split="evaluation",
+            sample_size=1,
+            methods=["slotrag", "slotrag-sufficiency"],
+        )
+
+
+def test_runner_loads_and_records_frozen_sufficiency_calibrator(tmp_path, monkeypatch):
+    benchmark_root = tmp_path / "benchmark"
+    benchmark_root.mkdir()
+    (benchmark_root / "toy.jsonl").write_text(json.dumps({
+        "id": "q1",
+        "question": "What is named Alpha?",
+        "answers": ["Alpha"],
+        "passages": [{"id": "p1", "doc_id": "d1", "text": "Alpha is the answer."}],
+        "type": "bridge",
+    }) + "\n", encoding="utf-8")
+    spec = DatasetSpec("hotpotqa", "toy.jsonl", "toy.jsonl", "f1", lambda record: record["type"])
+    monkeypatch.setitem(__import__("slotrag.benchmarking.runner", fromlist=["DATASETS"]).DATASETS, "hotpotqa", spec)
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    calibrator = EvidenceSufficiencyCalibrator(intercept=1.25)
+    artifact = SufficiencyCalibrationArtifact(
+        created_at="2026-07-27T00:00:00+00:00",
+        source_split="train",
+        retrieval_protocol="local_context",
+        retrieval_backend="hybrid",
+        training_manifest_sha256="a" * 64,
+        label_definition="development-only test label",
+        calibrators={"hotpotqa": calibrator.to_dict()},
+        reports={"hotpotqa": {"example_count": 1}},
+        example_counts={"hotpotqa": 1},
+    )
+    artifact_path = tmp_path / "calibration.json"
+    artifact_path.write_text(json.dumps(artifact.model_dump(mode="json")), encoding="utf-8")
+    observed = {}
+
+    class Retriever:
+        passages = [Passage(id="p1", doc_id="d1", text="Alpha is the answer.")]
+
+        def build_index(self):
+            return None
+
+    def fake_run_method(_method, **kwargs):
+        observed["calibrator"] = kwargs["sufficiency_calibrator"]
+        return ExecutionResult(answer="Alpha", status="ok")
+
+    monkeypatch.setattr("slotrag.benchmarking.runner.run_method", fake_run_method)
+    monkeypatch.setattr(BenchmarkRunner, "_retriever", lambda _self, _question, **_kwargs: Retriever())
+    suite = BenchmarkSuite(
+        benchmark_root=benchmark_root,
+        datasets=["hotpotqa"],
+        stages={"test": StageConfig(
+            split="train",
+            sample_size=1,
+            methods=["slotrag-sufficiency"],
+            sufficiency_calibrator_path=artifact_path,
+        )},
+    )
+
+    runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
+    runner.run("test")
+
+    assert observed["calibrator"].intercept == 1.25
+    record_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["sufficiency_calibration"]["source_split"] == "train"
+    assert len(record["sufficiency_calibration"]["sha256"]) == 64
 
 
 def test_runner_persists_atomic_items_and_resumes(tmp_path, monkeypatch):
@@ -136,6 +289,44 @@ def test_runner_merges_concurrent_manifest_requests(tmp_path, monkeypatch):
         ("hybrid",),
         ("graphrag",),
     }
+
+
+def test_runner_records_and_locks_stage_execution_profiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slotrag.benchmarking.runner.provider_clients",
+        lambda _config: (_FakeAgnes(), _FakeService(), _FakeService()),
+    )
+    suite = BenchmarkSuite(
+        benchmark_root=tmp_path / "benchmark",
+        datasets=["hotpotqa"],
+        stages={
+            "first": StageConfig(split="train", sample_size=1, methods=["hybrid"]),
+            "second": StageConfig(split="train", sample_size=1, methods=["hybrid"]),
+        },
+    )
+    first_config = AppConfig.model_validate({
+        **_app_config().model_dump(mode="json"),
+        "rate_limit": {"provider_rpm": 15, "operational_rpm": 10, "max_concurrency": 2},
+    })
+    second_config = AppConfig.model_validate({
+        **_app_config().model_dump(mode="json"),
+        "rate_limit": {"provider_rpm": 30, "operational_rpm": 20, "max_concurrency": 64},
+    })
+    output_dir = tmp_path / "run"
+    first = BenchmarkRunner(suite, first_config, output_dir)
+    second = BenchmarkRunner(suite, second_config, output_dir)
+
+    first._write_manifest("first", ["hotpotqa"], ["hybrid"])
+    second._write_manifest("second", ["hotpotqa"], ["hybrid"])
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    profiles = manifest["stage_execution_profiles"]
+    assert profiles["first"]["execution_control"]["operational_rpm"] == 10
+    assert profiles["second"]["execution_control"]["operational_rpm"] == 20
+    assert profiles["first"]["sha256"] != profiles["second"]["sha256"]
+
+    with pytest.raises(RuntimeError, match="stage execution profile mismatch"):
+        second._write_manifest("first", ["hotpotqa"], ["hybrid"])
 
 
 def test_runner_rejects_manifest_provenance_drift(tmp_path, monkeypatch):
@@ -287,7 +478,7 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
         stages={"test": StageConfig(split="train", sample_size=1, methods=["hybrid"])},
     )
     runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
-    monkeypatch.setattr(runner, "_retriever", lambda _question: Retriever())
+    monkeypatch.setattr(runner, "_retriever", lambda _question, **_kwargs: Retriever())
     monkeypatch.setattr("slotrag.benchmarking.runner.run_method", lambda *_args, **_kwargs: ExecutionResult(answer="Alpha"))
 
     runner.run("test")
@@ -295,7 +486,11 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
     final_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
     record = json.loads(final_path.read_text(encoding="utf-8"))
     metrics = record["result"]["metrics"]
-    assert record["schema_version"] == 29
+    assert record["schema_version"] == 30
+    assert record["execution_control"]["operational_rpm"] == 20
+    assert len(record["execution_profile_sha256"]) == 64
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+    assert record["execution_profile_sha256"] == manifest["stage_execution_profiles"]["test"]["sha256"]
     assert record["provider_trace"]["enabled"] is False
     assert metrics["index_build_latency_ms"] >= 20
     assert metrics["wall_latency_ms"] < metrics["index_build_latency_ms"]
@@ -435,7 +630,7 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
         )},
     )
     runner = BenchmarkRunner(suite, _app_config(), tmp_path / "run")
-    monkeypatch.setattr(runner, "_retriever", lambda _question: Retriever())
+    monkeypatch.setattr(runner, "_retriever", lambda _question, **_kwargs: Retriever())
 
     assert runner.run("test")["completed"] == 2
     assert len(compiled) == 1
@@ -445,7 +640,7 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
     snapshots = list((tmp_path / "run" / "plans" / "test").rglob("*.json"))
     assert len(snapshots) == 1
     records = [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "run" / "items" / "test").rglob("*.json")]
-    assert {record["schema_version"] for record in records} == {29}
+    assert {record["schema_version"] for record in records} == {30}
     assert len({record["plan_provenance"]["plan_sha256"] for record in records}) == 1
     assert len({record["plan_provenance"]["effective_plan_sha256"] for record in records}) == 1
     assert {record["plan_provenance"]["source_method"] for record in records} == {"slotrag"}

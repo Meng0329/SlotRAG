@@ -30,6 +30,7 @@ from ..planner import (
 from ..providers import AgnesClient, ChatResult
 from ..qo import PlanValidationError, compile_physical_plan, logical_plan_from_slot_plan
 from ..retrieval import HybridRetriever, tokenize
+from ..sufficiency import EvidenceSufficiencyCalibrator
 
 
 @dataclass(frozen=True)
@@ -66,10 +67,22 @@ class MethodSpec:
     physical_plan: bool = False
     adaptive_binding_beam: bool = False
     physical_action_policy: bool = False
+    evidence_sufficiency: bool = False
     description: str = ""
 
 
-MAIN_METHODS = ["slotrag", "slotrag-qo", "hybrid", "ircot", "react", "planrag", "srag", "graphrag"]
+MAIN_METHODS = [
+    "slotrag",
+    "slotrag-sufficiency",
+    "slotrag-physical-policy",
+    "slotrag-qo",
+    "hybrid",
+    "ircot",
+    "react",
+    "planrag",
+    "srag",
+    "graphrag",
+]
 ABLATION_METHODS = [
     "slotrag-question",
     "slotrag-fixed",
@@ -120,13 +133,28 @@ ABLATION_METHODS = [
 
 METHODS: dict[str, MethodSpec] = {
     "slotrag": MethodSpec("slotrag", "slotrag"),
+    "slotrag-sufficiency": MethodSpec(
+        "slotrag-sufficiency",
+        "slotrag",
+        evidence_sufficiency=True,
+        description="SlotRAG with development-calibrated evidence sufficiency",
+    ),
+    "slotrag-physical-policy": MethodSpec(
+        "slotrag-physical-policy",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        description="SlotRAG with physical planning, action policy, and adaptive binding beam",
+    ),
     "slotrag-qo": MethodSpec(
         "slotrag-qo",
         "slotrag",
         physical_plan=True,
         adaptive_binding_beam=True,
         physical_action_policy=True,
-        description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer (physical order, action telemetry, adaptive binding beam)",
+        evidence_sufficiency=True,
+        description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer",
     ),
     "hybrid": MethodSpec("hybrid", "hybrid", description="whole-question hybrid retrieval"),
     "ircot": MethodSpec("ircot", "ircot", description="interleaved reasoning and retrieval, adapted"),
@@ -520,6 +548,8 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
         "physical_action_selected",
         "physical_action_utilities",
         "physical_action_candidate_counts",
+        "evidence_sufficiency_statuses",
+        "evidence_sufficiency_probabilities",
     }
     replace_lists = {"physical_plan_order"}
     max_fields = {
@@ -553,7 +583,7 @@ def merge_metrics(*values: RunMetrics) -> RunMetrics:
             elif key in nullable:
                 if item is not None:
                     data[key] = item
-            elif key == "physical_action_policy":
+            elif key in {"physical_action_policy", "evidence_sufficiency_model"}:
                 if item:
                     data[key] = item
             elif isinstance(item, (int, float)):
@@ -991,6 +1021,7 @@ def _run_slotrag(
     max_steps: int,
     max_retrieval_calls: int,
     frozen_plan: SlotPlan | None = None,
+    sufficiency_calibrator: EvidenceSufficiencyCalibrator | None = None,
 ) -> ExecutionResult:
     protected_anchor_values: set[str] = set()
     if frozen_plan is None:
@@ -1121,6 +1152,7 @@ def _run_slotrag(
         max_binding_contexts=config.execution.max_binding_contexts,
         adaptive_binding_beam=spec.adaptive_binding_beam,
         action_policy=PhysicalActionPolicy() if spec.physical_action_policy else None,
+        sufficiency_calibrator=(sufficiency_calibrator if spec.evidence_sufficiency else None),
         random_seed=seed,
         options=spec.options,
     )
@@ -1179,6 +1211,7 @@ def run_method(
     max_steps: int = 4,
     max_retrieval_calls: int = 4,
     frozen_plan: SlotPlan | None = None,
+    sufficiency_calibrator: EvidenceSufficiencyCalibrator | None = None,
 ) -> ExecutionResult:
     try:
         spec = METHODS[method]
@@ -1186,6 +1219,8 @@ def run_method(
         raise ValueError(f"unknown benchmark method: {method}") from exc
     if frozen_plan is not None and spec.family != "slotrag":
         raise ValueError(f"frozen plans are only supported by SlotRAG-family methods: {method}")
+    if spec.evidence_sufficiency and sufficiency_calibrator is None:
+        raise ValueError(f"{method} requires a frozen development calibrator")
     runners: dict[str, Callable[[], ExecutionResult]] = {
         "hybrid": lambda: _run_hybrid(dataset, question, retriever, client),
         "planrag": lambda: _run_planrag(dataset, question, retriever, client),
@@ -1203,6 +1238,7 @@ def run_method(
             max_steps,
             max_retrieval_calls,
             frozen_plan=frozen_plan,
+            sufficiency_calibrator=sufficiency_calibrator,
         ),
     }
     return _normalize_polar_answer(question.question, runners[spec.family]())

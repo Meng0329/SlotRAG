@@ -1,11 +1,14 @@
 import pytest
+import json
 
 from slotrag.models import BindingRow, Passage, RetrievalResult
 from slotrag.sufficiency import (
     EvidenceContext,
     EvidenceSufficiencyCalibrator,
+    SufficiencyCalibrationArtifact,
     SufficiencyExample,
     extract_features,
+    load_calibration_artifact,
 )
 
 
@@ -115,3 +118,42 @@ def test_calibrator_reports_probability_quality_and_three_state_prediction():
     assert len(report.reliability_bins) == 4
     assert report.binary_precision > 0.8
     assert report.binary_recall > 0.8
+
+
+def test_calibration_artifact_loads_dataset_models_and_hash(tmp_path):
+    calibrator = EvidenceSufficiencyCalibrator(intercept=1.5)
+    artifact = SufficiencyCalibrationArtifact(
+        created_at="2026-07-27T00:00:00+00:00",
+        source_split="train",
+        retrieval_protocol="global_corpus",
+        retrieval_backend="bm25",
+        training_manifest_sha256="a" * 64,
+        label_definition="gold evidence and answer path are recoverable",
+        calibrators={"hotpotqa": calibrator.to_dict()},
+        reports={"hotpotqa": {"example_count": 10}},
+        example_counts={"hotpotqa": 10},
+    )
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(artifact.model_dump(mode="json")), encoding="utf-8")
+
+    loaded, sha256 = load_calibration_artifact(path)
+
+    assert loaded.calibrator_for("hotpotqa").intercept == 1.5
+    assert len(sha256) == 64
+    with pytest.raises(ValueError, match="does not contain dataset"):
+        loaded.calibrator_for("musique")
+
+
+def test_calibration_artifact_rejects_evaluation_source():
+    with pytest.raises(ValueError, match="source_split"):
+        SufficiencyCalibrationArtifact.model_validate({
+            "created_at": "2026-07-27T00:00:00+00:00",
+            "source_split": "evaluation",
+            "retrieval_protocol": "global_corpus",
+            "retrieval_backend": "bm25",
+            "training_manifest_sha256": "a" * 64,
+            "label_definition": "invalid",
+            "calibrators": {"hotpotqa": EvidenceSufficiencyCalibrator().to_dict()},
+            "reports": {},
+            "example_counts": {"hotpotqa": 1},
+        })

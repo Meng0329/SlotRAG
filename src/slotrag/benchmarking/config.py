@@ -23,12 +23,18 @@ class StageConfig(BaseModel):
     max_corpus_build_minutes: float | None = Field(default=None, gt=0)
     frozen_plan_source: str | None = None
     frozen_plan_import_dir: Path | None = None
+    sufficiency_calibrator_path: Path | None = None
 
     @model_validator(mode="after")
     def validate_methods(self) -> "StageConfig":
         unknown = sorted(set(self.methods) - set(METHODS))
         if unknown:
             raise ValueError(f"unknown methods: {', '.join(unknown)}")
+        requires_sufficiency = any(METHODS[method].evidence_sufficiency for method in self.methods)
+        if requires_sufficiency and self.sufficiency_calibrator_path is None:
+            raise ValueError("sufficiency_calibrator_path is required by evidence-sufficiency methods")
+        if not requires_sufficiency and self.sufficiency_calibrator_path is not None:
+            raise ValueError("sufficiency_calibrator_path requires an evidence-sufficiency method")
         if self.frozen_plan_source is None:
             if self.frozen_plan_import_dir is not None:
                 raise ValueError("frozen_plan_import_dir requires frozen_plan_source")

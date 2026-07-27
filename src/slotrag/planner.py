@@ -17,10 +17,27 @@ from pydantic import BaseModel, Field, ValidationError
 from .errors import SchemaError
 from .action_policy import ActionPolicyContext, PhysicalActionPolicy, make_runtime_sufficiency_prediction
 from .binding import AdaptiveBindingBeam
-from .models import BindingRow, EvidenceRecord, ExecutionResult, JoinSpec, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
+from .models import (
+    BindingRow,
+    EvidenceRecord,
+    ExecutionResult,
+    ExtractedBindingTrace,
+    JoinSpec,
+    MaterializationTrace,
+    PhysicalActionCandidateTrace,
+    RelationalOperator,
+    RetrievalCandidateTrace,
+    RetrievalResult,
+    RetrievalSearchTrace,
+    RunMetrics,
+    Slot,
+    SlotExecutionTrace,
+    SlotPlan,
+)
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
 from .retrieval import HybridRetriever
+from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
 
 def slot_plan_tool() -> dict[str, Any]:
@@ -1156,6 +1173,8 @@ class SlotMaterializer:
         self.dual_query_evidence_guard = dual_query_evidence_guard
         self.dual_query_evidence_guard_disjoint_only = dual_query_evidence_guard_disjoint_only
         self.last_evidence: list[EvidenceRecord] = []
+        self.last_materialization_traces: list[MaterializationTrace] = []
+        self.last_retrieval_results: list[RetrievalResult] = []
         self.accessed_passage_ids: set[str] = set()
         self.accessed_document_ids: set[str] = set()
 
@@ -1287,6 +1306,28 @@ class SlotMaterializer:
 
     def materialize(self, slot: Slot, bindings: dict[str, str]) -> tuple[list[BindingRow], RunMetrics]:
         slot_query = slot.query_text(bindings)
+        searches: list[RetrievalSearchTrace] = []
+
+        def search(query_text: str, query_variant: str) -> list[RetrievalResult]:
+            ranked = self.retriever.search(query_text)
+            searches.append(RetrievalSearchTrace(
+                query=query_text,
+                query_variant=query_variant,
+                candidates=[
+                    RetrievalCandidateTrace(
+                        rank=rank,
+                        source_id=result.passage.id,
+                        doc_id=result.passage.doc_id,
+                        score=result.score,
+                        bm25_score=result.bm25_score,
+                        dense_score=result.dense_score,
+                        rerank_score=result.rerank_score,
+                    )
+                    for rank, result in enumerate(ranked, start=1)
+                ],
+            ))
+            return ranked
+
         retrieval_calls = 1
         query = slot_query
         dual_query_requested = bool(
@@ -1306,7 +1347,7 @@ class SlotMaterializer:
         dual_query_guard_fallback = False
         if dual_query_requested:
             question_query = f"{self.question_context} {slot_query}"
-            slot_ranked = self.retriever.search(slot_query)
+            slot_ranked = search(slot_query, "slot")
             if self.dual_query_confidence_threshold is not None and slot_ranked:
                 top_confidence = max(
                     result.rerank_score if result.rerank_score is not None else result.score
@@ -1317,7 +1358,7 @@ class SlotMaterializer:
                 retrieved_passages = slot_ranked[:self.max_passages]
                 query = slot_query
             else:
-                question_ranked = self.retriever.search(question_query)
+                question_ranked = search(question_query, "question_plus_slot")
                 ranked_lists = [slot_ranked, question_ranked]
                 retrieval_calls = 2
                 use_dual_query = True
@@ -1355,7 +1396,10 @@ class SlotMaterializer:
         else:
             if self.question_context and not self.dual_query_retrieval:
                 query = f"{self.question_context} {slot_query}"
-            retrieved_passages = self.retriever.search(query)[:self.max_passages]
+                query_variant = "question_plus_slot"
+            else:
+                query_variant = "slot"
+            retrieved_passages = search(query, query_variant)[:self.max_passages]
         self.accessed_passage_ids.update(result.passage.id for result in retrieved_passages)
         self.accessed_document_ids.update(result.passage.doc_id or result.passage.id for result in retrieved_passages)
         self.last_evidence = [
@@ -1458,6 +1502,16 @@ class SlotMaterializer:
             anchor_window_predicate_normalizations=int(anchor_window_predicate_normalization),
         )
         rows: list[BindingRow] = []
+        base_trace = MaterializationTrace(
+            slot_id=slot.id,
+            predicate=slot.predicate,
+            binding_context=dict(bindings),
+            retrieval_calls=retrieval_calls,
+            searches=searches,
+            selected_source_ids=[result.passage.id for result in retrieved_passages],
+        )
+        self.last_materialization_traces = [base_trace]
+        self.last_retrieval_results = list(retrieved_passages)
         if not passages:
             return rows, metrics
         by_source = {result.passage.id: result for result in passages}
@@ -1681,6 +1735,17 @@ class SlotMaterializer:
                 confidence=1.0,
                 retrieval_score=source.score,
             ))
+        self.last_materialization_traces = [base_trace.model_copy(update={
+            "extracted_rows": [
+                ExtractedBindingTrace(
+                    source_id=row.source_id,
+                    bindings=dict(row.bindings),
+                    confidence=row.confidence,
+                    retrieval_score=row.retrieval_score,
+                )
+                for row in rows
+            ],
+        })]
         return rows, metrics
 
     def materialize_many(self, slot: Slot, contexts: list[dict[str, str]]) -> tuple[list[BindingRow], RunMetrics]:
@@ -1688,10 +1753,14 @@ class SlotMaterializer:
         merged: list[BindingRow] = []
         metrics = RunMetrics()
         all_evidence: list[EvidenceRecord] = []
+        all_traces: list[MaterializationTrace] = []
+        all_retrieval_results: list[RetrievalResult] = []
         seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
         for bindings in contexts or [{}]:
             rows, current_metrics = self.materialize(slot, bindings)
             all_evidence.extend(self.last_evidence)
+            all_traces.extend(self.last_materialization_traces)
+            all_retrieval_results.extend(self.last_retrieval_results)
             metrics = metrics.model_copy(update={
                 "documents_accessed": metrics.documents_accessed + current_metrics.documents_accessed,
                 "passages_processed": metrics.passages_processed + current_metrics.passages_processed,
@@ -1740,6 +1809,8 @@ class SlotMaterializer:
                     seen.add(key)
                     merged.append(row)
         self.last_evidence = all_evidence
+        self.last_materialization_traces = all_traces
+        self.last_retrieval_results = all_retrieval_results
         return merged, metrics
 
 
@@ -2001,6 +2072,7 @@ class AdaptiveExecutor:
         max_binding_contexts: int = 2,
         adaptive_binding_beam: bool = False,
         action_policy: PhysicalActionPolicy | None = None,
+        sufficiency_calibrator: EvidenceSufficiencyCalibrator | None = None,
         random_seed: int = 2027,
         options: ExecutionOptions | None = None,
     ) -> None:
@@ -2013,25 +2085,69 @@ class AdaptiveExecutor:
         self.adaptive_binding_beam = adaptive_binding_beam
         self.binding_beam = AdaptiveBindingBeam(max_width=max_binding_contexts)
         self.action_policy = action_policy
+        self.sufficiency_calibrator = sufficiency_calibrator
         self.random = random.Random(random_seed)
         self.options = options or ExecutionOptions()
 
-    def _record_action_policy(
+    def _evaluate_sufficiency_and_action(
         self,
         metrics: RunMetrics,
         rows: list[BindingRow],
         *,
+        slot: Slot,
+        plan: SlotPlan,
+        binding_contexts: list[dict[str, str]],
+        retrieval_results: list[RetrievalResult],
         remaining_plan_depth: int,
         budget_remaining: int,
         binding_beam_width: int,
-    ) -> RunMetrics:
+    ) -> tuple[RunMetrics, SufficiencyPrediction | None, Any | None, str | None]:
+        prediction: SufficiencyPrediction | None = None
+        model_name: str | None = None
+        if self.sufficiency_calibrator is not None:
+            bound_variables = {
+                key: value
+                for context in binding_contexts
+                for key, value in context.items()
+            }
+            join_variables = sorted({
+                field
+                for join in plan.joins
+                for slot_id, field in (
+                    (join.left_slot, join.left_field),
+                    (join.right_slot, join.right_field),
+                )
+                if slot_id == slot.id
+            })
+            prediction = self.sufficiency_calibrator.predict(EvidenceContext(
+                retrieval_results=retrieval_results,
+                predicate=slot.predicate,
+                requested_variables=sorted(slot.variables),
+                bound_variables=bound_variables,
+                join_variables=join_variables,
+                extracted_rows=rows,
+                remaining_plan_depth=remaining_plan_depth,
+                retrieval_calls_used=metrics.retrieval_calls,
+                retrieval_budget=self.max_retrieval_calls,
+            ))
+            model_name = "development_logistic"
+        elif self.action_policy is not None:
+            prediction = make_runtime_sufficiency_prediction(
+                rows,
+                remaining_plan_depth=remaining_plan_depth,
+                budget_remaining=budget_remaining,
+            )
+            model_name = "runtime_proxy_v62"
+        if prediction is None:
+            return metrics, None, None, None
+        metrics = metrics.model_copy(update={
+            "evidence_sufficiency_decisions": metrics.evidence_sufficiency_decisions + 1,
+            "evidence_sufficiency_model": model_name,
+            "evidence_sufficiency_statuses": metrics.evidence_sufficiency_statuses + [prediction.status],
+            "evidence_sufficiency_probabilities": metrics.evidence_sufficiency_probabilities + [prediction.probability],
+        })
         if self.action_policy is None:
-            return metrics
-        prediction = make_runtime_sufficiency_prediction(
-            rows,
-            remaining_plan_depth=remaining_plan_depth,
-            budget_remaining=budget_remaining,
-        )
+            return metrics, prediction, None, model_name
         decision = self.action_policy.decide(ActionPolicyContext(
             sufficiency=prediction,
             has_rows=bool(rows),
@@ -2041,13 +2157,14 @@ class AdaptiveExecutor:
             binding_beam_width=binding_beam_width,
             max_binding_beam_width=self.binding_beam.max_width,
         ))
-        return metrics.model_copy(update={
+        metrics = metrics.model_copy(update={
             "physical_action_decisions": metrics.physical_action_decisions + 1,
             "physical_action_policy": decision.policy_name,
             "physical_action_selected": metrics.physical_action_selected + [decision.action],
             "physical_action_utilities": metrics.physical_action_utilities + [decision.selected.utility],
             "physical_action_candidate_counts": metrics.physical_action_candidate_counts + [len(decision.candidates)],
         })
+        return metrics, prediction, decision, model_name
 
     def _choose_slot(
         self,
@@ -2119,6 +2236,7 @@ class AdaptiveExecutor:
             physical_plan_order_mismatches=0,
             physical_plan_order=list(physical_plan.slot_execution_order) if physical_plan else [],
         )
+        slot_traces: list[SlotExecutionTrace] = []
         order: list[str] = []
         current: list[BindingRow] | None = None
         frozen_order: list[Slot] = []
@@ -2195,6 +2313,7 @@ class AdaptiveExecutor:
                     evidence=evidence,
                     order=order,
                     metrics=metrics,
+                    slot_traces=slot_traces,
                     status="budget_exceeded",
                     error=f"retrieval call budget exceeded ({self.max_retrieval_calls})",
                 )
@@ -2312,15 +2431,44 @@ class AdaptiveExecutor:
                 "extraction_finish_reasons": metrics.extraction_finish_reasons + slot_metrics.extraction_finish_reasons,
                 "extraction_validation_errors": metrics.extraction_validation_errors + slot_metrics.extraction_validation_errors,
             })
-            metrics = self._record_action_policy(
+            metrics, sufficiency_prediction, action_decision, sufficiency_model = self._evaluate_sufficiency_and_action(
                 metrics,
                 rows,
+                slot=slot,
+                plan=plan,
+                binding_contexts=binding_contexts,
+                retrieval_results=list(getattr(self.materializer, "last_retrieval_results", [])),
                 remaining_plan_depth=len(remaining),
                 budget_remaining=max(self.max_retrieval_calls - metrics.retrieval_calls, 0),
                 binding_beam_width=adaptive_beam_width,
             )
+            slot_traces.append(SlotExecutionTrace(
+                step=step,
+                slot_id=slot.id,
+                predicate=slot.predicate,
+                binding_contexts=[dict(context) for context in binding_contexts],
+                materializations=list(getattr(self.materializer, "last_materialization_traces", [])),
+                extracted_row_count=len(rows),
+                rows_after_join=len(rows),
+                sufficiency_model=sufficiency_model,
+                sufficiency_status=(sufficiency_prediction.status if sufficiency_prediction else None),
+                sufficiency_probability=(sufficiency_prediction.probability if sufficiency_prediction else None),
+                sufficiency_features=(
+                    sufficiency_prediction.features.model_dump(mode="python")
+                    if sufficiency_prediction else {}
+                ),
+                action_selected=(action_decision.action if action_decision else None),
+                action_utility=(action_decision.selected.utility if action_decision else None),
+                action_candidates=(
+                    [PhysicalActionCandidateTrace.model_validate(candidate.model_dump()) for candidate in action_decision.candidates]
+                    if action_decision else []
+                ),
+            ))
             if not rows:
-                return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")
+                return ExecutionResult(
+                    rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                    slot_traces=slot_traces, status="empty",
+                )
             if current is None:
                 current = rows
             elif self.options.incremental_join:
@@ -2328,7 +2476,10 @@ class AdaptiveExecutor:
                 if join is None:
                     previous_slots = set(materialized) - {slot.id}
                     if not _operator_connects_branches(plan, previous_slots, slot.id):
-                        return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot.id} has no join path")
+                        return ExecutionResult(
+                            rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                            slot_traces=slot_traces, status="failed", error=f"slot {slot.id} has no join path",
+                        )
                     join_input = len(current) + len(rows)
                     current = _cross_join_rows(current, rows)
                 elif join.right_slot == slot.id:
@@ -2343,15 +2494,24 @@ class AdaptiveExecutor:
                 })
             else:
                 current = rows
+            slot_traces[-1] = slot_traces[-1].model_copy(update={
+                "rows_after_join": len(current or []),
+            })
             if current:
                 # The planner only needs the set of currently bound fields for
                 # choosing a connected next slot. Actual values are propagated
                 # through binding_contexts above.
                 all_bindings = {key: "<bound>" for row in current for key in row.bindings}
             else:
-                return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="empty")
+                return ExecutionResult(
+                    rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                    slot_traces=slot_traces, status="empty",
+                )
         if remaining:
-            return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error="maximum replans exceeded")
+            return ExecutionResult(
+                rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                slot_traces=slot_traces, status="failed", error="maximum replans exceeded",
+            )
         if not self.options.incremental_join and len(order) > 1:
             joined = materialized[order[0]]
             joined_slots = {order[0]}
@@ -2359,7 +2519,10 @@ class AdaptiveExecutor:
                 join = next((item for item in plan.joins if (item.left_slot in joined_slots and item.right_slot == slot_id) or (item.right_slot in joined_slots and item.left_slot == slot_id)), None)
                 if join is None:
                     if not _operator_connects_branches(plan, joined_slots, slot_id):
-                        return ExecutionResult(rows=[], evidence=retrieved_evidence, order=order, metrics=metrics, status="failed", error=f"slot {slot_id} has no late join path")
+                        return ExecutionResult(
+                            rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                            slot_traces=slot_traces, status="failed", error=f"slot {slot_id} has no late join path",
+                        )
                     incoming = materialized[slot_id]
                     join_input = len(joined) + len(incoming)
                     joined = _cross_join_rows(joined, incoming)
@@ -2395,4 +2558,11 @@ class AdaptiveExecutor:
             regret = max(actual_cost - oracle_cost, 0.0) / max(oracle_cost, 1.0)
             metrics = metrics.model_copy(update={"planner_regret": regret})
         has_output = any(any(str(value).strip() for value in row.values()) for row in output_rows)
-        return ExecutionResult(rows=output_rows, evidence=evidence, order=order, metrics=metrics, status="ok" if has_output else "empty")
+        return ExecutionResult(
+            rows=output_rows,
+            evidence=evidence,
+            order=order,
+            metrics=metrics,
+            slot_traces=slot_traces,
+            status="ok" if has_output else "empty",
+        )

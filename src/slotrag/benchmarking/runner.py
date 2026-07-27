@@ -19,6 +19,7 @@ from ..data import normalize_jsonl
 from ..models import ExecutionResult, QuestionRecord, RunMetrics, SlotPlan
 from ..providers import AgnesClient, EmbeddingClient, RerankerClient, provider_clients
 from ..retrieval import EmbeddingCache, HybridRetriever
+from ..sufficiency import SufficiencyCalibrationArtifact, load_calibration_artifact
 from ..tracing import provider_trace, trace_metadata
 from .config import BenchmarkSuite
 from .baselines import audit_baselines
@@ -198,6 +199,61 @@ class BenchmarkRunner:
         self.agnes, self.embedding, self.reranker = provider_clients(app_config)
         self.embedding_cache = EmbeddingCache(output_dir / "cache" / "embeddings.json")
         self._shared_indices: dict[tuple[str, str], SharedCorpusIndex] = {}
+        self._sufficiency_calibrations: dict[
+            str, tuple[SufficiencyCalibrationArtifact, str, Path]
+        ] = {}
+
+    def _load_sufficiency_calibration(self, stage_name: str, datasets: list[str]) -> None:
+        stage = self.suite.stage(stage_name)
+        if stage.sufficiency_calibrator_path is None:
+            self._sufficiency_calibrations.pop(stage_name, None)
+            return
+        artifact, sha256 = load_calibration_artifact(stage.sufficiency_calibrator_path)
+        if artifact.retrieval_protocol != stage.retrieval_protocol:
+            raise ValueError(
+                "sufficiency calibration retrieval_protocol does not match stage: "
+                f"{artifact.retrieval_protocol} != {stage.retrieval_protocol}"
+            )
+        if artifact.retrieval_backend != stage.retrieval_backend:
+            raise ValueError(
+                "sufficiency calibration retrieval_backend does not match stage: "
+                f"{artifact.retrieval_backend} != {stage.retrieval_backend}"
+            )
+        for dataset in datasets:
+            artifact.calibrator_for(dataset)
+        self._sufficiency_calibrations[stage_name] = (
+            artifact,
+            sha256,
+            stage.sufficiency_calibrator_path,
+        )
+
+    def _sufficiency_calibration_reference(
+        self,
+        stage_name: str,
+        dataset: str | None = None,
+    ) -> dict[str, Any] | None:
+        loaded = self._sufficiency_calibrations.get(stage_name)
+        if loaded is None:
+            return None
+        artifact, sha256, path = loaded
+        reference: dict[str, Any] = {
+            "artifact": str(path),
+            "sha256": sha256,
+            "source_split": artifact.source_split,
+            "retrieval_protocol": artifact.retrieval_protocol,
+            "retrieval_backend": artifact.retrieval_backend,
+            "training_manifest_sha256": artifact.training_manifest_sha256,
+            "label_definition": artifact.label_definition,
+            "datasets": sorted(artifact.calibrators),
+        }
+        if dataset is None:
+            reference["example_counts"] = artifact.example_counts
+        else:
+            reference.update({
+                "dataset": dataset,
+                "example_count": artifact.example_counts[dataset],
+            })
+        return reference
 
     def _sample_path(self, stage: str, dataset: str) -> Path:
         return self.output_dir / "samples" / stage / f"{dataset}.jsonl"
@@ -239,9 +295,17 @@ class BenchmarkRunner:
             raise ValueError(f"dataset is not configured: {dataset}")
         return self._load_or_create_sample(stage_name, dataset)
 
-    def _retriever(self, question: QuestionRecord) -> HybridRetriever:
+    def _retriever(
+        self,
+        question: QuestionRecord,
+        *,
+        retrieval_backend: str = "hybrid",
+    ) -> HybridRetriever:
         from ..data import chunk_passages
 
+        if retrieval_backend not in {"hybrid", "bm25"}:
+            raise ValueError(f"unsupported retrieval backend: {retrieval_backend}")
+        dense_enabled = retrieval_backend == "hybrid"
         passages = chunk_passages(
             question.passages,
             chunk_tokens=self.app_config.retrieval.chunk_tokens,
@@ -249,16 +313,17 @@ class BenchmarkRunner:
         )
         return HybridRetriever(
             passages,
-            self.embedding,
-            self.reranker,
+            self.embedding if dense_enabled else None,
+            self.reranker if dense_enabled else None,
             bm25_k=self.app_config.retrieval.bm25_k,
             dense_k=self.app_config.retrieval.dense_k,
             final_k=self.app_config.retrieval.final_k,
             rrf_k=self.app_config.retrieval.rrf_k,
             bm25_weight=self.app_config.retrieval.bm25_weight,
             dense_weight=self.app_config.retrieval.dense_weight,
-            rerank_enabled=self.app_config.reranker.enabled,
+            rerank_enabled=self.app_config.reranker.enabled and dense_enabled,
             cache=self.embedding_cache,
+            dense_enabled=dense_enabled,
         )
 
     def _build_shared_index(self, stage_name: str, dataset: str, stage: Any) -> SharedCorpusIndex:
@@ -295,6 +360,18 @@ class BenchmarkRunner:
             "embedding": self.embedding.stats.snapshot(),
             "reranker": self.reranker.stats.snapshot(),
         }
+
+    def _execution_profile(self) -> dict[str, Any]:
+        payload = {
+            "provider_config": self.app_config.public_dict(),
+            "execution_control": {
+                "provider_rpm": self.app_config.rate_limit.provider_rpm,
+                "operational_rpm": self.app_config.rate_limit.operational_rpm,
+                "max_concurrency": self.app_config.rate_limit.max_concurrency,
+                "pacing": "cross_process_minimum_interval",
+            },
+        }
+        return {**payload, "sha256": _canonical_sha256(payload)}
 
     @staticmethod
     def _plan_provenance(record: dict[str, Any], snapshot_path: str | None) -> dict[str, Any]:
@@ -557,6 +634,7 @@ class BenchmarkRunner:
                     dataset,
                     stage,
                 )
+        self._load_sufficiency_calibration(stage_name, selected_datasets)
         self._write_manifest(stage_name, selected_datasets, selected_methods)
         for dataset in selected_datasets:
             questions = questions_by_dataset[dataset]
@@ -645,14 +723,18 @@ class BenchmarkRunner:
                                         trace_target,
                                         include_payloads=self.app_config.trace.include_payloads,
                                     ):
-                                        retriever = self._retriever(question)
+                                        retriever = self._retriever(
+                                            question,
+                                            retrieval_backend=stage.retrieval_backend,
+                                        )
                                         retriever.build_index()
                                 except Exception as exc:
                                     index_error = exc
                                 index_build_ms = (time.perf_counter() - index_started) * 1000
                                 if retriever is not None:
                                     index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
-                                    index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
+                                    if getattr(retriever, "dense_enabled", True):
+                                        index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
                         index_provider_after = self._provider_snapshot()
                         index_cache_after = self.embedding_cache.snapshot()
                         index_delta = {
@@ -693,6 +775,10 @@ class BenchmarkRunner:
                                             max_steps=self.suite.budget.max_steps,
                                             max_retrieval_calls=self.suite.budget.max_retrieval_calls,
                                             frozen_plan=frozen_plan,
+                                            sufficiency_calibrator=(
+                                                self._sufficiency_calibrations[stage_name][0].calibrator_for(dataset)
+                                                if METHODS[method].evidence_sufficiency else None
+                                            ),
                                         )
                             except BenchmarkBudgetExceeded as exc:
                                 result = ExecutionResult(status="budget_exceeded", error=str(exc))
@@ -737,8 +823,9 @@ class BenchmarkRunner:
                             if shared_index is not None and shared_index.manifest_path is not None
                             else None
                         )
+                        execution_profile = self._execution_profile()
                         record = {
-                            "schema_version": 29,
+                            "schema_version": 30,
                             "stage": stage_name,
                             "dataset": dataset,
                             "method": method,
@@ -752,6 +839,8 @@ class BenchmarkRunner:
                             "attempt_index": attempt_index,
                             "recorded_at": datetime.now(timezone.utc).isoformat(),
                             "budget": self.suite.budget.model_dump(mode="json"),
+                            "execution_control": execution_profile["execution_control"],
+                            "execution_profile_sha256": execution_profile["sha256"],
                             "answers": question.answers,
                             "evidence_inventory": {
                                 "available_evidence_ids": [passage.id for passage in question.passages],
@@ -763,6 +852,10 @@ class BenchmarkRunner:
                             "provider_delta": provider_delta,
                             "index_provider_delta": index_delta,
                             "plan_provenance": plan_provenance,
+                            "sufficiency_calibration": (
+                                self._sufficiency_calibration_reference(stage_name, dataset)
+                                if METHODS[method].evidence_sufficiency else None
+                            ),
                             "provider_trace": trace_info,
                             "failure_category": _failure_category(result.status, result.error, result.answer),
                         }
@@ -834,7 +927,9 @@ class BenchmarkRunner:
             if sample_audit_path.exists()
             else None
         )
+        execution_profile = self._execution_profile()
         initial_manifest = {
+            "schema_version": 2,
             "material_passport": {
                 "origin_skill": "academic-research-suite/experiment-agent",
                 "origin_mode": "run",
@@ -872,13 +967,12 @@ class BenchmarkRunner:
                 for (index_stage, dataset), index in self._shared_indices.items()
                 if index_stage == stage_name and index.manifest_path is not None
             },
-            "provider_config": self.app_config.public_dict(),
-            "execution_control": {
-                "provider_rpm": self.app_config.rate_limit.provider_rpm,
-                "operational_rpm": self.app_config.rate_limit.operational_rpm,
-                "max_concurrency": self.app_config.rate_limit.max_concurrency,
-                "pacing": "cross_process_minimum_interval",
-            },
+            "sufficiency_calibrations": {
+                stage_name: self._sufficiency_calibration_reference(stage_name),
+            } if stage_name in self._sufficiency_calibrations else {},
+            "stage_execution_profiles": {stage_name: execution_profile},
+            "provider_config": execution_profile["provider_config"],
+            "execution_control": execution_profile["execution_control"],
             "dataset_audit": audit,
             "dataset_audit_sha256": hashlib.sha256(audit_path.read_bytes()).hexdigest() if audit_path.exists() else None,
             "sample_audit_sha256": (
@@ -913,6 +1007,17 @@ class BenchmarkRunner:
                         f"code drift in: {', '.join(mismatches)}"
                     )
                 manifest = current
+                manifest.setdefault("sufficiency_calibrations", {}).update(
+                    initial_manifest["sufficiency_calibrations"]
+                )
+                profiles = manifest.setdefault("stage_execution_profiles", {})
+                existing_profile = profiles.get(stage_name)
+                if existing_profile is not None and existing_profile != execution_profile:
+                    raise RuntimeError(
+                        "stage execution profile mismatch; refusing to mix provider or "
+                        f"execution settings within stage {stage_name}"
+                    )
+                profiles[stage_name] = execution_profile
             stages = manifest.setdefault("stages_requested", [])
             requests = manifest.setdefault("run_requests", [])
             if stage_name not in stages:

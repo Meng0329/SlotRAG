@@ -1273,6 +1273,37 @@ def test_slotrag_qo_compiles_and_passes_physical_plan_to_executor(monkeypatch):
     assert result.metrics.physical_plan_order == ["S2", "S1"]
 
 
+@pytest.mark.parametrize(
+    ("method", "sufficiency", "physical_policy"),
+    [
+        ("slotrag", False, False),
+        ("slotrag-sufficiency", True, False),
+        ("slotrag-physical-policy", False, True),
+        ("slotrag-qo", True, True),
+    ],
+)
+def test_slotrag_qo_two_by_two_variants_are_orthogonal(method, sufficiency, physical_policy):
+    spec = methods.METHODS[method]
+
+    assert spec.evidence_sufficiency is sufficiency
+    assert spec.physical_action_policy is physical_policy
+    assert spec.physical_plan is physical_policy
+    assert spec.adaptive_binding_beam is physical_policy
+
+
+def test_sufficiency_variant_refuses_to_run_without_frozen_development_calibrator():
+    with pytest.raises(ValueError, match="requires a frozen development calibrator"):
+        methods.run_method(
+            "slotrag-sufficiency",
+            dataset="hotpotqa",
+            question=QuestionRecord(id="q", question="Who founded Alpha?"),
+            retriever=object(),
+            client=object(),
+            config=object(),
+            seed=2027,
+        )
+
+
 def test_direct_answer_projection_strips_only_redundant_numeric_explanation():
     verbose = "families (20,154 families compared to 74,563 people)"
     result = ExecutionResult(
