@@ -370,3 +370,29 @@ candidate counts=`[6, 7]`。
 
 下一版本从 development enriched traces 校准 action gains，并用 oracle/近似 oracle 审计正确 binding
 是否被剪枝；通过后才进入冻结 `local_context`/`global_corpus` 2×2 ablation。当前不启动 provider 矩阵。
+
+## v63 Enriched Development Trace 与审计结论（2026-07-27）
+
+新增并验证的有效 runs：
+
+* `runs/slotrag-qo-development-trace-v63-local-valid`：local，HotpotQA/2Wiki 各 40；
+* `runs/slotrag-qo-development-trace-v63-global-valid`：global HotpotQA 40；
+* `runs/slotrag-qo-development-trace-v63-global-2wiki-valid`：global 2Wiki 40。
+
+三者 source fingerprint 为 `13f1ff15...624`，execution profile SHA 为 `c6bd4c1f...34be`。不要引用
+`runs/slotrag-qo-development-trace-v63` 或 `...-corrected`，前者 BM25 标签与实际 hybrid 不符，后者
+manifest 限流 profile 与实际 development 执行不符。
+
+global primary/evidence recall：HotpotQA `0.4467/0.5000`，2Wiki `0.4825/0.4188`；对应 local 为
+`0.6764/0.7125`、`0.7239/0.8625`。两个 global 数据集各有 `20/40` available-answer retrieval miss，
+而 expand-top-k slot proxy 各 4。优先优化 query formulation/retriever path，其次 structured extraction。
+
+global sufficiency calibration 两个数据集均失败，禁止把生成的 calibrator 接入 2×2。131 个 global
+search 的 RRF top-1 score 恒定，必须改用 raw BM25/rank/quantile；reranker 在本协议为 N/A。
+
+本轮 analyzer 修复：外部 corpus manifest 的 workspace-relative path；local chunk 按 manifest frozen
+参数重建；headroom tool 读取 v63 slot traces 和 protocol。全量测试 `297 passed, 1 skipped`。
+
+完整证据和下一门禁：`docs/optimization-audit-v63.md`。下一任务先优化 `_aggregate_passages` 的重复
+provenance 聚合并实现真实 sparse-index persistence，然后再做 backend-aware sufficiency；不要直接跑
+2×2、不要修改 evaluation split、不要新增 predicate guard。

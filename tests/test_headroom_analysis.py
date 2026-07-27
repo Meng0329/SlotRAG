@@ -37,6 +37,8 @@ def _item(
     status: str = "ok",
     error: str | None = None,
     budget: dict[str, object] | None = None,
+    retrieval_protocol: str = "local_context",
+    slot_traces: list[dict[str, object]] | None = None,
 ) -> None:
     payload = {
         "schema_version": 28,
@@ -45,6 +47,8 @@ def _item(
         "method": method,
         "question_id": question_id,
         "stratum": "short",
+        "retrieval_protocol": retrieval_protocol,
+        "retrieval_backend": "bm25",
         "answers": ["Paris"],
         "budget": budget or {"max_steps": 4, "max_retrieval_calls": 4},
         "result": {
@@ -55,6 +59,7 @@ def _item(
             "evidence": evidence,
             "metrics": metrics or {},
             "plan": {"slots": [{"id": "S1"}], "joins": [], "outputs": ["?answer"]},
+            "slot_traces": slot_traces or [],
         },
         "scores": {
             "prediction_scored": prediction,
@@ -137,3 +142,58 @@ def test_headroom_reports_budget_marginal_gain_and_missing_retrieval_fields(tmp_
 
     assert report["budget_marginal_gains"][0]["delta_primary"] == 1.0
     assert report["retrieval_relationships"]["status"] == "N/A"
+
+
+def test_headroom_reads_enriched_global_retrieval_traces(tmp_path: Path) -> None:
+    run = _run_with_sample(tmp_path, "global")
+    _item(
+        run,
+        method="slotrag",
+        question_id="q1",
+        primary=1.0,
+        prediction="Paris",
+        evidence=[{
+            "source_id": "demo:gold:gold#0",
+            "source_span": "The answer is Paris.",
+        }],
+        retrieval_protocol="global_corpus",
+        slot_traces=[{
+            "slot_id": "S1",
+            "materializations": [{
+                "selected_source_ids": ["demo:gold:gold#0"],
+                "extracted_rows": [{"bindings": {"answer": "Paris"}}],
+                "searches": [{
+                    "query_variant": "slot",
+                    "candidates": [
+                        {
+                            "rank": 1,
+                            "source_id": "demo:gold:gold#0",
+                            "score": 0.9,
+                            "bm25_score": 4.0,
+                            "rerank_score": 0.8,
+                        },
+                        {
+                            "rank": 2,
+                            "source_id": "demo:noise:distractor#0",
+                            "score": 0.2,
+                            "bm25_score": 1.0,
+                            "rerank_score": 0.1,
+                        },
+                    ],
+                }],
+            }],
+        }],
+    )
+
+    report = analyze_run_dirs([run])
+
+    retrieval = report["retrieval_relationships"]
+    assert retrieval["status"] == "estimated"
+    assert retrieval["observations"][0]["top_k"] == 2
+    assert retrieval["observations"][0]["binding_count"] == 1
+    assert retrieval["observations"][0]["gold_selected_count"] == 1
+    assert retrieval["observations"][0]["top1_reranker_score"] == 0.8
+    assert retrieval["observations"][0]["top1_bm25_score"] == 4.0
+    assert retrieval["summaries"]["top1_reranker_score"]["observation_count"] == 1
+    assert report["conclusions"]["retrieval_protocol_counts"] == {"global_corpus": 1}
+    assert "global_corpus development diagnostics" in report["conclusions"]["benchmark_sufficiency"]

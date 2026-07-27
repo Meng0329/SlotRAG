@@ -2,10 +2,15 @@ import json
 
 import pytest
 
-from slotrag.benchmarking.corpus import CorpusBuildCostError, SharedCorpusIndex, estimate_corpus_build
+from slotrag.benchmarking.corpus import (
+    CorpusBuildCostError,
+    SharedCorpusIndex,
+    _aggregate_passages,
+    estimate_corpus_build,
+)
 from slotrag.config import RetrievalConfig
 from slotrag.models import Passage, QuestionRecord
-from slotrag.retrieval import EmbeddingCache
+from slotrag.retrieval import EmbeddingCache, SparseBM25Index
 
 
 class _FakeEmbeddingConfig:
@@ -114,6 +119,140 @@ def test_shared_corpus_reuses_persisted_artifacts_without_reembedding(tmp_path):
     assert second_embedding.calls == 0
     assert second.search("alpha")
     assert second_embedding.calls == 1
+
+
+def test_shared_corpus_accumulates_duplicate_provenance_without_copying_each_occurrence(monkeypatch):
+    shared = Passage(id="p1", doc_id="d1", text="Alpha is shared evidence.")
+    questions = [
+        QuestionRecord(id=f"q{index:03d}", question="What is alpha?", passages=[shared])
+        for index in range(100)
+    ]
+
+    def fail_model_copy(*_args, **_kwargs):
+        raise AssertionError("duplicate provenance must not copy the Passage on every occurrence")
+
+    monkeypatch.setattr(Passage, "model_copy", fail_model_copy)
+
+    passages = _aggregate_passages(
+        questions,
+        dataset="toy",
+        chunk_tokens=32,
+        chunk_overlap=0,
+    )
+
+    assert len(passages) == 1
+    assert passages[0].metadata["source_question_ids"] == [f"q{index:03d}" for index in range(100)]
+
+
+def test_bm25_shared_corpus_reuses_checksum_verified_sparse_index(tmp_path, monkeypatch):
+    questions = [
+        QuestionRecord(
+            id="q1",
+            question="What is alpha?",
+            passages=[
+                Passage(id="p1", doc_id="d1", text="Alpha is a river."),
+                Passage(id="p2", doc_id="d2", text="Beta is a letter."),
+            ],
+        )
+    ]
+    retrieval = RetrievalConfig(bm25_k=4, dense_k=4, final_k=2, chunk_tokens=32, chunk_overlap=0)
+    first = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+    first_results = first.search("alpha")
+
+    assert first.manifest.reused_persisted_index is False
+    assert first.manifest.sparse_index_reused is False
+    assert first.manifest.sparse_index_artifact == "bm25.pkl"
+    assert len(first.manifest.sparse_index_sha256 or "") == 64
+    assert first.manifest.index_storage == "json+bm25"
+    assert (tmp_path / "index" / "bm25.pkl").exists()
+
+    def fail_build(cls, passages):
+        raise AssertionError(f"warm reuse rebuilt BM25 for {len(passages)} passages")
+
+    monkeypatch.setattr(SparseBM25Index, "build", classmethod(fail_build))
+    second = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+    second_results = second.search("alpha")
+
+    assert second.manifest.reused_persisted_index is True
+    assert second.manifest.sparse_index_reused is True
+    assert [result.passage.id for result in second_results] == [
+        result.passage.id for result in first_results
+    ]
+    assert [result.bm25_score for result in second_results] == [
+        result.bm25_score for result in first_results
+    ]
+
+
+def test_bm25_shared_corpus_rebuilds_a_corrupted_sparse_index(tmp_path, monkeypatch):
+    questions = [
+        QuestionRecord(
+            id="q1",
+            question="What is alpha?",
+            passages=[Passage(id="p1", doc_id="d1", text="Alpha is a river.")],
+        )
+    ]
+    retrieval = RetrievalConfig(chunk_tokens=32, chunk_overlap=0)
+    SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+    (tmp_path / "index" / "bm25.pkl").write_bytes(b"corrupted")
+
+    original_build = SparseBM25Index.build.__func__
+    build_calls = 0
+
+    def count_build(cls, passages):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(cls, passages)
+
+    monkeypatch.setattr(SparseBM25Index, "build", classmethod(count_build))
+    rebuilt = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=retrieval,
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+
+    assert build_calls == 1
+    assert rebuilt.manifest.reused_persisted_index is False
+    assert rebuilt.manifest.passage_artifact_reused is True
+    assert rebuilt.manifest.sparse_index_reused is False
+    assert rebuilt.manifest.reuse_reason == "sparse_index_invalid:ValueError"
+    assert len(rebuilt.manifest.sparse_index_sha256 or "") == 64
+    assert rebuilt.search("alpha")
 
 
 def test_shared_corpus_cost_gate_runs_before_embedding_calls(tmp_path):

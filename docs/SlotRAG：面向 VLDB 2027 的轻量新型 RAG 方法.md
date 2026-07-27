@@ -3665,3 +3665,39 @@ global-corpus quality 提升，也不进入论文主表。修改文件：`src/sl
 `276 passed, 1 skipped`，compileall 与 `git diff --check` 通过。下一版本需在 development enriched
 traces 上校准 runtime action gains，并单独审计正确 binding 被剪枝的 oracle 近似；通过后才允许做
 冻结 `local_context`/`global_corpus` 2×2 ablation。
+
+# v63 Enriched Development Trace 与 Global Headroom Reset（2026-07-27）
+
+v63 在 train/development 上完成了 80 条 `local_context` 与 80 条 `global_corpus` enriched trace；每个
+协议均包含 HotpotQA/2Wiki 各 40 题。有效 run、无效 run、manifest hash、命令和完整 counterfactual
+边界见 `docs/optimization-audit-v63.md`。本版本没有使用 evaluation split 选阈值，也没有运行 2×2。
+
+## v63 主要结果
+
+| protocol | dataset | primary | evidence recall | nDCG@10 |
+|---|---|---:|---:|---:|
+| local_context | HotpotQA | 0.6764 | 0.7125 | 0.7179 |
+| local_context | 2Wiki | 0.7239 | 0.8625 | 0.8668 |
+| global_corpus | HotpotQA | 0.4467 | 0.5000 | 0.5332 |
+| global_corpus | 2Wiki | 0.4825 | 0.4188 | 0.4680 |
+
+global 两个数据集各有 `20/40` 条 available-answer retrieval-miss proxy；简单扩大当前 top-k 仅各覆盖
+4 个 slot opportunity。因此下一核心不能是另一个 fixed-top-k 或 predicate guard，而必须支持 query
+reformulation/retriever switching，并以 evidence sufficiency 控制额外成本。
+
+global sufficiency holdout 未通过 gate：HotpotQA Brier/ECE/accuracy=`0.2381/0.3286/0.6154`，2Wiki
+=`0.2325/0.2381/0.6875`。131 个 ranked search 中 `top_k=10` 固定，BM25-only RRF top-1 score 恒为
+`0.0081967213`；原始 BM25 top-1 与 primary 的 Pearson proxy 约 `0.1919`，binding count 约 `0.0210`，
+reranker score 为 `N/A`。当前 calibrator 不晋级；v64 必须使用 backend-aware raw score/rank/quantile，
+不得在该固定 RRF 分数上继续搜索阈值。
+
+2Wiki shared corpus 为 167,454 questions、369,378 documents、401,090 chunks；即使 manifest 标记
+reused，build latency 仍为 2,487.2 s。代码审计显示 provenance 聚合反复 set+sort，并且 BM25 postings
+没有持久化。修复数据管理瓶颈前禁止昂贵 global matrix。
+
+本轮修复了 analyzer 的两项协议错误：workspace-relative 外部 corpus manifest 解析；按 frozen stage
+profile 重建 local chunks。local missing source 从 18 降为 0。`analyze_slotrag_headroom.py` schema 升为
+2，现可读取 v63 `slot_traces`、原始 BM25/dense/reranker score、binding count 和 protocol inventory。
+
+验证：focused analyzer tests `8 passed`；全量 `PYTHONPATH=src:. pytest -q` 为 `297 passed, 1 skipped`。
+当前论文 gate 仍为 fail；不报告 SOTA、领先 10% 或显著性结果。

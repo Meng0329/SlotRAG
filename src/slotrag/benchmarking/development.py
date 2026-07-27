@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from ..data import chunk_passages
 from ..models import BindingRow, Passage, RetrievalResult, Slot
 from ..sufficiency import (
     EvidenceContext,
@@ -94,6 +95,30 @@ def _resolve_artifact_reference(run_dir: Path, value: object) -> Path:
     )
 
 
+def _chunking_configs(
+    run_dir: Path,
+    items: list[tuple[Path, dict[str, Any]]],
+) -> set[tuple[int, int]]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        return {(384, 64)}
+    manifest = _read_json(manifest_path)
+    profiles = manifest.get("stage_execution_profiles")
+    if not isinstance(profiles, dict):
+        return {(384, 64)}
+    configs: set[tuple[int, int]] = set()
+    for _path, item in items:
+        profile = profiles.get(str(item.get("stage") or ""))
+        provider_config = profile.get("provider_config") if isinstance(profile, dict) else None
+        retrieval = provider_config.get("retrieval") if isinstance(provider_config, dict) else None
+        if not isinstance(retrieval, dict):
+            continue
+        chunk_tokens = int(retrieval.get("chunk_tokens") or 384)
+        chunk_overlap = int(retrieval.get("chunk_overlap") or 64)
+        configs.add((chunk_tokens, chunk_overlap))
+    return configs or {(384, 64)}
+
+
 def _passage_lookup(
     run_dir: Path,
     samples: dict[tuple[str, str], dict[str, Any]],
@@ -102,6 +127,7 @@ def _passage_lookup(
     lookup: dict[str, Passage] = {}
     wanted: set[str] = set()
     corpus_manifests: set[Path] = set()
+    chunking_configs = _chunking_configs(run_dir, items)
     for sample in samples.values():
         for raw in sample.get("passages", []):
             if not isinstance(raw, dict):
@@ -109,6 +135,13 @@ def _passage_lookup(
             passage = _passage_from_mapping(raw)
             if passage is not None:
                 lookup[passage.id] = passage
+                for chunk_tokens, chunk_overlap in chunking_configs:
+                    for chunk in chunk_passages(
+                        [passage],
+                        chunk_tokens=chunk_tokens,
+                        overlap=chunk_overlap,
+                    ):
+                        lookup[chunk.id] = chunk
     for _path, item in items:
         for slot_trace in (item.get("result") or {}).get("slot_traces", []):
             for materialization in slot_trace.get("materializations", []):

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import pickle
 import re
+import tempfile
 from collections import defaultdict
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Iterable
 
@@ -17,9 +21,113 @@ from .providers import EmbeddingClient, RerankerClient
 
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
+try:
+    RANK_BM25_VERSION = version("rank-bm25")
+except PackageNotFoundError:  # pragma: no cover - import already proves the package exists
+    RANK_BM25_VERSION = "unknown"
+
 
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
+
+
+class SparseBM25Index:
+    """Checksum-verifiable persistence boundary for the rank_bm25 state."""
+
+    artifact_format = "slotrag-rank-bm25-pickle-v1"
+    engine = "rank_bm25.BM25Okapi"
+    engine_version = RANK_BM25_VERSION
+
+    def __init__(self, index: BM25Okapi, *, passage_count: int) -> None:
+        self._index = index
+        self.passage_count = passage_count
+
+    @classmethod
+    def build(cls, passages: Iterable[Passage]) -> "SparseBM25Index":
+        values = list(passages)
+        return cls(
+            BM25Okapi([tokenize(passage.text) for passage in values]),
+            passage_count=len(values),
+        )
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_passage_count: int,
+        expected_sha256: str,
+    ) -> "SparseBM25Index":
+        source = Path(path)
+        actual_sha256 = cls._sha256(source)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"sparse index checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
+            )
+        try:
+            with source.open("rb") as handle:
+                payload = pickle.load(handle)  # noqa: S301 - checksum-verified local artifact
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, IndexError, TypeError) as exc:
+            raise ValueError("sparse index artifact could not be decoded") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("sparse index artifact must contain an object")
+        if payload.get("artifact_format") != cls.artifact_format:
+            raise ValueError("sparse index artifact format mismatch")
+        if payload.get("engine") != cls.engine:
+            raise ValueError("sparse index engine mismatch")
+        if payload.get("engine_version") != cls.engine_version:
+            raise ValueError("sparse index engine version mismatch")
+        passage_count = int(payload.get("passage_count") or 0)
+        if passage_count != expected_passage_count:
+            raise ValueError(
+                f"sparse index passage count mismatch: expected {expected_passage_count}, got {passage_count}"
+            )
+        index = payload.get("index")
+        if not isinstance(index, BM25Okapi) or int(getattr(index, "corpus_size", -1)) != passage_count:
+            raise ValueError("sparse index payload is not a compatible BM25Okapi index")
+        return cls(index, passage_count=passage_count)
+
+    def save(self, path: str | Path) -> str:
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".part",
+        )
+        part_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                pickle.dump({
+                    "artifact_format": self.artifact_format,
+                    "engine": self.engine,
+                    "engine_version": self.engine_version,
+                    "passage_count": self.passage_count,
+                    "index": self._index,
+                }, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                handle.flush()
+                os.fsync(handle.fileno())
+            digest = self._sha256(part_path)
+            os.replace(part_path, destination)
+            return digest
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            part_path.unlink(missing_ok=True)
+            raise
+
+    def get_scores(self, query_tokens: list[str]) -> np.ndarray:
+        return self._index.get_scores(query_tokens)
 
 
 class EmbeddingCache:
@@ -80,6 +188,7 @@ class HybridRetriever:
         rerank_enabled: bool = True,
         cache: EmbeddingCache | None = None,
         dense_enabled: bool = True,
+        sparse_index: SparseBM25Index | None = None,
     ) -> None:
         self.passages = passages
         self.embedding_client = embedding_client
@@ -89,7 +198,9 @@ class HybridRetriever:
         self.rerank_enabled = rerank_enabled
         self.dense_enabled = dense_enabled
         self.cache = cache or EmbeddingCache()
-        self._bm25 = BM25Okapi([tokenize(p.text) for p in passages]) if passages else None
+        if sparse_index is not None and sparse_index.passage_count != len(passages):
+            raise ValueError("sparse index passage count does not match passages")
+        self._bm25 = sparse_index or (SparseBM25Index.build(passages) if passages else None)
         self._passage_vectors: list[list[float]] | None = None
 
     def _ensure_vectors(self) -> list[list[float]]:
@@ -114,6 +225,9 @@ class HybridRetriever:
         """Materialize the shared passage index before online query timing starts."""
         if self.dense_enabled:
             self._ensure_vectors()
+
+    def save_sparse_index(self, path: str | Path) -> str | None:
+        return self._bm25.save(path) if self._bm25 is not None else None
 
     @staticmethod
     def _cosine(query: list[float], values: list[list[float]]) -> np.ndarray:

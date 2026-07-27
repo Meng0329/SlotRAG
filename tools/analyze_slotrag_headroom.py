@@ -67,6 +67,28 @@ def _canonical_id(value: object) -> str:
     return str(value or "").split("#chunk-", 1)[0]
 
 
+def _ids_match(left: object, right: object) -> bool:
+    left_id = _canonical_id(left)
+    right_id = _canonical_id(right)
+    return bool(
+        left_id
+        and right_id
+        and (
+            left_id == right_id
+            or left_id.endswith(f":{right_id}")
+            or right_id.endswith(f":{left_id}")
+        )
+    )
+
+
+def _matched_gold_ids(evidence_ids: set[str], gold_ids: set[str]) -> set[str]:
+    return {
+        gold_id
+        for gold_id in gold_ids
+        if any(_ids_match(evidence_id, gold_id) for evidence_id in evidence_ids)
+    }
+
+
 def _number(value: object) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -204,7 +226,7 @@ def classify_error(record: dict[str, Any]) -> str:
     error = str(result.get("error") or "").casefold()
     status = str(result.get("status") or "ok")
     primary = _primary(record) or 0.0
-    if metrics.get("plan_validation_errors") or "uncompil" in error or "schema" in error and "plan" in error:
+    if primary < 1.0 and (metrics.get("plan_validation_errors") or "uncompil" in error or "schema" in error and "plan" in error):
         return "PLAN_UNCOMPILABLE"
     if "plan" in error or "no join path" in error and "plan" in error:
         return "PLAN_ERROR"
@@ -218,7 +240,7 @@ def classify_error(record: dict[str, Any]) -> str:
     evidence_ids = _evidence_ids(record)
     gold_ids = _gold_ids(record)
     if gold_ids:
-        overlap = len(evidence_ids & gold_ids)
+        overlap = len(_matched_gold_ids(evidence_ids, gold_ids))
         if overlap == 0 and primary < 1.0:
             return "RETRIEVAL_MISS"
         if overlap < len(gold_ids) and primary < 1.0:
@@ -367,6 +389,14 @@ def _counterfactuals(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "rows_correct_final_wrong",
     )
     output: list[dict[str, Any]] = []
+    status_by_name = {
+        "gold_supporting_evidence_current_generator": "opportunity_proxy_not_executed",
+        "current_retrieval_oracle_answerability": "answer_surface_proxy",
+        "gold_logical_plan_current_executor": "estimated",
+        "current_plan_gold_slot_bindings": "row_surface_proxy_not_gold_bindings",
+        "full_evidence_answer_topk": "answer_surface_proxy",
+        "rows_correct_final_wrong": "answer_surface_proxy",
+    }
     for name in names:
         denominator = denominators[name]
         available = name in {"gold_logical_plan_current_executor"} and counters[name] == 0
@@ -375,7 +405,7 @@ def _counterfactuals(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "count": counters[name],
             "denominator": denominator,
             "rate": counters[name] / denominator if denominator else None,
-            "status": "N/A" if available else "estimated",
+            "status": "N/A" if available else status_by_name[name],
         })
     return output
 
@@ -418,15 +448,136 @@ def _budget_marginal_gains(records: list[dict[str, Any]]) -> list[dict[str, Any]
 def _retrieval_relationships(records: list[dict[str, Any]]) -> dict[str, Any]:
     observations: list[dict[str, Any]] = []
     for record in records:
-        metrics = record["metrics"]
-        keys = ("retrieval_top_k", "top_k", "final_k", "reranker_score", "top1_score", "score_margin", "score_entropy")
-        values = {key: _number(metrics.get(key)) for key in keys if _number(metrics.get(key)) is not None}
-        if values:
-            values.update({"dataset": record["dataset"], "method": record["method"], "primary_score": _primary(record)})
-            observations.append(values)
+        primary = _primary(record)
+        gold_ids = _gold_ids(record)
+        slot_traces = record["result"].get("slot_traces", [])
+        if not isinstance(slot_traces, list):
+            continue
+        for slot_trace in slot_traces:
+            if not isinstance(slot_trace, dict):
+                continue
+            slot_id = str(slot_trace.get("slot_id") or "")
+            materializations = slot_trace.get("materializations", [])
+            if not isinstance(materializations, list):
+                continue
+            for materialization_index, materialization in enumerate(materializations):
+                if not isinstance(materialization, dict):
+                    continue
+                extracted_rows = materialization.get("extracted_rows", [])
+                binding_count = len(extracted_rows) if isinstance(extracted_rows, list) else 0
+                selected_ids = {
+                    _canonical_id(value)
+                    for value in materialization.get("selected_source_ids", [])
+                }
+                searches = materialization.get("searches", [])
+                if not isinstance(searches, list):
+                    continue
+                for search_index, search in enumerate(searches):
+                    if not isinstance(search, dict):
+                        continue
+                    candidates = [
+                        candidate
+                        for candidate in search.get("candidates", [])
+                        if isinstance(candidate, dict)
+                    ]
+                    candidates.sort(key=lambda candidate: int(candidate.get("rank") or 10**9))
+                    if not candidates:
+                        continue
+                    scores = [float(_number(candidate.get("score")) or 0.0) for candidate in candidates]
+                    maximum = max(scores)
+                    weights = [math.exp(score - maximum) for score in scores]
+                    total_weight = sum(weights)
+                    probabilities = [weight / total_weight for weight in weights] if total_weight else []
+                    entropy = -sum(value * math.log(max(value, 1e-12)) for value in probabilities)
+                    reranker_scores = [
+                        value
+                        for candidate in candidates
+                        if (value := _number(candidate.get("rerank_score"))) is not None
+                    ]
+                    bm25_scores = [_number(candidate.get("bm25_score")) for candidate in candidates]
+                    dense_scores = [_number(candidate.get("dense_score")) for candidate in candidates]
+                    candidate_ids = {_canonical_id(candidate.get("source_id")) for candidate in candidates}
+                    observations.append({
+                        "run": record["run"],
+                        "dataset": record["dataset"],
+                        "method": record["method"],
+                        "question_id": record["question_id"],
+                        "slot_id": slot_id,
+                        "materialization_index": materialization_index,
+                        "search_index": search_index,
+                        "query_variant": search.get("query_variant"),
+                        "top_k": len(candidates),
+                        "selected_count": len(selected_ids),
+                        "binding_count": binding_count,
+                        "top1_score": scores[0],
+                        "topk_min_score": min(scores),
+                        "top1_top2_margin": scores[0] - scores[1] if len(scores) > 1 else scores[0],
+                        "score_entropy": entropy,
+                        "top1_reranker_score": _number(candidates[0].get("rerank_score")),
+                        "mean_reranker_score": _mean(reranker_scores),
+                        "top1_bm25_score": bm25_scores[0],
+                        "bm25_top1_top2_margin": (
+                            bm25_scores[0] - bm25_scores[1]
+                            if len(bm25_scores) > 1
+                            and bm25_scores[0] is not None
+                            and bm25_scores[1] is not None
+                            else None
+                        ),
+                        "top1_dense_score": dense_scores[0],
+                        "dense_top1_top2_margin": (
+                            dense_scores[0] - dense_scores[1]
+                            if len(dense_scores) > 1
+                            and dense_scores[0] is not None
+                            and dense_scores[1] is not None
+                            else None
+                        ),
+                        "gold_candidate_count": len(_matched_gold_ids(candidate_ids, gold_ids)),
+                        "gold_selected_count": len(_matched_gold_ids(selected_ids, gold_ids)),
+                        "primary_score": primary,
+                        "exact_correct": int(primary is not None and math.isclose(primary, 1.0)),
+                    })
     if not observations:
         return {"status": "N/A", "reason": "existing item schema has no ranked retrieval telemetry", "observations": []}
-    return {"status": "estimated", "observations": observations}
+    feature_names = (
+        "top_k",
+        "top1_score",
+        "top1_top2_margin",
+        "score_entropy",
+        "top1_bm25_score",
+        "bm25_top1_top2_margin",
+        "top1_dense_score",
+        "dense_top1_top2_margin",
+        "top1_reranker_score",
+        "binding_count",
+    )
+    summaries: dict[str, dict[str, Any]] = {}
+    for feature in feature_names:
+        rows = [
+            (float(value), float(primary), bool(observation["exact_correct"]))
+            for observation in observations
+            if (value := _number(observation.get(feature))) is not None
+            and (primary := _number(observation.get("primary_score"))) is not None
+        ]
+        if not rows:
+            summaries[feature] = {"status": "N/A", "observation_count": 0}
+            continue
+        values = [row[0] for row in rows]
+        primary_scores = [row[1] for row in rows]
+        exact_values = [value for value, _primary_score, exact in rows if exact]
+        non_exact_values = [value for value, _primary_score, exact in rows if not exact]
+        if len(rows) >= 2 and statistics.pstdev(values) > 0 and statistics.pstdev(primary_scores) > 0:
+            correlation = statistics.correlation(values, primary_scores)
+        else:
+            correlation = None
+        summaries[feature] = {
+            "status": "estimated",
+            "observation_count": len(rows),
+            "mean": _mean(values),
+            "mean_when_exact": _mean(exact_values),
+            "mean_when_not_exact": _mean(non_exact_values),
+            "pearson_with_primary": correlation,
+        }
+    return {"status": "estimated", "observations": observations, "summaries": summaries}
 
 
 def _error_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -471,6 +622,31 @@ def _conclusions(
     total_pairs = sum(int(row.get("question_count") or 0) for row in pairwise_summary)
     ties = sum(int(row.get("ties") or 0) for row in pairwise_summary)
     counterfactual_by_name = {row["name"]: row for row in counterfactuals}
+    protocols = Counter(str(record["item"].get("retrieval_protocol") or "unknown") for record in records)
+    methods = {record["method"] for record in records}
+    global_count = protocols.get("global_corpus", 0)
+    if global_count == len(records) and records:
+        benchmark_sufficiency = (
+            "global_corpus development diagnostics are present, but the analyzed records "
+            "do not by themselves establish a frozen paired method comparison"
+        )
+    elif global_count:
+        benchmark_sufficiency = (
+            "mixed retrieval protocols are present and must be reported separately; "
+            "the combined score is not publication-valid"
+        )
+    else:
+        benchmark_sufficiency = (
+            "only local_context or legacy protocol records are present; evidence is "
+            "insufficient for a global-corpus publication claim"
+        )
+    gold_plan_count = sum(
+        int(
+            record["item"].get("gold_plan") is not None
+            or (isinstance(record["sample"], dict) and record["sample"].get("gold_plan") is not None)
+        )
+        for record in records
+    )
     return {
         "largest_useful_mechanism": top_useful["mechanism"] if top_useful else None,
         "largest_useful_mechanism_ceiling": top_useful.get("theoretical_max_average_gain") if top_useful else None,
@@ -484,9 +660,20 @@ def _conclusions(
             for row in coverage
             if row["mechanism"] in {"frontier_guard_interventions", "protected_anchor_rejections"}
         ],
-        "planner_oracle_status": "N/A: no gold logical plans in analyzed historical items",
-        "benchmark_sufficiency": "insufficient: local_context and adapted historical protocols; global-corpus evidence absent",
-        "recommended_focus": "shared-corpus retrieval telemetry first, then extraction/generation verification; do not add sparse guards",
+        "retrieval_protocol_counts": dict(sorted(protocols.items())),
+        "method_count": len(methods),
+        "planner_oracle_status": (
+            f"estimated from {gold_plan_count} records with gold plans"
+            if gold_plan_count
+            else "N/A: no gold logical plans in analyzed items"
+        ),
+        "benchmark_sufficiency": benchmark_sufficiency,
+        "recommended_focus": (
+            "global-corpus query reformulation/retriever switching and structured extraction; "
+            "do not add sparse guards"
+            if global_count
+            else "shared-corpus retrieval telemetry first, then extraction/generation verification; do not add sparse guards"
+        ),
     }
 
 
@@ -515,7 +702,7 @@ def analyze_run_dirs(run_dirs: Iterable[Path]) -> dict[str, Any]:
     coverage = _coverage(all_records)
     counterfactuals = _counterfactuals(all_records)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "runs": run_summaries,
         "record_count": len(all_records),
         "load_errors": load_errors,
@@ -557,7 +744,7 @@ def write_outputs(report: dict[str, Any], output_dir: Path, *, command: str = ""
     retrieval = report.get("retrieval_relationships", {})
     _write_csv(output_dir / "retrieval_relationships.csv", retrieval.get("observations", []))
     summary_lines = [
-        "# SlotRAG Optimization Audit v54",
+        "# SlotRAG Optimization Audit",
         "",
         "This report is generated from immutable run items and does not call any provider.",
         f"Command: `{command}`" if command else "",
@@ -592,7 +779,16 @@ def write_outputs(report: dict[str, Any], output_dir: Path, *, command: str = ""
         "- Retrieval score/top-k relationships: "
         + ("available in telemetry." if retrieval.get("status") != "N/A" else "N/A in existing item schema; this is a protocol gap.")
     )
-    summary_lines.append("- Existing historical records are local/adapted evidence and are not sufficient for a global-corpus publication claim.")
+    protocol_counts = conclusions.get("retrieval_protocol_counts", {})
+    summary_lines.append(f"- Retrieval protocols in this report: {protocol_counts}.")
+    if protocol_counts.get("global_corpus"):
+        summary_lines.append(
+            "- Global-corpus development evidence is present, but it is not a frozen paired evaluation or a publication claim."
+        )
+    else:
+        summary_lines.append(
+            "- Existing records are local/legacy evidence and are not sufficient for a global-corpus publication claim."
+        )
     summary_lines.extend(["", "## Error Counts", ""])
     for category, count in sorted(report.get("error_counts", {}).items()):
         summary_lines.append(f"- `{category}`: {count}")
@@ -604,7 +800,7 @@ def write_outputs(report: dict[str, Any], output_dir: Path, *, command: str = ""
         "## Interpretation Boundary",
         "",
         "- A ceiling is an oracle diagnostic, not an achieved improvement.",
-        "- Missing ranked-retrieval, slot-binding and generator traces are reported as unavailable.",
+        "- Missing ranked-retrieval, slot-binding and generator traces are reported as unavailable; enriched traces are summarized directly.",
         "- No evaluation threshold or sample was selected from these outputs.",
         "",
     ])

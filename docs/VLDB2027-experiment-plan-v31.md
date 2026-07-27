@@ -801,3 +801,23 @@ width=`[2]`、considered/pruned=`3/1`、`binding_contexts_pruned=1`；action dec
 该版本只完成 telemetry/兼容性 gate，不启动 provider，不改变 evaluation split，不进入 2×2 主实验。
 验证：focused tests `3 passed`；全量 `276 passed, 1 skipped`，compileall 与 `git diff --check` 通过。
 下一门禁是 development enriched trace 的 action-gain calibration 和 oracle binding recall 审计。
+
+## v63 Enriched Development / Global Headroom Gate（2026-07-27）
+
+完整审计：`docs/optimization-audit-v63.md`。有效 development inventory 为 local/global 各 80 题，
+HotpotQA/2Wiki 各 40；所有 item status=`ok`，retry=`0`。global primary 为 `0.4467/0.4825`，比同题
+local 的 `0.6764/0.7239` 分别低 `0.2298/0.2414`。global available evidence 中有答案但 retrieved
+evidence 不含答案的 surface proxy 为 `40/80`；fixed top-k 可恢复 slot 仅 `8` 个。
+
+Evidence Sufficiency global holdout gate 失败：HotpotQA Brier/ECE=`0.2381/0.3286`，2Wiki
+=`0.2325/0.2381`。原因不是可继续搜索单阈值：BM25-only RRF top-1 score 恒定，固定 top-k 也无方差。
+
+在任何 2×2 前新增以下硬门禁：
+
+1. 将 2Wiki provenance 聚合从逐重复 set+sort 改为一次性累积，并实现可校验的 sparse-index persistence；
+2. cold/warm build latency、index bytes、checksum 与 reuse reason 写入 corpus manifest；
+3. sufficiency 改用 backend-aware raw score/rank/quantile 并在 question-disjoint holdout 重新校准；
+4. physical action 必须真实改变 executor，而非只写 telemetry；
+5. development paired smoke 在多个 slice 同向，unsupported answer 不增加，质量-成本 gate 通过。
+
+完成前不得启动 frozen evaluation 或 full baseline matrix。v63 测试为 `297 passed, 1 skipped`。
