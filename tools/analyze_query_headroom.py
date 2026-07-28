@@ -215,16 +215,31 @@ def _run_queries(
 
     output: dict[tuple[str, str], list[str]] = {}
 
-    def execute(key: tuple[str, str]) -> tuple[tuple[str, str], list[str]]:
-        results = retriever.search(queries[key], top_k=candidate_k)
-        source_ids = []
+    def source_ids(results: list[Any]) -> list[str]:
+        values = []
         for result in results:
             original_id = result.passage.metadata.get("source_passage_id")
-            source_ids.append(str(original_id or canonical_evidence_id(result.passage.id)))
-        return key, source_ids
+            values.append(str(original_id or canonical_evidence_id(result.passage.id)))
+        return values
+
+    ordered_keys = sorted(queries)
+    search_batch = getattr(retriever, "search_batch", None)
+    if search_batch is not None:
+        rankings = search_batch(
+            [queries[key] for key in ordered_keys],
+            top_k=candidate_k,
+        )
+        return {
+            key: source_ids(results)
+            for key, results in zip(ordered_keys, rankings)
+        }
+
+    def execute(key: tuple[str, str]) -> tuple[tuple[str, str], list[str]]:
+        results = retriever.search(queries[key], top_k=candidate_k)
+        return key, source_ids(results)
 
     with ThreadPoolExecutor(max_workers=max(workers, 1)) as pool:
-        futures = [pool.submit(execute, key) for key in sorted(queries)]
+        futures = [pool.submit(execute, key) for key in ordered_keys]
         for future in as_completed(futures):
             key, source_ids = future.result()
             output[key] = source_ids
@@ -333,7 +348,13 @@ def _question_records(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        action="append",
+        required=True,
+        help="Development trace run; repeat to combine disjoint dataset runs.",
+    )
     parser.add_argument("--stage", required=True)
     parser.add_argument("--index-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -355,12 +376,24 @@ def main() -> int:
     if args.role == "disjoint_validation" and args.frozen_selection is None:
         raise ValueError("disjoint_validation requires --frozen-selection")
 
-    samples = _load_samples(args.run_dir, args.stage)
-    materializations_by_dataset, questions = _load_materializations(
-        args.run_dir,
-        args.stage,
-        samples,
-    )
+    materializations_by_dataset: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    questions: dict[str, dict[str, Any]] = {}
+    for run_dir in args.run_dir:
+        samples = _load_samples(run_dir, args.stage)
+        current_materializations, current_questions = _load_materializations(
+            run_dir,
+            args.stage,
+            samples,
+        )
+        for dataset, rows in current_materializations.items():
+            materializations_by_dataset[dataset].extend(rows)
+        duplicate_questions = set(questions).intersection(current_questions)
+        if duplicate_questions:
+            raise ValueError(
+                "combined runs contain duplicate questions: "
+                + ", ".join(sorted(duplicate_questions)[:5])
+            )
+        questions.update(current_questions)
     all_records: list[dict[str, Any]] = []
     all_raw: list[dict[str, Any]] = []
     index_provenance: dict[str, Any] = {}
@@ -433,9 +466,11 @@ def main() -> int:
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": args.role,
-        "source_run": str(args.run_dir),
+        "source_runs": [str(path) for path in args.run_dir],
         "source_stage": args.stage,
-        "source_manifest_sha256": _sha256(args.run_dir / "manifest.json"),
+        "source_manifest_sha256": {
+            str(path): _sha256(path / "manifest.json") for path in args.run_dir
+        },
         "workers": args.workers,
         "top_k": args.top_k,
         "candidate_k": args.candidate_k,

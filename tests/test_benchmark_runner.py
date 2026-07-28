@@ -486,7 +486,7 @@ def test_runner_excludes_shared_index_build_from_online_wall_latency(tmp_path, m
     final_path = next((tmp_path / "run" / "items" / "test").rglob("*.json"))
     record = json.loads(final_path.read_text(encoding="utf-8"))
     metrics = record["result"]["metrics"]
-    assert record["schema_version"] == 31
+    assert record["schema_version"] == 32
     assert record["execution_control"]["operational_rpm"] == 20
     assert len(record["execution_profile_sha256"]) == 64
     manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
@@ -640,7 +640,7 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
     snapshots = list((tmp_path / "run" / "plans" / "test").rglob("*.json"))
     assert len(snapshots) == 1
     records = [json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "run" / "items" / "test").rglob("*.json")]
-    assert {record["schema_version"] for record in records} == {31}
+    assert {record["schema_version"] for record in records} == {32}
     assert len({record["plan_provenance"]["plan_sha256"] for record in records}) == 1
     assert len({record["plan_provenance"]["effective_plan_sha256"] for record in records}) == 1
     assert {record["plan_provenance"]["source_method"] for record in records} == {"slotrag"}

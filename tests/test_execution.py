@@ -126,6 +126,72 @@ def test_materializer_dual_query_retrieval_merges_and_accounts_for_both_searches
     assert [item.source_id for item in materializer.last_evidence].count("shared") == 1
 
 
+def test_materializer_dual_access_bundle_batches_two_paths_into_one_extraction():
+    class BatchRetriever:
+        def __init__(self):
+            self.batches = []
+
+        def search(self, _query):
+            raise AssertionError("dual bundle must use the batch interface")
+
+        def search_batch(self, queries, *, top_k=None):
+            self.batches.append((list(queries), top_k))
+            return [
+                [
+                    RetrievalResult(
+                        passage=Passage(id="slot", doc_id="d1", text="Slot evidence."),
+                        score=0.9,
+                    ),
+                    RetrievalResult(
+                        passage=Passage(id="shared", doc_id="d2", text="Shared evidence."),
+                        score=0.8,
+                    ),
+                ],
+                [
+                    RetrievalResult(
+                        passage=Passage(id="question", doc_id="d3", text="Question evidence."),
+                        score=0.95,
+                    ),
+                    RetrievalResult(
+                        passage=Passage(id="shared", doc_id="d2", text="Shared evidence."),
+                        score=0.7,
+                    ),
+                ],
+            ]
+
+    client = SequenceExtractionClient([[{"founder": "Ada", "source_id": "shared"}]])
+    retriever = BatchRetriever()
+    materializer = SlotMaterializer(
+        client,
+        retriever,
+        max_passages=2,
+        question_context="Who founded Alpha?",
+        dual_access_bundle=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]),
+        {},
+    )
+
+    assert retriever.batches == [(["Founded Alpha ?founder", "Who founded Alpha? Founded Alpha"], 2)]
+    assert [row.bindings for row in rows] == [{"founder": "Ada"}]
+    assert client.rows == []
+    assert metrics.retrieval_calls == 2
+    assert metrics.dual_access_batches == 1
+    assert metrics.dual_access_logical_queries == 2
+    assert metrics.dual_access_candidate_union == 3
+    assert metrics.dual_access_candidate_overlap == 1
+    trace = materializer.last_materialization_traces[0]
+    assert trace.access_path_policy == "dual_bundle"
+    assert trace.physical_retrieval_batches == 1
+    assert trace.candidate_pool_size == 3
+    assert trace.candidate_overlap == 1
+    assert {item.source_id for item in materializer.last_evidence} == {
+        "slot", "shared", "question"
+    }
+
+
 def test_materializer_exposes_ranked_retrieval_trace_without_passage_payloads():
     class RankedRetriever:
         def search(self, query):
@@ -215,6 +281,33 @@ def test_materializer_executes_generic_query_variant_as_a_separate_physical_acti
     assert materializer.last_materialization_traces[0].searches[0].query_variant == (
         "question_plus_lexical_slot"
     )
+
+
+def test_materializer_uses_compiled_primary_query_variant_without_an_extra_call():
+    class RecordingRetriever:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            return [RetrievalResult(passage=Passage(id="p1", text="Ada fact"), score=1.0)]
+
+    retriever = RecordingRetriever()
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"place": "London", "source_id": "p1"}]]),
+        retriever,
+        question_context="Where was Ada born?",
+        primary_query_variant="question_plus_lexical_slot",
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="born_in", arguments=["Ada", "?place"]),
+        {},
+    )
+
+    assert retriever.queries == ["Where was Ada born? born in Ada"]
+    assert rows[0].bindings == {"place": "London"}
+    assert metrics.retrieval_calls == 1
 
 
 def test_executor_persists_materialization_trace_on_execution_result():

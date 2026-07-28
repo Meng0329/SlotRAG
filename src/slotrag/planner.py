@@ -36,7 +36,7 @@ from .models import (
 )
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
-from .query_optimization import QueryVariant, formulate_query
+from .query_optimization import QueryVariant, canonical_evidence_id, formulate_query
 from .retrieval import HybridRetriever
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
@@ -1148,11 +1148,13 @@ class SlotMaterializer:
         normalize_anchor_window_predicates: bool = False,
         evidence_surface_grounding_repair: bool = False,
         question_context: str | None = None,
+        primary_query_variant: QueryVariant | None = None,
         dual_query_retrieval: bool = False,
         dual_query_unbound_only: bool = False,
         dual_query_confidence_threshold: float | None = None,
         dual_query_evidence_guard: bool = False,
         dual_query_evidence_guard_disjoint_only: bool = True,
+        dual_access_bundle: bool = False,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1168,11 +1170,19 @@ class SlotMaterializer:
         self.normalize_anchor_window_predicates = normalize_anchor_window_predicates
         self.evidence_surface_grounding_repair = evidence_surface_grounding_repair
         self.question_context = question_context.strip() if question_context else None
+        self.primary_query_variant = primary_query_variant
         self.dual_query_retrieval = dual_query_retrieval
         self.dual_query_unbound_only = dual_query_unbound_only
         self.dual_query_confidence_threshold = dual_query_confidence_threshold
         self.dual_query_evidence_guard = dual_query_evidence_guard
         self.dual_query_evidence_guard_disjoint_only = dual_query_evidence_guard_disjoint_only
+        self.dual_access_bundle = dual_access_bundle
+        if self.dual_access_bundle and not self.question_context:
+            raise ValueError("dual_access_bundle requires question_context")
+        if self.dual_access_bundle and self.dual_query_retrieval:
+            raise ValueError("dual_access_bundle and dual_query_retrieval are mutually exclusive")
+        if self.dual_access_bundle and self.primary_query_variant is not None:
+            raise ValueError("dual_access_bundle owns the primary query formulation")
         self.last_evidence: list[EvidenceRecord] = []
         self.last_materialization_traces: list[MaterializationTrace] = []
         self.last_retrieval_results: list[RetrievalResult] = []
@@ -1315,8 +1325,11 @@ class SlotMaterializer:
         slot_query = slot.query_text(bindings)
         searches: list[RetrievalSearchTrace] = []
 
-        def search(query_text: str, query_variant: str) -> list[RetrievalResult]:
-            ranked = self.retriever.search(query_text)
+        def record_search(
+            query_text: str,
+            query_variant: QueryVariant,
+            ranked: list[RetrievalResult],
+        ) -> list[RetrievalResult]:
             searches.append(RetrievalSearchTrace(
                 query=query_text,
                 query_variant=query_variant,
@@ -1335,6 +1348,26 @@ class SlotMaterializer:
             ))
             return ranked
 
+        def search(query_text: str, query_variant: QueryVariant) -> list[RetrievalResult]:
+            return record_search(query_text, query_variant, self.retriever.search(query_text))
+
+        def search_batch(
+            query_specs: list[tuple[str, QueryVariant]],
+        ) -> list[list[RetrievalResult]]:
+            batch = getattr(self.retriever, "search_batch", None)
+            if batch is None:
+                return [search(text, variant)[:self.max_passages] for text, variant in query_specs]
+            rankings = batch(
+                [text for text, _variant in query_specs],
+                top_k=self.max_passages,
+            )
+            if len(rankings) != len(query_specs):
+                raise ValueError("retriever batch result count does not match query count")
+            return [
+                record_search(text, variant, list(ranked))
+                for (text, variant), ranked in zip(query_specs, rankings)
+            ]
+
         retrieval_calls = 1
         query = slot_query
         dual_query_requested = bool(
@@ -1352,11 +1385,68 @@ class SlotMaterializer:
         dual_query_confidence_skip = False
         dual_query_guard_check = False
         dual_query_guard_fallback = False
-        if query_variant is not None:
-            if query_variant != "slot" and not self.question_context:
-                raise ValueError(f"query variant {query_variant!r} requires question_context")
-            query = formulate_query(self.question_context or "", slot_query, query_variant)
-            retrieved_passages = search(query, query_variant)[:self.max_passages]
+        dual_access_batches = 0
+        dual_access_candidate_overlap = 0
+        effective_query_variant = query_variant or self.primary_query_variant
+        if self.dual_access_bundle and query_variant is None:
+            question_query = formulate_query(
+                self.question_context or "",
+                slot_query,
+                "question_plus_lexical_slot",
+            )
+            slot_ranked, question_ranked = search_batch([
+                (slot_query, "slot"),
+                (question_query, "question_plus_lexical_slot"),
+            ])
+            ranked_lists = [
+                slot_ranked[:self.max_passages],
+                question_ranked[:self.max_passages],
+            ]
+            retrieval_calls = 2
+            dual_access_batches = 1
+            query = f"{slot_query} || {question_query}"
+            rrf_scores: dict[str, float] = defaultdict(float)
+            best_rank: dict[str, int] = {}
+            representatives: dict[str, RetrievalResult] = {}
+            path_membership: dict[str, set[int]] = defaultdict(set)
+            for path_index, ranked in enumerate(ranked_lists):
+                for rank, result in enumerate(ranked, start=1):
+                    evidence_id = str(
+                        result.passage.metadata.get("source_passage_id")
+                        or canonical_evidence_id(result.passage.id)
+                    )
+                    rrf_scores[evidence_id] += 1.0 / (60 + rank)
+                    best_rank[evidence_id] = min(best_rank.get(evidence_id, rank), rank)
+                    path_membership[evidence_id].add(path_index)
+                    current = representatives.get(evidence_id)
+                    if current is None or result.score > current.score:
+                        representatives[evidence_id] = result
+            dual_access_candidate_overlap = sum(
+                len(paths) > 1 for paths in path_membership.values()
+            )
+            retrieved_passages = [
+                representatives[evidence_id]
+                for evidence_id in sorted(
+                    representatives,
+                    key=lambda value: (
+                        -len(path_membership[value]),
+                        -rrf_scores[value],
+                        best_rank[value],
+                        value,
+                    ),
+                )
+            ]
+        elif effective_query_variant is not None:
+            if effective_query_variant != "slot" and not self.question_context:
+                raise ValueError(
+                    f"query variant {effective_query_variant!r} requires question_context"
+                )
+            query = formulate_query(
+                self.question_context or "",
+                slot_query,
+                effective_query_variant,
+            )
+            retrieved_passages = search(query, effective_query_variant)[:self.max_passages]
         elif dual_query_requested:
             question_query = f"{self.question_context} {slot_query}"
             slot_ranked = search(slot_query, "slot")
@@ -1489,6 +1579,12 @@ class SlotMaterializer:
             dual_query_confidence_skips=int(dual_query_confidence_skip),
             dual_query_guard_checks=int(dual_query_guard_check),
             dual_query_guard_fallbacks=int(dual_query_guard_fallback),
+            dual_access_batches=dual_access_batches,
+            dual_access_logical_queries=2 * dual_access_batches,
+            dual_access_candidate_union=(
+                len(retrieved_passages) if dual_access_batches else 0
+            ),
+            dual_access_candidate_overlap=dual_access_candidate_overlap,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
             typed_extraction_contracts=int(bool(boolean_fields and passages)),
@@ -1521,6 +1617,10 @@ class SlotMaterializer:
             retrieval_calls=retrieval_calls,
             searches=searches,
             selected_source_ids=[result.passage.id for result in retrieved_passages],
+            access_path_policy=("dual_bundle" if dual_access_batches else "single"),
+            physical_retrieval_batches=1,
+            candidate_pool_size=len(retrieved_passages),
+            candidate_overlap=dual_access_candidate_overlap,
         )
         self.last_materialization_traces = [base_trace]
         self.last_retrieval_results = list(retrieved_passages)
@@ -1791,6 +1891,11 @@ class SlotMaterializer:
                 "dual_query_skips": metrics.dual_query_skips + current_metrics.dual_query_skips,
                 "dual_query_confidence_skips": metrics.dual_query_confidence_skips + current_metrics.dual_query_confidence_skips,
                 "dual_query_guard_checks": metrics.dual_query_guard_checks + current_metrics.dual_query_guard_checks,
+                "dual_query_guard_fallbacks": metrics.dual_query_guard_fallbacks + current_metrics.dual_query_guard_fallbacks,
+                "dual_access_batches": metrics.dual_access_batches + current_metrics.dual_access_batches,
+                "dual_access_logical_queries": metrics.dual_access_logical_queries + current_metrics.dual_access_logical_queries,
+                "dual_access_candidate_union": metrics.dual_access_candidate_union + current_metrics.dual_access_candidate_union,
+                "dual_access_candidate_overlap": metrics.dual_access_candidate_overlap + current_metrics.dual_access_candidate_overlap,
                 "llm_calls": metrics.llm_calls + current_metrics.llm_calls,
                 "prompt_tokens": metrics.prompt_tokens + current_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + current_metrics.completion_tokens,
@@ -1852,7 +1957,7 @@ class SlotMaterializer:
         for bindings in contexts or [{}]:
             dual = bool(
                 self.question_context
-                and self.dual_query_retrieval
+                and (self.dual_query_retrieval or self.dual_access_bundle)
                 and (not self.dual_query_unbound_only or not bindings)
             )
             total += 2 if dual else 1
@@ -2198,6 +2303,7 @@ class AdaptiveExecutor:
         binding_beam_width: int,
         topk_expansion_available: bool = False,
         topk_expansion_retrieval_calls: int = 1,
+        slot_only_available: bool = False,
         question_plus_slot_available: bool = False,
         query_rewrite_available: bool = False,
     ) -> tuple[RunMetrics, SufficiencyPrediction | None, Any | None, str | None]:
@@ -2258,6 +2364,7 @@ class AdaptiveExecutor:
             max_binding_beam_width=self.binding_beam.max_width,
             topk_expansion_available=topk_expansion_available,
             topk_expansion_retrieval_calls=topk_expansion_retrieval_calls,
+            slot_only_available=slot_only_available,
             question_plus_slot_available=question_plus_slot_available,
             binding_beam_expansion_available=False,
             query_rewrite_available=query_rewrite_available,
@@ -2495,6 +2602,10 @@ class AdaptiveExecutor:
                 "dual_query_confidence_skips": metrics.dual_query_confidence_skips + slot_metrics.dual_query_confidence_skips,
                 "dual_query_guard_checks": metrics.dual_query_guard_checks + slot_metrics.dual_query_guard_checks,
                 "dual_query_guard_fallbacks": metrics.dual_query_guard_fallbacks + slot_metrics.dual_query_guard_fallbacks,
+                "dual_access_batches": metrics.dual_access_batches + slot_metrics.dual_access_batches,
+                "dual_access_logical_queries": metrics.dual_access_logical_queries + slot_metrics.dual_access_logical_queries,
+                "dual_access_candidate_union": metrics.dual_access_candidate_union + slot_metrics.dual_access_candidate_union,
+                "dual_access_candidate_overlap": metrics.dual_access_candidate_overlap + slot_metrics.dual_access_candidate_overlap,
                 "prompt_tokens": metrics.prompt_tokens + slot_metrics.prompt_tokens,
                 "completion_tokens": metrics.completion_tokens + slot_metrics.completion_tokens,
                 "compilation_llm_calls": metrics.compilation_llm_calls + slot_metrics.compilation_llm_calls,
@@ -2595,6 +2706,15 @@ class AdaptiveExecutor:
                 and slot_metrics.retrieval_calls + complementary_call_estimate
                 <= slot_call_budget
             )
+            primary_query_variant = (
+                getattr(self.materializer, "primary_query_variant", None) or "slot"
+            )
+            slot_only_available = bool(
+                complementary_available and primary_query_variant != "slot"
+            )
+            question_aware_available = bool(
+                complementary_available and primary_query_variant == "slot"
+            )
             metrics, sufficiency_prediction, action_decision, sufficiency_model = self._evaluate_sufficiency_and_action(
                 metrics,
                 rows,
@@ -2607,8 +2727,9 @@ class AdaptiveExecutor:
                 binding_beam_width=adaptive_beam_width,
                 topk_expansion_available=topk_expansion_available,
                 topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
-                question_plus_slot_available=complementary_available,
-                query_rewrite_available=complementary_available,
+                slot_only_available=slot_only_available,
+                question_plus_slot_available=question_aware_available,
+                query_rewrite_available=question_aware_available,
             )
             initial_row_count = len(rows)
             action_executed = False
@@ -2685,14 +2806,15 @@ class AdaptiveExecutor:
                 )
                 effective_action_decision = post_action_decision
             elif action_decision is not None and action_decision.action in {
+                "RETRIEVE_SLOT_ONLY",
                 "RETRIEVE_QUESTION_PLUS_SLOT",
                 "REWRITE_QUERY",
             }:
-                action_query_variant = (
-                    "question_plus_slot"
-                    if action_decision.action == "RETRIEVE_QUESTION_PLUS_SLOT"
-                    else "question_plus_lexical_slot"
-                )
+                action_query_variant = {
+                    "RETRIEVE_SLOT_ONLY": "slot",
+                    "RETRIEVE_QUESTION_PLUS_SLOT": "question_plus_slot",
+                    "REWRITE_QUERY": "question_plus_lexical_slot",
+                }[action_decision.action]
                 initial_source_ids = {
                     result.passage.id for result in slot_retrieval_results
                 }
@@ -2760,6 +2882,10 @@ class AdaptiveExecutor:
                     "complementary_retrieval_actions": (
                         metrics.complementary_retrieval_actions + 1
                     ),
+                    "complementary_retrieval_slot_only": (
+                        metrics.complementary_retrieval_slot_only
+                        + int(action_decision.action == "RETRIEVE_SLOT_ONLY")
+                    ),
                     "complementary_retrieval_question_plus_slot": (
                         metrics.complementary_retrieval_question_plus_slot
                         + int(action_decision.action == "RETRIEVE_QUESTION_PLUS_SLOT")
@@ -2803,6 +2929,7 @@ class AdaptiveExecutor:
                         binding_beam_width=adaptive_beam_width,
                         topk_expansion_available=False,
                         topk_expansion_retrieval_calls=max(expansion_call_estimate, 1),
+                        slot_only_available=False,
                         question_plus_slot_available=False,
                         query_rewrite_available=False,
                     )

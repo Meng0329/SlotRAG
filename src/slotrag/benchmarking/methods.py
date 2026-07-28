@@ -29,6 +29,7 @@ from ..planner import (
 )
 from ..providers import AgnesClient, ChatResult
 from ..qo import PlanValidationError, compile_physical_plan, logical_plan_from_slot_plan
+from ..query_optimization import QueryVariant
 from ..retrieval import HybridRetriever, tokenize
 from ..sufficiency import EvidenceSufficiencyCalibrator
 
@@ -70,6 +71,8 @@ class MethodSpec:
     topk_expansion_mode: TopKExpansionMode = "utility"
     evidence_sufficiency: bool = False
     complementary_retrieval: bool = False
+    primary_query_variant: QueryVariant | None = None
+    dual_access_bundle: bool = False
     description: str = ""
 
 
@@ -132,6 +135,9 @@ ABLATION_METHODS = [
     "slotrag-lean-grounded-role-projection",
     "slotrag-physical-policy-utility",
     "slotrag-qo-utility",
+    "slotrag-dual-access",
+    "slotrag-physical-dual-access",
+    "slotrag-qo-dual-access",
 ]
 
 
@@ -151,6 +157,7 @@ METHODS: dict[str, MethodSpec] = {
         physical_action_policy=True,
         topk_expansion_mode="disabled",
         complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
         description="SlotRAG with physical planning and bounded complementary query actions",
     ),
     "slotrag-qo": MethodSpec(
@@ -162,7 +169,31 @@ METHODS: dict[str, MethodSpec] = {
         topk_expansion_mode="disabled",
         evidence_sufficiency=True,
         complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
         description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer",
+    ),
+    "slotrag-dual-access": MethodSpec(
+        "slotrag-dual-access",
+        "slotrag",
+        dual_access_bundle=True,
+        description="v73 batched union of slot and question-plus-lexical-slot access paths",
+    ),
+    "slotrag-physical-dual-access": MethodSpec(
+        "slotrag-physical-dual-access",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        dual_access_bundle=True,
+        description="v73 physical plan with batched dual-access evidence bundles",
+    ),
+    "slotrag-qo-dual-access": MethodSpec(
+        "slotrag-qo-dual-access",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        evidence_sufficiency=True,
+        dual_access_bundle=True,
+        description="v73 sufficiency-guided optimizer with batched dual-access evidence bundles",
     ),
     "slotrag-physical-policy-utility": MethodSpec(
         "slotrag-physical-policy-utility",
@@ -1140,8 +1171,10 @@ def _run_slotrag(
         "max_passages": config.execution.materialization_top_k,
         "typed_extraction_contracts": spec.typed_extraction_contracts,
     }
-    if spec.question_grounded_retrieval or spec.complementary_retrieval:
+    if spec.question_grounded_retrieval or spec.complementary_retrieval or spec.dual_access_bundle:
         materializer_options["question_context"] = question.question
+    if spec.dual_access_bundle:
+        materializer_options["dual_access_bundle"] = True
     if spec.dual_query_retrieval:
         materializer_options["dual_query_retrieval"] = True
     if spec.dual_query_unbound_only:
@@ -1151,6 +1184,8 @@ def _run_slotrag(
     if spec.dual_query_evidence_guard:
         materializer_options["dual_query_evidence_guard"] = True
         materializer_options["dual_query_evidence_guard_disjoint_only"] = spec.dual_query_evidence_guard_disjoint_only
+    if spec.primary_query_variant is not None:
+        materializer_options["primary_query_variant"] = spec.primary_query_variant
     if spec.role_projected_extraction and protected_anchor_values:
         materializer_options.update({
             "role_projected_extraction": True,

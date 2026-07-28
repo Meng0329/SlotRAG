@@ -45,6 +45,12 @@ METRICS = [
     "dual_query_confidence_skips",
     "dual_query_guard_checks",
     "dual_query_guard_fallbacks",
+    "dual_access_batches",
+    "dual_access_logical_queries",
+    "dual_access_candidate_union",
+    "dual_access_candidate_overlap",
+    "dual_access_mean_union_size",
+    "dual_access_mean_overlap_size",
     "embedding_calls",
     "reranker_calls",
     "prompt_tokens",
@@ -90,6 +96,14 @@ METRICS = [
     "physical_action_executions",
     "physical_action_extra_retrieval_calls",
     "physical_action_rows_added",
+    "complementary_retrieval_actions",
+    "complementary_retrieval_slot_only",
+    "complementary_retrieval_question_plus_slot",
+    "complementary_retrieval_query_rewrites",
+    "complementary_retrieval_novel_passages",
+    "complementary_retrieval_novel_rows",
+    "complementary_retrieval_no_gain",
+    "evidence_gain_stops",
     "physical_action_mean_utility",
     "physical_action_mean_candidate_count",
     "evidence_sufficiency_decisions",
@@ -518,6 +532,31 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
             "physical_action_rows_added",
         )
     }
+    schema32_metrics = {
+        name: metrics[name] if schema_version >= 32 else None
+        for name in (
+            "complementary_retrieval_actions",
+            "complementary_retrieval_slot_only",
+            "complementary_retrieval_question_plus_slot",
+            "complementary_retrieval_query_rewrites",
+            "complementary_retrieval_novel_passages",
+            "complementary_retrieval_novel_rows",
+            "complementary_retrieval_no_gain",
+            "evidence_gain_stops",
+            "dual_access_batches",
+            "dual_access_logical_queries",
+            "dual_access_candidate_union",
+            "dual_access_candidate_overlap",
+        )
+    }
+    schema32_metrics["dual_access_mean_union_size"] = (
+        metrics["dual_access_candidate_union"] / metrics["dual_access_batches"]
+        if schema_version >= 32 and metrics["dual_access_batches"] else None
+    )
+    schema32_metrics["dual_access_mean_overlap_size"] = (
+        metrics["dual_access_candidate_overlap"] / metrics["dual_access_batches"]
+        if schema_version >= 32 and metrics["dual_access_batches"] else None
+    )
     phase_tokens = sum(
         metrics[f"{phase}_{token_type}_tokens"]
         for phase in ("compilation", "extraction", "planning", "reasoning", "generation")
@@ -601,6 +640,7 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
         **schema25_metrics,
         **schema26_metrics,
         **schema31_metrics,
+        **schema32_metrics,
         "unique_documents_accessed": metrics["unique_documents_accessed"] if schema_version >= 4 else None,
         "unique_passages_accessed": metrics["unique_passages_accessed"] if schema_version >= 4 else None,
         "total_tokens": total_tokens,

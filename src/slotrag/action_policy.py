@@ -50,6 +50,7 @@ class ActionPolicyContext(StrictModel):
     can_backtrack: bool = False
     topk_expansion_available: bool = False
     topk_expansion_retrieval_calls: int = Field(default=1, ge=1)
+    slot_only_available: bool = False
     question_plus_slot_available: bool = False
     binding_beam_expansion_available: bool = False
     query_rewrite_available: bool = False
@@ -190,6 +191,19 @@ class PhysicalActionPolicy:
                 tokens=256,
                 latency_ms=110,
                 rationale="query context may recover predicate coverage",
+            ))
+        if remaining_calls > 0 and context.slot_only_available:
+            uncertainty = max(1.0 - probability, 0.0)
+            candidates.append(self._candidate(
+                "RETRIEVE_SLOT_ONLY",
+                gain=min(
+                    probability + uncertainty * (0.20 + 0.20 * (1.0 - features.predicate_coverage)),
+                    1.0,
+                ),
+                calls=1,
+                tokens=256,
+                latency_ms=100,
+                rationale="slot-only retrieval is complementary to the compiled question-aware query",
             ))
         if remaining_calls > 0:
             uncertainty = max(1.0 - probability, 0.0)

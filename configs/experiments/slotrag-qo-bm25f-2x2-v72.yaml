@@ -35,6 +35,6 @@ stages:
       - slotrag-qo
     retrieval_protocol: local_context
     retrieval_backend: bm25
-    sufficiency_calibrator_path: runs/slotrag-qo-development-validation-v66-valid/analysis/qo_trace_global_dev_v66_backend_features_complete/sufficiency-calibrator-v65-frozen.json
+    sufficiency_calibrator_path: runs/slotrag-qo-development-trace-v63-local-valid/analysis/qo_trace_local_dev_v63_valid/sufficiency-calibrator.json
     frozen_plan_source: slotrag
     frozen_plan_import_dir: runs/slotrag-qo-2x2-global-smoke-v67/plans/qo_trace_global_dev_v66_validation

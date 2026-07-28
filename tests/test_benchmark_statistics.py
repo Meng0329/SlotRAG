@@ -525,6 +525,36 @@ def test_schema31_reports_executable_action_effects_without_backfilling_schema30
     assert legacy_summary["physical_action_rows_added"] is None
 
 
+def test_schema32_reports_dual_access_and_complementary_effects_without_backfill():
+    current = _record("slotrag-dual-access", "q1", 1.0)
+    current["schema_version"] = 32
+    current["result"]["metrics"] = RunMetrics(
+        dual_access_batches=2,
+        dual_access_logical_queries=4,
+        dual_access_candidate_union=15,
+        dual_access_candidate_overlap=3,
+        complementary_retrieval_actions=1,
+        complementary_retrieval_novel_passages=2,
+        complementary_retrieval_novel_rows=1,
+    ).model_dump(mode="json")
+    legacy = _record("slotrag", "q1", 1.0)
+    legacy["schema_version"] = 31
+
+    rows = aggregate([current, legacy])
+    current_summary = next(row for row in rows if row["method"] == "slotrag-dual-access")
+    legacy_summary = next(row for row in rows if row["method"] == "slotrag")
+
+    assert current_summary["dual_access_batches"] == 2
+    assert current_summary["dual_access_logical_queries"] == 4
+    assert current_summary["dual_access_mean_union_size"] == 7.5
+    assert current_summary["dual_access_mean_overlap_size"] == 1.5
+    assert current_summary["complementary_retrieval_actions"] == 1
+    assert current_summary["complementary_retrieval_novel_passages"] == 2
+    assert current_summary["complementary_retrieval_novel_rows"] == 1
+    assert legacy_summary["dual_access_batches"] is None
+    assert legacy_summary["complementary_retrieval_actions"] is None
+
+
 def test_summarize_run_audits_shared_frozen_plan_cost_and_pair_hashes(tmp_path):
     plan = SlotPlan.model_validate({
         "slots": [{"id": "S1", "predicate": "Answer", "arguments": ["?answer"]}],

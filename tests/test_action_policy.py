@@ -213,3 +213,22 @@ def test_status_safe_mode_suppresses_topk_only_for_sufficient_states():
     assert sufficient_decision.policy_name == "utility_status_safe"
     assert "EXPAND_TOPK" not in {candidate.action for candidate in sufficient_decision.candidates}
     assert "EXPAND_TOPK" in {candidate.action for candidate in partial_decision.candidates}
+
+
+def test_policy_can_fall_back_to_slot_query_from_an_optimized_primary_query():
+    prediction = SufficiencyPrediction(
+        status="INSUFFICIENT",
+        probability=0.0,
+        raw_logit=-4.0,
+        features=SufficiencyFeatures(row_count=0),
+    )
+    decision = PhysicalActionPolicy(topk_expansion_mode="disabled").decide(
+        ActionPolicyContext(
+            sufficiency=prediction,
+            retrieval_calls_used=1,
+            retrieval_call_budget=2,
+            slot_only_available=True,
+        )
+    )
+
+    assert decision.action == "RETRIEVE_SLOT_ONLY"

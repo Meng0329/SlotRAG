@@ -258,9 +258,8 @@ def _write_passage_artifact(path: Path, passages: Sequence[Passage]) -> str:
 class SharedCorpusIndex:
     """A shared, queryable index with an auditable corpus manifest.
 
-    The class intentionally exposes only ``search``, ``passages``, ``manifest`` and
-    ``persist_manifest`` to benchmark callers. Dataset adaptation and planner logic
-    remain outside this module.
+    The class exposes scalar and batched search plus corpus telemetry. Dataset
+    adaptation and planner logic remain outside this module.
     """
 
     def __init__(
@@ -563,6 +562,22 @@ class SharedCorpusIndex:
         finally:
             with self._lock:
                 self._query_count += 1
+                self._query_latency_ms += (time.perf_counter() - started) * 1000
+
+    def search_batch(
+        self,
+        queries: list[str],
+        *,
+        top_k: int | None = None,
+    ) -> list[list[RetrievalResult]]:
+        """Execute a physical batch while accounting for each logical query."""
+
+        started = time.perf_counter()
+        try:
+            return self._retriever.search_batch(queries, top_k=top_k)
+        finally:
+            with self._lock:
+                self._query_count += len(queries)
                 self._query_latency_ms += (time.perf_counter() - started) * 1000
 
     def stats_snapshot(self) -> tuple[int, float]:

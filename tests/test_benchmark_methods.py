@@ -1304,6 +1304,23 @@ def test_slotrag_qo_retains_pre_v70_utility_policy_as_explicit_ablation():
     assert qo.topk_expansion_mode == "utility"
 
 
+def test_v73_dual_access_variants_keep_access_path_and_sufficiency_factors_orthogonal():
+    retrieval = methods.METHODS["slotrag-dual-access"]
+    physical = methods.METHODS["slotrag-physical-dual-access"]
+    combined = methods.METHODS["slotrag-qo-dual-access"]
+
+    assert retrieval.dual_access_bundle is True
+    assert retrieval.physical_plan is False
+    assert retrieval.evidence_sufficiency is False
+    assert physical.dual_access_bundle is True
+    assert physical.physical_plan is True
+    assert physical.adaptive_binding_beam is True
+    assert physical.evidence_sufficiency is False
+    assert combined.dual_access_bundle is True
+    assert combined.physical_plan is True
+    assert combined.evidence_sufficiency is True
+
+
 def test_sufficiency_variant_refuses_to_run_without_frozen_development_calibrator():
     with pytest.raises(ValueError, match="requires a frozen development calibrator"):
         methods.run_method(

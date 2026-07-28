@@ -132,6 +132,42 @@ def test_shared_corpus_builds_and_reuses_bm25f_index(tmp_path):
     assert second.manifest.reused_persisted_index is True
 
 
+def test_shared_corpus_batch_search_counts_logical_queries(tmp_path):
+    questions = [
+        QuestionRecord(
+            id="q1",
+            question="What is alpha?",
+            passages=[
+                Passage(id="p1", doc_id="Alpha", text="Alpha is a river."),
+                Passage(id="p2", doc_id="Beta", text="Beta is a letter."),
+            ],
+        )
+    ]
+    index = SharedCorpusIndex.from_questions(
+        questions,
+        dataset="toy",
+        split="train",
+        retrieval=RetrievalConfig(
+            bm25_k=2,
+            dense_k=1,
+            final_k=2,
+            chunk_tokens=32,
+            chunk_overlap=0,
+        ),
+        embedding_client=None,
+        reranker_client=None,
+        rerank_enabled=False,
+        retrieval_backend="bm25",
+        index_dir=tmp_path / "index",
+    )
+
+    rankings = index.search_batch(["alpha", "beta"], top_k=1)
+
+    assert len(rankings) == 2
+    assert all(len(ranked) == 1 for ranked in rankings)
+    assert index.stats_snapshot()[0] == 2
+
+
 def test_shared_corpus_reuses_persisted_artifacts_without_reembedding(tmp_path):
     questions = [
         QuestionRecord(

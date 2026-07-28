@@ -279,6 +279,10 @@ class MaterializationTrace(StrictModel):
     retrieval_calls: int = Field(default=0, ge=0)
     searches: list[RetrievalSearchTrace] = Field(default_factory=list)
     selected_source_ids: list[str] = Field(default_factory=list)
+    access_path_policy: Literal["single", "dual_bundle"] = "single"
+    physical_retrieval_batches: int = Field(default=1, ge=0)
+    candidate_pool_size: int = Field(default=0, ge=0)
+    candidate_overlap: int = Field(default=0, ge=0)
     extracted_rows: list[ExtractedBindingTrace] = Field(default_factory=list)
 
 
@@ -336,6 +340,10 @@ class RunMetrics(StrictModel):
     dual_query_confidence_skips: int = 0
     dual_query_guard_checks: int = 0
     dual_query_guard_fallbacks: int = 0
+    dual_access_batches: int = 0
+    dual_access_logical_queries: int = 0
+    dual_access_candidate_union: int = 0
+    dual_access_candidate_overlap: int = 0
     embedding_calls: int = 0
     reranker_calls: int = 0
     prompt_tokens: int = 0
@@ -389,6 +397,7 @@ class RunMetrics(StrictModel):
     physical_action_extra_retrieval_calls: int = 0
     physical_action_rows_added: int = 0
     complementary_retrieval_actions: int = 0
+    complementary_retrieval_slot_only: int = 0
     complementary_retrieval_question_plus_slot: int = 0
     complementary_retrieval_query_rewrites: int = 0
     complementary_retrieval_novel_passages: int = 0
