@@ -1,11 +1,11 @@
 agnes:
-  base_url: https://apihub.agnes-ai.com/v1
-  model: agnes-2.0-flash
+  base_url: http://10.200.37.71:8801/v1
+  model: qwen3.6-27b
   api_key_env: SLOTRAG_AGNES_API_KEY
   timeout_seconds: 60
-  max_retries: 2
-  retry_backoff_seconds: 0.25
-  max_tokens: 2048
+  max_retries: 3
+  retry_backoff_seconds: 0.5
+  max_tokens: 4096
   temperature: 0.0
 
 embedding:

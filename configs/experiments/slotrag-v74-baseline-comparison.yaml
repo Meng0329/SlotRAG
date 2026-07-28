@@ -1,0 +1,30 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+seed: 314159
+random_seeds: [314159]
+budget:
+  max_steps: 8
+  max_llm_calls: 48
+  max_retrieval_calls: 16
+  question_timeout_seconds: 600
+stages:
+  qo_v74_baseline_comparison_global:
+    split: train
+    sample_size: 4
+    methods:
+      # Exact same frozen-plan question set for fair comparison
+      - slotrag
+      - slotrag-dual-access
+      - slotrag-evidence-bundle
+      - slotrag-per-path-extraction
+      # Adapted baselines (no frozen plans — but share same retriever/provider)
+      - hybrid
+      - ircot
+      - react
+    retrieval_protocol: global_corpus
+    retrieval_backend: bm25
+    shared_index_dir: runs/slotrag-global-index-v72-bm25f/runner-registry
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/slotrag-qo-2x2-global-smoke-v67/plans/qo_trace_global_dev_v66_validation

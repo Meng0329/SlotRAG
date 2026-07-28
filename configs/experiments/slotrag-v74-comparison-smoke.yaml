@@ -1,0 +1,26 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+seed: 314159
+random_seeds: [314159]
+budget:
+  max_steps: 8
+  max_llm_calls: 48
+  max_retrieval_calls: 16
+  question_timeout_seconds: 600
+stages:
+  qo_v74_comparison_global_dev_smoke:
+    split: train
+    sample_size: 4
+    methods:
+      - slotrag
+      - slotrag-dual-access
+      - slotrag-evidence-bundle
+      - slotrag-per-path-extraction
+    retrieval_protocol: global_corpus
+    retrieval_backend: bm25
+    shared_index_dir: runs/slotrag-global-index-v72-bm25f/runner-registry
+    frozen_plan_source: slotrag
+    frozen_plan_import_dir: runs/slotrag-qo-2x2-global-smoke-v67/plans/qo_trace_global_dev_v66_validation

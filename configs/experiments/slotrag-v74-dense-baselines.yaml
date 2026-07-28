@@ -1,0 +1,22 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+seed: 314159
+random_seeds: [314159]
+budget:
+  max_steps: 8
+  max_llm_calls: 48
+  max_retrieval_calls: 16
+  question_timeout_seconds: 600
+stages:
+  qo_v74_dense_local_smoke:
+    split: train
+    sample_size: 4
+    methods:
+      - slotrag
+      - hybrid
+      - ircot
+      - react
+    retrieval_protocol: local_context
+    retrieval_backend: hybrid

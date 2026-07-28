@@ -175,6 +175,9 @@ class UnionExtractor(EvidenceBundleExtractor):
         )
 
         args = client.require_tool(response, "emit_evidence_rows")
+        if isinstance(args, str):
+            import json as _json
+            args = _json.loads(args)
         extracted = args.get("rows", [])
 
         rows: list[tuple[dict[str, str], str]] = []
@@ -294,6 +297,9 @@ class PerPathExtractor(EvidenceBundleExtractor):
             )
 
             args = client.require_tool(response, "emit_evidence_rows")
+            if isinstance(args, str):
+                import json as _json
+                args = _json.loads(args)
             extracted = args.get("rows", [])
 
             prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
