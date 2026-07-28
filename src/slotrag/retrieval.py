@@ -9,7 +9,7 @@ import tempfile
 from collections import Counter, defaultdict
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -20,6 +20,8 @@ from .providers import EmbeddingClient, RerankerClient
 
 
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+SparseAccessMode = Literal["configured", "body"]
+SPARSE_ACCESS_MODES = frozenset({"configured", "body"})
 
 try:
     RANK_BM25_VERSION = version("rank-bm25")
@@ -54,11 +56,17 @@ def _batch_bm25_top_k(
     queries: list[list[str]],
     *,
     top_k: int,
+    query_field_weights: list[list[float]] | None = None,
 ) -> list[list[tuple[int, float]]]:
     """Score a query batch after one filtered-postings scan per BM25 field."""
 
     if not weighted_indexes:
         return [[] for _query in queries]
+    if query_field_weights is not None:
+        if len(query_field_weights) != len(queries):
+            raise ValueError("query field weights must match the query count")
+        if any(len(weights) != len(weighted_indexes) for weights in query_field_weights):
+            raise ValueError("query field weights must match the sparse field count")
     wanted_terms = {term for query in queries for term in query}
     field_postings: list[dict[str, tuple[np.ndarray, np.ndarray]]] = []
     for index, _weight in weighted_indexes:
@@ -82,10 +90,19 @@ def _batch_bm25_top_k(
 
     corpus_size = int(weighted_indexes[0][0].corpus_size)
     output: list[list[tuple[int, float]]] = []
-    for query in queries:
+    for query_index, query in enumerate(queries):
         scores = np.zeros(corpus_size, dtype=float)
         counts = Counter(query)
-        for (index, weight), postings in zip(weighted_indexes, field_postings):
+        for field_index, ((index, configured_weight), postings) in enumerate(
+            zip(weighted_indexes, field_postings)
+        ):
+            weight = (
+                query_field_weights[query_index][field_index]
+                if query_field_weights is not None
+                else configured_weight
+            )
+            if weight == 0:
+                continue
             document_lengths = np.asarray(index.doc_len, dtype=float)
             for term, multiplicity in counts.items():
                 posting = postings.get(term)
@@ -212,7 +229,14 @@ class SparseBM25Index:
         queries: list[list[str]],
         *,
         top_k: int,
+        access_modes: list[SparseAccessMode] | None = None,
     ) -> list[list[tuple[int, float]]]:
+        if access_modes is not None and len(access_modes) != len(queries):
+            raise ValueError("sparse access modes must match the query count")
+        if access_modes is not None and any(
+            mode not in SPARSE_ACCESS_MODES for mode in access_modes
+        ):
+            raise ValueError("unsupported sparse access mode")
         return _batch_bm25_top_k([(self._index, 1.0)], queries, top_k=top_k)
 
 
@@ -348,7 +372,13 @@ class FieldedSparseBM25Index:
         queries: list[list[str]],
         *,
         top_k: int,
+        access_modes: list[SparseAccessMode] | None = None,
     ) -> list[list[tuple[int, float]]]:
+        modes = access_modes or ["configured"] * len(queries)
+        if len(modes) != len(queries):
+            raise ValueError("sparse access modes must match the query count")
+        if any(mode not in SPARSE_ACCESS_MODES for mode in modes):
+            raise ValueError("unsupported sparse access mode")
         return _batch_bm25_top_k(
             [
                 (self._body_index, 1.0),
@@ -356,6 +386,10 @@ class FieldedSparseBM25Index:
             ],
             queries,
             top_k=top_k,
+            query_field_weights=[
+                [1.0, 0.0] if mode == "body" else [1.0, self.title_weight]
+                for mode in modes
+            ],
         )
 
 
@@ -521,12 +555,22 @@ class HybridRetriever:
         queries: list[str],
         *,
         top_k: int | None = None,
+        sparse_access_modes: list[SparseAccessMode] | None = None,
     ) -> list[list[RetrievalResult]]:
         """Execute sparse-only batches with one filtered inverted-index scan."""
 
+        modes = sparse_access_modes or ["configured"] * len(queries)
+        if len(modes) != len(queries):
+            raise ValueError("sparse access modes must match the query count")
+        if any(mode not in SPARSE_ACCESS_MODES for mode in modes):
+            raise ValueError("unsupported sparse access mode")
         if not queries:
             return []
         if self.dense_enabled or (self.rerank_enabled and self.reranker_client):
+            if any(mode != "configured" for mode in modes):
+                raise ValueError(
+                    "heterogeneous sparse access modes require sparse-only retrieval"
+                )
             return [self.search(query, top_k=top_k) for query in queries]
         if not self.passages or self._bm25 is None:
             return [[] for _query in queries]
@@ -535,6 +579,7 @@ class HybridRetriever:
         rankings = self._bm25.batch_top_k(
             [tokenize(query) for query in queries],
             top_k=candidate_k,
+            access_modes=modes,
         )
         output: list[list[RetrievalResult]] = []
         for ranked in rankings:

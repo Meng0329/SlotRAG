@@ -161,7 +161,11 @@ def test_shared_corpus_batch_search_counts_logical_queries(tmp_path):
         index_dir=tmp_path / "index",
     )
 
-    rankings = index.search_batch(["alpha", "beta"], top_k=1)
+    rankings = index.search_batch(
+        ["alpha", "beta"],
+        top_k=1,
+        sparse_access_modes=["body", "configured"],
+    )
 
     assert len(rankings) == 2
     assert all(len(ranked) == 1 for ranked in rankings)

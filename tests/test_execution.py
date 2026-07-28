@@ -134,8 +134,8 @@ def test_materializer_dual_access_bundle_batches_two_paths_into_one_extraction()
         def search(self, _query):
             raise AssertionError("dual bundle must use the batch interface")
 
-        def search_batch(self, queries, *, top_k=None):
-            self.batches.append((list(queries), top_k))
+        def search_batch(self, queries, *, top_k=None, sparse_access_modes=None):
+            self.batches.append((list(queries), top_k, list(sparse_access_modes or [])))
             return [
                 [
                     RetrievalResult(
@@ -174,7 +174,11 @@ def test_materializer_dual_access_bundle_batches_two_paths_into_one_extraction()
         {},
     )
 
-    assert retriever.batches == [(["Founded Alpha ?founder", "Who founded Alpha? Founded Alpha"], 2)]
+    assert retriever.batches == [(
+        ["Founded Alpha ?founder", "Who founded Alpha? Founded Alpha"],
+        2,
+        ["body", "configured"],
+    )]
     assert [row.bindings for row in rows] == [{"founder": "Ada"}]
     assert client.rows == []
     assert metrics.retrieval_calls == 2
@@ -183,7 +187,11 @@ def test_materializer_dual_access_bundle_batches_two_paths_into_one_extraction()
     assert metrics.dual_access_candidate_union == 3
     assert metrics.dual_access_candidate_overlap == 1
     trace = materializer.last_materialization_traces[0]
-    assert trace.access_path_policy == "dual_bundle"
+    assert trace.access_path_policy == "heterogeneous_dual_bundle"
+    assert [search.sparse_access_mode for search in trace.searches] == [
+        "body",
+        "configured",
+    ]
     assert trace.physical_retrieval_batches == 1
     assert trace.candidate_pool_size == 3
     assert trace.candidate_overlap == 1

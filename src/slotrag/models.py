@@ -262,6 +262,7 @@ class RetrievalSearchTrace(StrictModel):
         "lexical_slot",
         "question_plus_lexical_slot",
     ]
+    sparse_access_mode: Literal["configured", "body"] = "configured"
     candidates: list[RetrievalCandidateTrace] = Field(default_factory=list)
 
 
@@ -279,7 +280,11 @@ class MaterializationTrace(StrictModel):
     retrieval_calls: int = Field(default=0, ge=0)
     searches: list[RetrievalSearchTrace] = Field(default_factory=list)
     selected_source_ids: list[str] = Field(default_factory=list)
-    access_path_policy: Literal["single", "dual_bundle"] = "single"
+    access_path_policy: Literal[
+        "single",
+        "dual_bundle",
+        "heterogeneous_dual_bundle",
+    ] = "single"
     physical_retrieval_batches: int = Field(default=1, ge=0)
     candidate_pool_size: int = Field(default=0, ge=0)
     candidate_overlap: int = Field(default=0, ge=0)

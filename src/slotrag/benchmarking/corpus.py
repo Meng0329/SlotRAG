@@ -22,6 +22,7 @@ from ..retrieval import (
     EmbeddingCache,
     FieldedSparseBM25Index,
     HybridRetriever,
+    SparseAccessMode,
     SparseBM25Index,
 )
 from ..config import RetrievalConfig
@@ -569,12 +570,17 @@ class SharedCorpusIndex:
         queries: list[str],
         *,
         top_k: int | None = None,
+        sparse_access_modes: list[SparseAccessMode] | None = None,
     ) -> list[list[RetrievalResult]]:
         """Execute a physical batch while accounting for each logical query."""
 
         started = time.perf_counter()
         try:
-            return self._retriever.search_batch(queries, top_k=top_k)
+            return self._retriever.search_batch(
+                queries,
+                top_k=top_k,
+                sparse_access_modes=sparse_access_modes,
+            )
         finally:
             with self._lock:
                 self._query_count += len(queries)

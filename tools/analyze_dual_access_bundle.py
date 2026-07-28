@@ -13,6 +13,9 @@ from typing import Any, Iterable, Sequence
 
 
 ACCESS_PATHS = ("slot", "question_plus_lexical_slot")
+SPARSE_ACCESS_MODES = ("body", "configured")
+ACCESS_PATH_POLICY = "heterogeneous_dual_bundle"
+PROTOCOL = "topk_body_slot_union_topk_bm25f_question_plus_lexical_slot"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -55,6 +58,90 @@ def _unique(values: Iterable[str]) -> list[str]:
 
 def _mean(values: Sequence[int | float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
+
+
+def _repo_path(project_root: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else project_root / path
+
+
+def verify_source_provenance(
+    source_manifest: dict[str, Any],
+    *,
+    project_root: Path,
+) -> dict[str, Any]:
+    """Prove that the frozen traces encode body + configured BM25F access."""
+
+    stage = str(source_manifest.get("source_stage") or "")
+    if not stage:
+        raise ValueError("source headroom manifest has no source_stage")
+    expected_source_checksums = source_manifest.get("source_manifest_sha256") or {}
+    source_runs: list[dict[str, Any]] = []
+    for value in source_manifest.get("source_runs") or []:
+        run_dir = _repo_path(project_root, str(value))
+        manifest_path = run_dir / "manifest.json"
+        run_manifest = _read_json(manifest_path)
+        expected_checksum = expected_source_checksums.get(str(value))
+        actual_checksum = _sha256(manifest_path)
+        if expected_checksum and actual_checksum != expected_checksum:
+            raise ValueError(f"source run manifest checksum mismatch: {manifest_path}")
+        profile = (
+            (run_manifest.get("stage_execution_profiles") or {})
+            .get(stage, {})
+            .get("provider_config", {})
+        )
+        retrieval = profile.get("retrieval") or {}
+        sparse_mode = str(retrieval.get("sparse_index_mode") or "body")
+        if sparse_mode != "body":
+            raise ValueError(
+                f"slot trace source must use body sparse access, got {sparse_mode}: "
+                f"{manifest_path}"
+            )
+        source_runs.append({
+            "run_dir": str(value),
+            "manifest_sha256": actual_checksum,
+            "stage": stage,
+            "retrieval_backend": (
+                ((run_manifest.get("suite") or {}).get("stages") or {})
+                .get(stage, {})
+                .get("retrieval_backend")
+            ),
+            "sparse_index_mode": sparse_mode,
+        })
+
+    if not source_runs:
+        raise ValueError("source headroom manifest has no source runs")
+
+    configured_indexes: dict[str, Any] = {}
+    for dataset, expected in sorted((source_manifest.get("index_provenance") or {}).items()):
+        index_dir = _repo_path(project_root, str(expected.get("index_dir") or ""))
+        manifest_path = index_dir / "manifest.json"
+        index_manifest = _read_json(manifest_path)
+        sparse_mode = str(index_manifest.get("sparse_index_mode") or "body")
+        if sparse_mode != "bm25f":
+            raise ValueError(
+                f"configured access must use a BM25F index, got {sparse_mode}: {manifest_path}"
+            )
+        for field in ("index_id", "passage_artifact_sha256", "sparse_index_sha256"):
+            if expected.get(field) != index_manifest.get(field):
+                raise ValueError(
+                    f"configured index provenance mismatch for {dataset}/{field}"
+                )
+        configured_indexes[str(dataset)] = {
+            "index_dir": str(expected["index_dir"]),
+            "manifest_sha256": _sha256(manifest_path),
+            "index_id": index_manifest["index_id"],
+            "sparse_index_mode": sparse_mode,
+            "sparse_title_weight": index_manifest.get("sparse_title_weight"),
+            "sparse_index_sha256": index_manifest["sparse_index_sha256"],
+        }
+    if not configured_indexes:
+        raise ValueError("source headroom manifest has no configured index provenance")
+    return {
+        "verified": True,
+        "slot_access_sources": source_runs,
+        "configured_access_indexes": configured_indexes,
+    }
 
 
 def _summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -125,6 +212,7 @@ def analyze_records(
             "question_id": key[1],
             "slot_id": str(row.get("slot_id") or ""),
             "access_paths": list(ACCESS_PATHS),
+            "sparse_access_modes": list(SPARSE_ACCESS_MODES),
             "per_path_top_k": per_path_top_k,
             "slot_source_ids": slot_ids,
             "question_plus_lexical_slot_source_ids": question_ids,
@@ -174,8 +262,10 @@ def analyze_records(
     for row in question_rows:
         by_dataset[str(row["dataset"])].append(row)
     report = {
-        "protocol": "topk_slot_union_topk_question_plus_lexical_slot",
+        "protocol": PROTOCOL,
+        "access_path_policy": ACCESS_PATH_POLICY,
         "access_paths": list(ACCESS_PATHS),
+        "sparse_access_modes": list(SPARSE_ACCESS_MODES),
         "per_path_top_k": per_path_top_k,
         "maximum_candidate_pool": 2 * per_path_top_k,
         "materialization_count": len(materialization_rows),
@@ -207,6 +297,7 @@ def main() -> int:
     )
     parser.add_argument("--per-path-top-k", type=int, default=5)
     parser.add_argument("--frozen-spec", type=Path)
+    parser.add_argument("--project-root", type=Path, default=Path("."))
     args = parser.parse_args()
 
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
@@ -214,6 +305,10 @@ def main() -> int:
     if args.role == "disjoint_validation" and args.frozen_spec is None:
         raise ValueError("disjoint_validation requires --frozen-spec")
     source_manifest = _read_json(args.headroom_dir / "manifest.json")
+    provenance = verify_source_provenance(
+        source_manifest,
+        project_root=args.project_root.resolve(),
+    )
     expected_source_role = args.role
     if source_manifest.get("role") != expected_source_role:
         raise ValueError(
@@ -227,6 +322,10 @@ def main() -> int:
         frozen_spec_sha256 = _sha256(args.frozen_spec)
         if tuple(frozen_spec.get("access_paths") or ()) != ACCESS_PATHS:
             raise ValueError("frozen access paths do not match the registered dual bundle")
+        if tuple(frozen_spec.get("sparse_access_modes") or ()) != SPARSE_ACCESS_MODES:
+            raise ValueError("frozen sparse access modes do not match the registered bundle")
+        if frozen_spec.get("access_path_policy") != ACCESS_PATH_POLICY:
+            raise ValueError("frozen access path policy does not match the registered bundle")
         frozen_top_k = int(frozen_spec.get("per_path_top_k") or 0)
         if args.per_path_top_k != frozen_top_k:
             raise ValueError(
@@ -246,11 +345,14 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(args.output_dir / "materialization-records.jsonl", materialization_rows)
     _write_jsonl(args.output_dir / "question-records.jsonl", question_rows)
+    report["provenance_verified"] = True
     _write_json(args.output_dir / "report.json", report)
     spec = {
-        "schema_version": 1,
-        "access_path_policy": "dual_bundle",
+        "schema_version": 2,
+        "protocol": PROTOCOL,
+        "access_path_policy": ACCESS_PATH_POLICY,
         "access_paths": list(ACCESS_PATHS),
+        "sparse_access_modes": list(SPARSE_ACCESS_MODES),
         "per_path_top_k": args.per_path_top_k,
         "maximum_candidate_pool": 2 * args.per_path_top_k,
         "candidate_selection": "deduplicated_union",
@@ -258,7 +360,7 @@ def main() -> int:
     }
     _write_json(args.output_dir / "bundle-spec.json", spec)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": args.role,
         "provider_calls": 0,
@@ -267,6 +369,7 @@ def main() -> int:
         "frozen_spec_sha256": frozen_spec_sha256,
         "question_count": len(question_rows),
         "materialization_count": len(materialization_rows),
+        "provenance": provenance,
         "artifacts": {},
     }
     for name in (

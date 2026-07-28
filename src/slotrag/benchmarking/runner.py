@@ -169,6 +169,13 @@ class _BudgetedRetriever:
         self.calls += 1
         return self.retriever.search(*args, **kwargs)
 
+    def search_batch(self, queries: list[str], *args: Any, **kwargs: Any) -> Any:
+        logical_calls = len(queries)
+        if self.calls + logical_calls > self.max_calls:
+            raise BenchmarkBudgetExceeded(f"retrieval call budget exceeded ({self.max_calls})")
+        self.calls += logical_calls
+        return self.retriever.search_batch(queries, *args, **kwargs)
+
 
 @contextmanager
 def _question_deadline(seconds: float) -> Any:

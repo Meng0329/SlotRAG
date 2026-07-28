@@ -75,6 +75,47 @@ def test_sparse_batch_search_matches_individual_rankings():
         ]
 
 
+def test_fielded_sparse_batch_supports_heterogeneous_access_paths():
+    passages = [
+        Passage(id="title", doc_id="Xylophone", text="A musical instrument reference."),
+        Passage(id="body", doc_id="Unrelated", text="xylophone xylophone in the body."),
+        Passage(id="d2", doc_id="Other Two", text="A separate document."),
+        Passage(id="d3", doc_id="Other Three", text="Another separate document."),
+        Passage(id="d4", doc_id="Other Four", text="Yet another document."),
+    ]
+    fielded = HybridRetriever(
+        passages,
+        embedding_client=None,
+        reranker_client=None,
+        bm25_k=5,
+        final_k=1,
+        dense_enabled=False,
+        rerank_enabled=False,
+        sparse_index_mode="bm25f",
+        sparse_title_weight=4.0,
+    )
+    body_only = HybridRetriever(
+        passages,
+        embedding_client=None,
+        reranker_client=None,
+        bm25_k=5,
+        final_k=1,
+        dense_enabled=False,
+        rerank_enabled=False,
+        sparse_index_mode="body",
+    )
+
+    body_path, configured_path = fielded.search_batch(
+        ["xylophone", "xylophone"],
+        top_k=1,
+        sparse_access_modes=["body", "configured"],
+    )
+
+    assert body_path == body_only.search("xylophone", top_k=1)
+    assert body_path[0].passage.id == "body"
+    assert configured_path[0].passage.id == "title"
+
+
 def test_hybrid_retriever_builds_passage_index_before_query():
     embedding = FakeEmbedding()
     passages = [Passage(id="p1", text="alpha fact"), Passage(id="p2", text="beta fact")]

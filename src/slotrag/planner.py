@@ -37,7 +37,7 @@ from .models import (
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
 from .query_optimization import QueryVariant, canonical_evidence_id, formulate_query
-from .retrieval import HybridRetriever
+from .retrieval import HybridRetriever, SparseAccessMode
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
 
@@ -1329,10 +1329,12 @@ class SlotMaterializer:
             query_text: str,
             query_variant: QueryVariant,
             ranked: list[RetrievalResult],
+            sparse_access_mode: SparseAccessMode = "configured",
         ) -> list[RetrievalResult]:
             searches.append(RetrievalSearchTrace(
                 query=query_text,
                 query_variant=query_variant,
+                sparse_access_mode=sparse_access_mode,
                 candidates=[
                     RetrievalCandidateTrace(
                         rank=rank,
@@ -1352,20 +1354,21 @@ class SlotMaterializer:
             return record_search(query_text, query_variant, self.retriever.search(query_text))
 
         def search_batch(
-            query_specs: list[tuple[str, QueryVariant]],
+            query_specs: list[tuple[str, QueryVariant, SparseAccessMode]],
         ) -> list[list[RetrievalResult]]:
             batch = getattr(self.retriever, "search_batch", None)
             if batch is None:
-                return [search(text, variant)[:self.max_passages] for text, variant in query_specs]
+                raise ValueError("dual access bundle requires a batch-capable retriever")
             rankings = batch(
-                [text for text, _variant in query_specs],
+                [text for text, _variant, _mode in query_specs],
                 top_k=self.max_passages,
+                sparse_access_modes=[mode for _text, _variant, mode in query_specs],
             )
             if len(rankings) != len(query_specs):
                 raise ValueError("retriever batch result count does not match query count")
             return [
-                record_search(text, variant, list(ranked))
-                for (text, variant), ranked in zip(query_specs, rankings)
+                record_search(text, variant, list(ranked), mode)
+                for (text, variant, mode), ranked in zip(query_specs, rankings)
             ]
 
         retrieval_calls = 1
@@ -1395,8 +1398,8 @@ class SlotMaterializer:
                 "question_plus_lexical_slot",
             )
             slot_ranked, question_ranked = search_batch([
-                (slot_query, "slot"),
-                (question_query, "question_plus_lexical_slot"),
+                (slot_query, "slot", "body"),
+                (question_query, "question_plus_lexical_slot", "configured"),
             ])
             ranked_lists = [
                 slot_ranked[:self.max_passages],
@@ -1617,7 +1620,9 @@ class SlotMaterializer:
             retrieval_calls=retrieval_calls,
             searches=searches,
             selected_source_ids=[result.passage.id for result in retrieved_passages],
-            access_path_policy=("dual_bundle" if dual_access_batches else "single"),
+            access_path_policy=(
+                "heterogeneous_dual_bundle" if dual_access_batches else "single"
+            ),
             physical_retrieval_batches=1,
             candidate_pool_size=len(retrieved_passages),
             candidate_overlap=dual_access_candidate_overlap,

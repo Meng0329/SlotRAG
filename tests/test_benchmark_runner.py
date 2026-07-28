@@ -58,6 +58,10 @@ class _FakeRetriever:
         self.calls += 1
         return [query]
 
+    def search_batch(self, queries, **kwargs):
+        self.calls += len(queries)
+        return [[query, kwargs] for query in queries]
+
 
 def _app_config():
     return AppConfig.model_validate({
@@ -74,6 +78,24 @@ def test_retrieval_budget_blocks_calls_before_execution():
     with pytest.raises(BenchmarkBudgetExceeded):
         guarded.search("two")
     assert retriever.calls == 1
+
+
+def test_retrieval_budget_counts_batch_logical_queries_and_forwards_modes():
+    retriever = _FakeRetriever()
+    guarded = _BudgetedRetriever(retriever, max_calls=2)
+
+    assert guarded.search_batch(
+        ["one", "two"],
+        top_k=5,
+        sparse_access_modes=["body", "configured"],
+    ) == [
+        ["one", {"top_k": 5, "sparse_access_modes": ["body", "configured"]}],
+        ["two", {"top_k": 5, "sparse_access_modes": ["body", "configured"]}],
+    ]
+    with pytest.raises(BenchmarkBudgetExceeded):
+        guarded.search("three")
+    assert guarded.calls == 2
+    assert retriever.calls == 2
 
 
 def test_local_context_bm25_backend_disables_dense_and_reranker(tmp_path, monkeypatch):
