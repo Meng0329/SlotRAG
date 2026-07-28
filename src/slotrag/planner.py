@@ -37,6 +37,7 @@ from .models import (
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
 from .query_optimization import QueryVariant, canonical_evidence_id, formulate_query
+from .evidence_bundle import EvidenceBundle, EvidenceBundleExtractor, RetrievalPath, UnionExtractor
 from .retrieval import HybridRetriever, SparseAccessMode
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
@@ -1155,9 +1156,11 @@ class SlotMaterializer:
         dual_query_evidence_guard: bool = False,
         dual_query_evidence_guard_disjoint_only: bool = True,
         dual_access_bundle: bool = False,
+        evidence_bundle_extractor: EvidenceBundleExtractor | None = None,
     ) -> None:
         self.client = client
         self.retriever = retriever
+        self.evidence_bundle_extractor = evidence_bundle_extractor
         self.max_passages = max_passages
         self.typed_extraction_contracts = typed_extraction_contracts
         self.role_projected_extraction = role_projected_extraction
@@ -1631,6 +1634,16 @@ class SlotMaterializer:
         self.last_retrieval_results = list(retrieved_passages)
         if not passages:
             return rows, metrics
+
+        # ── Evidence bundle extraction (full replacement for inline path) ──
+        if self.evidence_bundle_extractor is not None:
+            return self._extract_via_bundle(
+                slot, bindings, query, passages, requested_fields,
+                boolean_fields, effective_bindings, protected_output_values,
+                base_trace, dual_access_candidate_overlap, metrics,
+            )
+
+        # ── Inline extraction ──────────────────────────────────────────
         by_source = {result.passage.id: result for result in passages}
         passage_payload = [
             {"source_id": result.passage.id, "text": result.passage.text}
@@ -1865,6 +1878,130 @@ class SlotMaterializer:
         })]
         return rows, metrics
 
+    def _extract_via_bundle(
+        self,
+        slot: Slot,
+        bindings: dict[str, str],
+        query: str,
+        passages: list[RetrievalResult],
+        requested_fields: set[str],
+        boolean_fields: set[str],
+        effective_bindings: dict[str, str],
+        protected_output_values: set[str],
+        base_trace: MaterializationTrace,
+        dual_access_candidate_overlap: int,
+        metrics: RunMetrics,
+    ) -> tuple[list[BindingRow], RunMetrics]:
+        """Dispatch extraction through the evidence bundle extractor."""
+        from .evidence_bundle import PerPathExtractor as PPExtractor
+
+        # Build RetrievalPath list from the base trace searches
+        bundle_paths: list[RetrievalPath] = []
+        for search in base_trace.searches:
+            candidate_source_ids = {c.source_id for c in search.candidates}
+            path_results = [
+                r for r in passages if r.passage.id in candidate_source_ids
+            ] if search.candidates else list(passages)
+            bundle_paths.append(RetrievalPath(
+                query=search.query,
+                query_variant=search.query_variant,
+                sparse_access_mode=search.sparse_access_mode,
+                results=path_results,
+            ))
+        if not bundle_paths:
+            bundle_paths.append(RetrievalPath(
+                query=query, query_variant="slot", sparse_access_mode="configured",
+                results=list(passages),
+            ))
+        is_per_path = isinstance(self.evidence_bundle_extractor, PPExtractor)
+        bundle = EvidenceBundle(
+            slot_id=slot.id, predicate=slot.predicate,
+            binding_context=dict(bindings),
+            paths=bundle_paths, fused_results=list(passages),
+            access_path_policy="per_path_extraction" if is_per_path else "heterogeneous_dual_bundle",
+            physical_retrieval_batches=1,
+            candidate_pool_size=len(passages),
+            candidate_overlap=dual_access_candidate_overlap,
+        )
+
+        outcome = self.evidence_bundle_extractor.extract(
+            self.client, bundle, slot,
+            requested_fields=requested_fields,
+            boolean_fields=boolean_fields,
+            role_projected=self.role_projected_extraction,
+            protected_output_values=protected_output_values,
+            effective_bindings=effective_bindings,
+            extraction_tool_fn=extraction_tool,
+            messages_template=(
+                {"role": "system", "content": ""},
+                {"role": "user", "content": ""},
+            ),
+        )
+        metrics = metrics.model_copy(update={
+            "extraction_bundles": metrics.extraction_bundles + 1,
+            "per_path_extractions": metrics.per_path_extractions + int(is_per_path),
+            "per_path_extraction_paths": metrics.per_path_extraction_paths + len(bundle_paths),
+            "extracted_rows_before_dedup": metrics.extracted_rows_before_dedup + outcome.metrics.extracted_rows_before_dedup,
+            "extracted_rows_after_dedup": metrics.extracted_rows_after_dedup + outcome.metrics.extracted_rows_after_dedup,
+            "llm_calls": metrics.llm_calls + outcome.metrics.llm_calls,
+            "extraction_llm_calls": metrics.extraction_llm_calls + outcome.metrics.llm_calls,
+            "extraction_prompt_tokens": metrics.extraction_prompt_tokens + outcome.metrics.extraction_prompt_tokens,
+            "extraction_completion_tokens": metrics.extraction_completion_tokens + outcome.metrics.extraction_completion_tokens,
+            "prompt_tokens": metrics.prompt_tokens + outcome.metrics.extraction_prompt_tokens,
+            "completion_tokens": metrics.completion_tokens + outcome.metrics.extraction_completion_tokens,
+        })
+        by_source = {r.passage.id: r for r in passages}
+
+        # Validate extracted rows (same logic as inline path)
+        rows: list[BindingRow] = []
+        expected = slot.variables
+        for raw_bindings, source_id in outcome.rows:
+            source = by_source.get(source_id)
+            if source is None:
+                continue
+            # Propagated binding grounding check
+            propagated = {k: v for k, v in bindings.items() if k in expected}
+            invalid = False
+            for key, value in propagated.items():
+                extracted_value = raw_bindings.get(key)
+                if (
+                    not self.role_projected_extraction
+                    and (
+                        extracted_value is None
+                        or self._normalized_text(extracted_value) != self._normalized_text(value)
+                    )
+                ):
+                    invalid = True
+                    metrics = metrics.model_copy(update={"grounding_rejections": metrics.grounding_rejections + 1})
+                elif not self._binding_is_grounded(value, source_id, source.passage.text, source.passage.doc_id):
+                    invalid = True
+                    metrics = metrics.model_copy(update={"grounding_rejections": metrics.grounding_rejections + 1})
+            if invalid:
+                continue
+            # Protected anchor check (role-projected mode)
+            if self.role_projected_extraction:
+                skip_anchor = False
+                for key, value in raw_bindings.items():
+                    if any(
+                        self._normalized_text(value) == self._normalized_text(a)
+                        for a in protected_output_values
+                    ):
+                        skip_anchor = True
+                        metrics = metrics.model_copy(update={"protected_anchor_rejections": metrics.protected_anchor_rejections + 1})
+                if skip_anchor:
+                    continue
+            rows.append(BindingRow(
+                slot_id=slot.id,
+                bindings=raw_bindings,
+                source_id=source_id,
+                source_span=source.passage.text,
+                confidence=1.0,
+                retrieval_score=source.score,
+            ))
+
+        self.last_materialization_traces = outcome.traces
+        return rows, metrics
+
     def materialize_many(
         self,
         slot: Slot,
@@ -1919,6 +2056,11 @@ class SlotMaterializer:
                 "known_binding_fields_projected": metrics.known_binding_fields_projected + current_metrics.known_binding_fields_projected,
                 "protected_anchor_rejections": metrics.protected_anchor_rejections + current_metrics.protected_anchor_rejections,
                 "extraction_thinking_disabled": metrics.extraction_thinking_disabled + current_metrics.extraction_thinking_disabled,
+                "extraction_bundles": metrics.extraction_bundles + current_metrics.extraction_bundles,
+                "per_path_extractions": metrics.per_path_extractions + current_metrics.per_path_extractions,
+                "per_path_extraction_paths": metrics.per_path_extraction_paths + current_metrics.per_path_extraction_paths,
+                "extracted_rows_before_dedup": metrics.extracted_rows_before_dedup + current_metrics.extracted_rows_before_dedup,
+                "extracted_rows_after_dedup": metrics.extracted_rows_after_dedup + current_metrics.extracted_rows_after_dedup,
                 "bound_role_signatures": metrics.bound_role_signatures + current_metrics.bound_role_signatures,
                 "extraction_length_finishes": metrics.extraction_length_finishes + current_metrics.extraction_length_finishes,
                 "semantic_role_type_contracts": metrics.semantic_role_type_contracts + current_metrics.semantic_role_type_contracts,
@@ -2641,6 +2783,11 @@ class AdaptiveExecutor:
                 "known_binding_fields_projected": metrics.known_binding_fields_projected + slot_metrics.known_binding_fields_projected,
                 "protected_anchor_rejections": metrics.protected_anchor_rejections + slot_metrics.protected_anchor_rejections,
                 "extraction_thinking_disabled": metrics.extraction_thinking_disabled + slot_metrics.extraction_thinking_disabled,
+                "extraction_bundles": metrics.extraction_bundles + slot_metrics.extraction_bundles,
+                "per_path_extractions": metrics.per_path_extractions + slot_metrics.per_path_extractions,
+                "per_path_extraction_paths": metrics.per_path_extraction_paths + slot_metrics.per_path_extraction_paths,
+                "extracted_rows_before_dedup": metrics.extracted_rows_before_dedup + slot_metrics.extracted_rows_before_dedup,
+                "extracted_rows_after_dedup": metrics.extracted_rows_after_dedup + slot_metrics.extracted_rows_after_dedup,
                 "bound_role_signatures": metrics.bound_role_signatures + slot_metrics.bound_role_signatures,
                 "extraction_length_finishes": metrics.extraction_length_finishes + slot_metrics.extraction_length_finishes,
                 "semantic_role_type_contracts": metrics.semantic_role_type_contracts + slot_metrics.semantic_role_type_contracts,

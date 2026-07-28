@@ -284,6 +284,7 @@ class MaterializationTrace(StrictModel):
         "single",
         "dual_bundle",
         "heterogeneous_dual_bundle",
+        "per_path_extraction",
     ] = "single"
     physical_retrieval_batches: int = Field(default=1, ge=0)
     candidate_pool_size: int = Field(default=0, ge=0)
@@ -489,6 +490,11 @@ class RunMetrics(StrictModel):
     plan_validation_errors: list[str] = Field(default_factory=list)
     extraction_finish_reasons: list[str] = Field(default_factory=list)
     extraction_validation_errors: list[str] = Field(default_factory=list)
+    extraction_bundles: int = Field(default=0, ge=0)
+    per_path_extractions: int = Field(default=0, ge=0)
+    per_path_extraction_paths: int = Field(default=0, ge=0)
+    extracted_rows_before_dedup: int = Field(default=0, ge=0)
+    extracted_rows_after_dedup: int = Field(default=0, ge=0)
 
 
 class ExecutionResult(StrictModel):

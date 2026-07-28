@@ -1,6 +1,6 @@
 {
-  "pid": 67099,
-  "version": "0.9.9",
+  "pid": 1213229,
+  "version": "1.5.0",
   "socketPath": "/data/mzb/SlotRAG/.codegraph/daemon.sock",
-  "startedAt": 1784777057907
+  "startedAt": 1785213855890
 }

@@ -32,6 +32,7 @@ from ..qo import PlanValidationError, compile_physical_plan, logical_plan_from_s
 from ..query_optimization import QueryVariant
 from ..retrieval import HybridRetriever, tokenize
 from ..sufficiency import EvidenceSufficiencyCalibrator
+from ..evidence_bundle import PerPathExtractor, UnionExtractor
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,8 @@ class MethodSpec:
     complementary_retrieval: bool = False
     primary_query_variant: QueryVariant | None = None
     dual_access_bundle: bool = False
+    evidence_bundle: bool = False
+    per_path_extraction: bool = False
     description: str = ""
 
 
@@ -194,6 +197,22 @@ METHODS: dict[str, MethodSpec] = {
         evidence_sufficiency=True,
         dual_access_bundle=True,
         description="v73 sufficiency-guided optimizer with batched dual-access evidence bundles",
+    ),
+    "slotrag-evidence-bundle": MethodSpec(
+        "slotrag-evidence-bundle",
+        "slotrag",
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=False,
+        description="v74 physical evidence bundle with union extraction (control)",
+    ),
+    "slotrag-per-path-extraction": MethodSpec(
+        "slotrag-per-path-extraction",
+        "slotrag",
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        description="v74 per-path extraction with cross-path merge (treatment)",
     ),
     "slotrag-physical-policy-utility": MethodSpec(
         "slotrag-physical-policy-utility",
@@ -1205,7 +1224,16 @@ def _run_slotrag(
             materializer_options["normalize_anchor_window_predicates"] = True
         if spec.evidence_surface_grounding_repair:
             materializer_options["evidence_surface_grounding_repair"] = True
-    materializer = SlotMaterializer(client, retriever, **materializer_options)
+    if spec.evidence_bundle:
+        evidence_bundle_extractor = (
+            PerPathExtractor() if spec.per_path_extraction else UnionExtractor()
+        )
+        materializer = SlotMaterializer(
+            client, retriever, evidence_bundle_extractor=evidence_bundle_extractor,
+            **materializer_options,
+        )
+    else:
+        materializer = SlotMaterializer(client, retriever, **materializer_options)
     executor = AdaptiveExecutor(
         materializer,
         default_slot_cost=config.execution.default_slot_cost,
