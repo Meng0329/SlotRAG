@@ -1,10 +1,15 @@
-"""Direct hybrid benchmark runner — no fcntl locking, no BenchmarkRunner."""
+"""Direct hybrid benchmark runner — no fcntl locking, no BenchmarkRunner.
+
+Uses ThreadPoolExecutor to run questions in parallel. Each worker thread
+creates its own AgnesClient (httpx.Client is NOT thread-safe).
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +27,10 @@ if env_path.exists():
 os.environ.setdefault("SLOTRAG_EMBEDDING_API_KEY", "lgw-fe4c5edc0f436c40fbf305029e8caa42c9890468b39a1611cd1f80a9e97e0b44")
 
 from slotrag.config import AppConfig
-from slotrag.data import load_questions, normalize_jsonl
-from slotrag.benchmarking.datasets import DATASETS, load_all_questions, load_sample
-from slotrag.benchmarking.corpus import SharedCorpusIndex
-from slotrag.benchmarking.methods import run_method, METHODS, slotrag_compile_options
+from slotrag.benchmarking.datasets import DATASETS, load_sample
+from slotrag.benchmarking.methods import run_method
 from slotrag.benchmarking.metrics import score_record
-from slotrag.models import ExecutionResult
-from slotrag.providers import EmbeddingClient, RerankerClient
-from slotrag.retrieval import EmbeddingCache
+from slotrag.providers import EmbeddingClient
 
 # --- Patch search_batch to handle heterogeneous modes with dense enabled ---
 import slotrag.retrieval as _retrieval
@@ -87,12 +88,12 @@ def build_embedding_client(cfg):
 
 
 def load_shared_index(dataset: str, stage_name: str, cfg):
+    import numpy as np
     index_dir = Path("runs/slotrag-global-index-v74-hybrid") / stage_name / dataset
     manifest_path = index_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest at {manifest_path}")
     print(f"  Loading shared index from {index_dir}...", flush=True)
-    # Read manifest
     manifest_data = json.loads(manifest_path.read_text())
 
     # Load passages
@@ -102,10 +103,7 @@ def load_shared_index(dataset: str, stage_name: str, cfg):
     for line in passages_path.read_text().strip().split("\n"):
         if line:
             passages_list.append(Passage(**json.loads(line)))
-
-    # Load embedding cache
-    embedding_artifact = index_dir / manifest_data["embedding_artifact"] if manifest_data.get("embedding_artifact") else None
-    cache = EmbeddingCache(embedding_artifact) if embedding_artifact else EmbeddingCache()
+    print(f"  {len(passages_list)} passages", flush=True)
 
     # Load sparse index
     from slotrag.retrieval import SparseBM25Index, FieldedSparseBM25Index
@@ -125,11 +123,37 @@ def load_shared_index(dataset: str, stage_name: str, cfg):
                 expected_sha256=manifest_data["sparse_index_sha256"],
             )
 
-    # Build retriever
+    # Load dense vectors from npy (mmap) + hash-based index
+    # embeddings.npy has deduplicated rows (same text = same sha256 hash)
+    npy_path = index_dir / "embeddings.npy"
+    idx_path = index_dir / "embeddings_index.json"
+    if not npy_path.exists():
+        raise FileNotFoundError(f"No embeddings.npy at {npy_path}")
+    if not idx_path.exists():
+        raise FileNotFoundError(f"No embeddings_index.json at {idx_path} — needed for hash lookup")
+    print(f"  Loading dense vectors from {npy_path}...", flush=True)
+    t0 = time.time()
+    vectors_2d = np.load(npy_path, mmap_mode="r")  # mmap — instant, even for 2GB
+    print(f"  Loaded {vectors_2d.shape} in {time.time()-t0:.1f}s", flush=True)
+
+    t0 = time.time()
+    hash_keys: list[str] = json.loads(idx_path.read_bytes())
+    hash_to_row: dict[str, int] = {k: i for i, k in enumerate(hash_keys)}
+    print(f"  Hash index loaded ({len(hash_keys)} keys) in {time.time()-t0:.1f}s", flush=True)
+
+    import hashlib
+
+    # Build retriever — no cache needed, will set _passage_vectors directly
     from slotrag.retrieval import HybridRetriever
+    from slotrag.providers import EmbeddingClient
+    dummy_client = EmbeddingClient(
+        cfg.embedding,
+        rate_limiter=NullRateLimiter(),
+        concurrency_limiter=NullConcurrencyLimiter(),
+    )
     retriever = HybridRetriever(
         passages_list,
-        build_embedding_client(cfg),
+        dummy_client,
         bm25_k=cfg.retrieval.bm25_k,
         dense_k=cfg.retrieval.dense_k,
         final_k=cfg.retrieval.final_k,
@@ -137,22 +161,125 @@ def load_shared_index(dataset: str, stage_name: str, cfg):
         bm25_weight=cfg.retrieval.bm25_weight,
         dense_weight=cfg.retrieval.dense_weight,
         rerank_enabled=False,
-        cache=cache,
+        cache=None,
         dense_enabled=True,
         sparse_index=sparse_index,
     )
 
+    # Set passage vectors via hash lookup (bypass _ensure_vectors)
+    print(f"  Setting passage vectors via hash lookup...", flush=True)
+    t0 = time.time()
+    vectors = []
+    missing = 0
+    for p in passages_list:
+        h = hashlib.sha256(p.text.encode("utf-8")).hexdigest()
+        row = hash_to_row.get(h)
+        if row is not None:
+            vectors.append(vectors_2d[row])
+        else:
+            vectors.append(None)
+            missing += 1
+    if missing:
+        print(f"  WARNING: {missing}/{len(passages_list)} passages have no embedding", flush=True)
+    # Filter out None
+    retriever._passage_vectors = [v for v in vectors if v is not None]
+    print(f"  Done in {time.time()-t0:.1f}s: {len(retriever._passage_vectors)} vectors", flush=True)
+
     from slotrag.benchmarking.corpus import CorpusManifest, SharedCorpusIndex as SCI
-    from pydantic import Field
     manifest = CorpusManifest(**manifest_data)
 
     index = SCI(retriever, manifest, manifest_path=manifest_path)
-    # Ensure vectors are loaded
-    print(f"  Building index (loading {len(passages_list)} dense vectors)...", flush=True)
-    t0 = time.time()
+    # build_index is a no-op since _passage_vectors is already set
     index.build_index()
-    print(f"  Done in {time.time()-t0:.1f}s", flush=True)
+    print(f"  Shared index ready ({retriever.dense_enabled=}, {len(retriever._passage_vectors) if retriever._passage_vectors else 0} vectors) in {time.time()-t0:.1f}s", flush=True)
     return index
+
+
+def process_question(
+    method: str,
+    dataset: str,
+    question: Any,
+    cfg: Any,
+    index: Any,
+    output_dir: Path,
+    stage_name: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Process one question with its own LLM client."""
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in question.id)[:80]
+    digest = hashlib.sha256(question.id.encode()).hexdigest()[:12]
+    item_filename = f"{safe_id}-{digest}.json"
+    method_dir = output_dir / "items" / stage_name / dataset / method
+    method_dir.mkdir(parents=True, exist_ok=True)
+    item_path = method_dir / item_filename
+
+    # Check if already completed
+    if item_path.exists():
+        try:
+            existing = json.loads(item_path.read_text())
+            if existing.get("result", {}).get("status") == "ok":
+                return existing
+        except Exception:
+            pass
+
+    # Build per-question LLM client (httpx.Client is NOT thread-safe)
+    from slotrag.providers import AgnesClient, EmbeddingClient
+
+    hc = httpx.Client(timeout=httpx.Timeout(cfg.agnes.timeout_seconds + 5.0))
+    try:
+        agnes = AgnesClient(
+            cfg.agnes,
+            hc,
+            rate_limiter=NullRateLimiter(),
+            concurrency_limiter=NullConcurrencyLimiter(),
+        )
+        from slotrag.benchmarking.runner import _BudgetedRetriever, _BudgetedAgnes
+        budgeted_retriever = _BudgetedRetriever(index, 16)
+        budgeted_agnes = _BudgetedAgnes(agnes, 48)
+
+        t0 = time.perf_counter()
+        from slotrag.benchmarking.methods import run_method
+        result = run_method(
+            method,
+            dataset=dataset,
+            question=question,
+            retriever=budgeted_retriever,
+            client=budgeted_agnes,
+            config=cfg,
+            seed=seed,
+            max_steps=8,
+            max_retrieval_calls=16,
+        )
+
+        wall_ms = (time.perf_counter() - t0) * 1000
+        status = result.status
+        is_ok = status == "ok"
+
+        # Score
+        from slotrag.benchmarking.metrics import score_record
+        scores = score_record(dataset, question, result)
+
+        record = {
+            "schema_version": 1,
+            "stage": stage_name,
+            "dataset": dataset,
+            "method": method,
+            "seed": seed,
+            "question_id": question.id,
+            "question": question.question,
+            "wall_ms": wall_ms,
+            "result": {
+                "status": result.status,
+                "answer": result.answer,
+                "error": result.error,
+                "metrics": result.metrics.model_dump(mode="json") if result.metrics else None,
+            },
+            "scores": scores,
+        }
+        item_path.write_text(json.dumps(record, ensure_ascii=False, indent=2))
+        return record
+    finally:
+        hc.close()
 
 
 def main():
@@ -169,134 +296,81 @@ def main():
 
     stats = {"total": 0, "ok": 0, "failed": 0, "by_method": {}}
 
-    # Build LLM and embedding clients (one per process)
-    print("Building clients...", flush=True)
-    agnes_client, http_client = build_llm_client(cfg)
+    # Build work items: (method, dataset, question)
+    all_items = []
+    question_cache = {}  # dataset -> questions
 
     for dataset in datasets:
         print(f"\n{'='*60}", flush=True)
-        print(f"DATASET: {dataset}", flush=True)
+        print(f"DATASET: {dataset} — loading questions & index", flush=True)
         print(f"{'='*60}", flush=True)
 
         # Load questions
-        print(f"Loading {sample_size} questions...", flush=True)
+        from slotrag.benchmarking.datasets import DATASETS, load_sample
+        from pathlib import Path as PPath
         questions = load_sample(
             DATASETS[dataset],
-            Path("benchmark"),
+            PPath("benchmark"),
             split="train",
             size=sample_size,
             seed=seed,
         )
+        question_cache[dataset] = questions
         print(f"  {len(questions)} questions", flush=True)
 
         # Load shared index
         index = load_shared_index(dataset, stage_name, cfg)
 
         for method in methods:
-            print(f"\n--- Method: {method} ---", flush=True)
-            method_stats = {"ok": 0, "failed": 0, "total": 0}
-            method_dir = output_dir / "items" / stage_name / dataset / method
-            method_dir.mkdir(parents=True, exist_ok=True)
+            for q in questions:
+                all_items.append((method, dataset, q, index))
 
-            for i, question in enumerate(questions):
+    total_items = len(all_items)
+    print(f"\nTotal work items: {total_items}", flush=True)
+    print(f"Using ThreadPoolExecutor(max_workers=8) — each worker has its own LLM client", flush=True)
+
+    # Process in parallel
+    max_workers = 8
+    completed = 0
+    futures = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for method, dataset, question, index in all_items:
+            future = executor.submit(
+                process_question,
+                method, dataset, question, cfg, index,
+                output_dir, stage_name, seed,
+            )
+            futures.append((future, method, dataset, question))
+
+        for future, method, dataset, question in futures:
+            try:
+                record = future.result()
+                completed += 1
                 stats["total"] += 1
-                method_stats["total"] += 1
-
-                safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in question.id)[:80]
-                digest = hashlib.sha256(question.id.encode()).hexdigest()[:12]
-                item_filename = f"{safe_id}-{digest}.json"
-                item_path = method_dir / item_filename
-
-                # Check if already completed
-                if item_path.exists():
-                    try:
-                        existing = json.loads(item_path.read_text())
-                        if existing.get("result", {}).get("status") == "ok":
-                            print(f"  [{i+1}/{len(questions)}] {question.id[:24]}... already ok", flush=True)
-                            stats["ok"] += 1
-                            method_stats["ok"] += 1
-                            continue
-                    except Exception:
-                        pass
-
-                print(f"  [{i+1}/{len(questions)}] {question.id[:24]}...", flush=True, end="")
-
-                t0 = time.time()
-                try:
-                    # Wrap retriever with a budgeted wrapper
-                    from slotrag.benchmarking.runner import _BudgetedRetriever
-                    budgeted_retriever = _BudgetedRetriever(index, 16)
-
-                    from slotrag.benchmarking.runner import _BudgetedAgnes
-                    budgeted_agnes = _BudgetedAgnes(agnes_client, 48)
-
-                    result = run_method(
-                        method,
-                        dataset=dataset,
-                        question=question,
-                        retriever=budgeted_retriever,
-                        client=budgeted_agnes,
-                        config=cfg,
-                        seed=seed,
-                        max_steps=8,
-                        max_retrieval_calls=16,
-                    )
-
-                    wall_ms = (time.perf_counter() - t0) * 1000
-                    status = result.status
-                    is_ok = status == "ok"
-
-                    # Score
-                    scores = score_record(dataset, question, result)
-
-                    record = {
-                        "schema_version": 1,
-                        "stage": stage_name,
-                        "dataset": dataset,
-                        "method": method,
-                        "seed": seed,
-                        "question_id": question.id,
-                        "question": question.question,
-                        "wall_ms": wall_ms,
-                        "result": {
-                            "status": result.status,
-                            "answer": result.answer,
-                            "error": result.error,
-                            "metrics": result.metrics.model_dump(mode="json") if result.metrics else None,
-                        },
-                        "scores": scores,
-                    }
-                    item_path.write_text(json.dumps(record, ensure_ascii=False, indent=2))
-
-                    if is_ok:
-                        stats["ok"] += 1
-                        method_stats["ok"] += 1
-                        print(f" OK (EM={scores.get('exact_match', 0):.2%}, F1={scores.get('f1', 0):.2%})", flush=True)
-                    else:
-                        stats["failed"] += 1
-                        method_stats["failed"] += 1
-                        print(f" {status.upper()}: {result.error or ''}", flush=True)
-
-                except Exception as e:
-                    wall_ms = (time.perf_counter() - t0) * 1000
+                if record.get("result", {}).get("status") == "ok":
+                    stats["ok"] += 1
+                    em = record.get("scores", {}).get("exact_match", 0)
+                    f1 = record.get("scores", {}).get("f1", 0)
+                    print(f"[{completed}/{total_items}] {dataset}/{method}: OK (EM={em:.2%}, F1={f1:.2%})", flush=True)
+                else:
                     stats["failed"] += 1
-                    method_stats["failed"] += 1
-                    print(f" ERROR: {type(e).__name__}: {e}", flush=True)
-                    record = {
-                        "schema_version": 1,
-                        "stage": stage_name,
-                        "dataset": dataset,
-                        "method": method,
-                        "seed": seed,
-                        "question_id": question.id,
-                        "question": question.question,
-                        "wall_ms": wall_ms,
-                        "result": {"status": "failed", "error": f"{type(e).__name__}: {e}", "answer": None, "metrics": None},
-                        "scores": {},
-                    }
-                    item_path.write_text(json.dumps(record, ensure_ascii=False, indent=2))
+                    err = record.get("result", {}).get("error", "")
+                    print(f"[{completed}/{total_items}] {dataset}/{method}: FAILED: {err}", flush=True)
 
-            stats["by_method"][f"{dataset}/{method}"] = method_stats
+                key = f"{dataset}/{method}"
+                ms = stats["by_method"].setdefault(key, {"ok": 0, "failed": 0, "total": 0})
+                ms["total"] += 1
+                if record.get("result", {}).get("status") == "ok":
+                    ms["ok"] += 1
+                else:
+                    ms["failed"] += 1
+
+            except Exception as e:
+                completed += 1
+                stats["total"] += 1
+                stats["failed"] += 1
+                print(f"[{completed}/{total_items}] {dataset}/{method}: EXCEPTION: {type(e).__name__}: {e}", flush=True)
 
     print(f"\n{'='*60}", flush=True)
     print(f"RESULTS: {stats['ok']}/{stats['total']} ok ({stats['ok']/stats['total']:.1%})", flush=True)
@@ -305,8 +379,6 @@ def main():
     # Write summary
     (output_dir / "summary.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2))
     print(f"Summary written to {output_dir / 'summary.json'}", flush=True)
-
-    http_client.close()
 
 
 if __name__ == "__main__":
