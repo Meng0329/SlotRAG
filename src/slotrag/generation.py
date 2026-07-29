@@ -38,8 +38,8 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
 
 
 def _structured_thinking_enabled(result: ExecutionResult) -> bool:
-    """Keep hidden reasoning for joined plans while simple answers stay direct."""
-    return result.metrics.plan_join_count > 0 or result.metrics.plan_slot_count > 1
+    """Always enable thinking for better answer quality, unless answer_kind is very simple."""
+    return True
 
 
 def generate_answer_response(

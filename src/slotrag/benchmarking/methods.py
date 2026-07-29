@@ -145,7 +145,7 @@ ABLATION_METHODS = [
 
 
 METHODS: dict[str, MethodSpec] = {
-    "slotrag": MethodSpec("slotrag", "slotrag"),
+    "slotrag": MethodSpec("slotrag", "slotrag", structured_answer_contract=True, extraction_enable_thinking=True),
     "slotrag-sufficiency": MethodSpec(
         "slotrag-sufficiency",
         "slotrag",
