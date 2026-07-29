@@ -38,8 +38,8 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
 
 
 def _structured_thinking_enabled(result: ExecutionResult) -> bool:
-    """Always enable thinking for better answer quality, unless answer_kind is very simple."""
-    return True
+    """Disable thinking during generation — thinking causes over-caution, refusing to answer when evidence is present but not perfectly aligned with the question."""
+    return False
 
 
 def generate_answer_response(
@@ -62,13 +62,13 @@ def generate_answer_response(
     ]
     if structured_output:
         format_instruction = {
-            "boolean": "The answer field must be exactly True or False.",
-            "list": "The answer field must contain only the requested comma-separated list.",
-            "number": "The answer field must contain only the requested number or short span.",
-        }.get(answer_kind, "The answer field must contain only a concise answer span.")
+            "boolean": "The answer must be exactly True or False.",
+            "list": "The answer must contain only the requested comma-separated list.",
+            "number": "The answer must contain only the requested number or short span.",
+        }.get(answer_kind, "The answer must contain only a concise answer span.")
         system_instruction = (
-            "Answer using only the supplied evidence. Do not reveal reasoning, repeat the question, "
-            f"or include citations. {format_instruction} Call emit_final_answer exactly once."
+            "Answer the question based on the supplied evidence. "
+            f"{format_instruction} Call emit_final_answer exactly once."
         )
     else:
         format_instruction = {
@@ -76,7 +76,7 @@ def generate_answer_response(
             "number": "Return only the requested number or short span.",
         }.get(answer_kind, "Return only a concise answer span.")
         system_instruction = (
-            "Answer using only the supplied evidence. If it is insufficient, say so. "
+            "Answer the question based on the supplied evidence. "
             f"{format_instruction} Do not invent citations."
         )
     messages = [

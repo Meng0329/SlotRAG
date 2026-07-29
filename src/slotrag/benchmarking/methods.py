@@ -206,6 +206,8 @@ METHODS: dict[str, MethodSpec] = {
         dual_access_bundle=True,
         evidence_bundle=True,
         per_path_extraction=False,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
         description="v74 physical evidence bundle with union extraction (control)",
     ),
     "slotrag-per-path-extraction": MethodSpec(
@@ -214,6 +216,8 @@ METHODS: dict[str, MethodSpec] = {
         dual_access_bundle=True,
         evidence_bundle=True,
         per_path_extraction=True,
+        extraction_enable_thinking=True,  # Now properly wired through evidence bundle extractors
+        structured_answer_contract=True,
         description="v74 per-path extraction with cross-path merge (treatment)",
     ),
     # ====== V5: Query Rewriting for multi-hop retrieval ======
@@ -1261,8 +1265,9 @@ def _run_slotrag(
         if spec.evidence_surface_grounding_repair:
             materializer_options["evidence_surface_grounding_repair"] = True
     if spec.evidence_bundle:
+        thinking = bool(spec.extraction_enable_thinking)
         evidence_bundle_extractor = (
-            PerPathExtractor() if spec.per_path_extraction else UnionExtractor()
+            PerPathExtractor(enable_thinking=thinking) if spec.per_path_extraction else UnionExtractor(enable_thinking=thinking)
         )
         materializer = SlotMaterializer(
             client, retriever, evidence_bundle_extractor=evidence_bundle_extractor,

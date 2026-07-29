@@ -89,6 +89,9 @@ class EvidenceBundleExtractor(ABC):
     is responsible for that common post-processing step.
     """
 
+    def __init__(self, enable_thinking: bool = False) -> None:
+        self._enable_thinking = enable_thinking
+
     @abstractmethod
     def extract(
         self,
@@ -172,6 +175,7 @@ class UnionExtractor(EvidenceBundleExtractor):
             tools=[tool],
             tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
             temperature=0.0,
+            enable_thinking=self._enable_thinking,
         )
 
         args = client.require_tool(response, "emit_evidence_rows")
@@ -294,6 +298,7 @@ class PerPathExtractor(EvidenceBundleExtractor):
                 tools=[tool],
                 tool_choice={"type": "function", "function": {"name": "emit_evidence_rows"}},
                 temperature=0.0,
+                enable_thinking=self._enable_thinking,
             )
 
             args = client.require_tool(response, "emit_evidence_rows")

@@ -332,10 +332,10 @@ def process_question(
 def main():
     # Index on disk uses the original hybrid index
     index_stage = "qo_v74_development_hybrid"
-    stage_name = "qo_v74_v5_query_rewriting_dev"
+    stage_name = "qo_v74_v5_corrected_dev"
     cfg = AppConfig.from_yaml("configs/default.yaml")
 
-    # ====== V5: V1 retrieval + query rewriting (LLM-enhanced slot queries) ======
+    # ====== V5: V1 retrieval + fixed generation (no thinking) + wired extraction thinking ======
     cfg.retrieval.dense_k = 100
     cfg.retrieval.bm25_k = 100
     cfg.retrieval.bm25_weight = 0.5
@@ -345,10 +345,10 @@ def main():
 
     datasets = ["hotpotqa", "2wikimultihop"]
     methods = [
-        "slotrag-query-rewriting",
-        "slotrag-qr-dual-access",
-        "slotrag-qr-evidence-bundle",
-        "slotrag-qr-per-path",
+        "slotrag",
+        "slotrag-dual-access",
+        "slotrag-evidence-bundle",
+        "slotrag-per-path-extraction",
     ]
     sample_size = 40
     seed = 314159
