@@ -9,8 +9,8 @@ agnes:
   temperature: 0.0
 
 embedding:
-  base_url: http://10.200.37.71:8801/v1
-  model: Qwen3-Embedding-0.6B
+  base_url: http://0.0.0.0:30000/v1
+  model: Qwen/Qwen3-Embedding-0.6B
   api_key_env: SLOTRAG_EMBEDDING_API_KEY
   timeout_seconds: 60
   max_retries: 2
