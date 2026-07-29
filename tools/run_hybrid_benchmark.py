@@ -332,10 +332,10 @@ def process_question(
 def main():
     # Index on disk uses the original hybrid index
     index_stage = "qo_v74_development_hybrid"
-    stage_name = "qo_v74_v4_thinking_dev"
+    stage_name = "qo_v74_v5_query_rewriting_dev"
     cfg = AppConfig.from_yaml("configs/default.yaml")
 
-    # ====== V4: V1 retrieval + structured_output + extraction thinking + generation thinking ======
+    # ====== V5: V1 retrieval + query rewriting (LLM-enhanced slot queries) ======
     cfg.retrieval.dense_k = 100
     cfg.retrieval.bm25_k = 100
     cfg.retrieval.bm25_weight = 0.5
@@ -344,11 +344,16 @@ def main():
     # ====================================
 
     datasets = ["hotpotqa", "2wikimultihop"]
-    methods = ["slotrag", "slotrag-dual-access", "slotrag-evidence-bundle", "slotrag-per-path-extraction"]
+    methods = [
+        "slotrag-query-rewriting",
+        "slotrag-qr-dual-access",
+        "slotrag-qr-evidence-bundle",
+        "slotrag-qr-per-path",
+    ]
     sample_size = 40
     seed = 314159
 
-    output_dir = Path("runs/slotrag-v74-qwen-hybrid-reranker-v4")
+    output_dir = Path("runs/slotrag-v74-qwen-hybrid-reranker-v5")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build shared reranker client (thread-safe, stateless)

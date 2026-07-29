@@ -33,6 +33,7 @@ from ..query_optimization import QueryVariant
 from ..retrieval import HybridRetriever, tokenize
 from ..sufficiency import EvidenceSufficiencyCalibrator
 from ..evidence_bundle import PerPathExtractor, UnionExtractor
+from ..query_rewriting import QueryRewriter
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class MethodSpec:
     dual_access_bundle: bool = False
     evidence_bundle: bool = False
     per_path_extraction: bool = False
+    query_rewriting: bool = False
     description: str = ""
 
 
@@ -213,6 +215,40 @@ METHODS: dict[str, MethodSpec] = {
         evidence_bundle=True,
         per_path_extraction=True,
         description="v74 per-path extraction with cross-path merge (treatment)",
+    ),
+    # ====== V5: Query Rewriting for multi-hop retrieval ======
+    "slotrag-query-rewriting": MethodSpec(
+        "slotrag-query-rewriting",
+        "slotrag",
+        structured_answer_contract=True,
+        extraction_enable_thinking=True,
+        query_rewriting=True,
+        description="v5 plain slotrag with LLM-based slot query rewriting",
+    ),
+    "slotrag-qr-dual-access": MethodSpec(
+        "slotrag-qr-dual-access",
+        "slotrag",
+        dual_access_bundle=True,
+        query_rewriting=True,
+        description="v5 dual-access with slot query rewriting",
+    ),
+    "slotrag-qr-evidence-bundle": MethodSpec(
+        "slotrag-qr-evidence-bundle",
+        "slotrag",
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=False,
+        query_rewriting=True,
+        description="v5 evidence-bundle with slot query rewriting",
+    ),
+    "slotrag-qr-per-path": MethodSpec(
+        "slotrag-qr-per-path",
+        "slotrag",
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        query_rewriting=True,
+        description="v5 per-path-extraction with slot query rewriting",
     ),
     "slotrag-physical-policy-utility": MethodSpec(
         "slotrag-physical-policy-utility",
@@ -1234,6 +1270,9 @@ def _run_slotrag(
         )
     else:
         materializer = SlotMaterializer(client, retriever, **materializer_options)
+    # QueryRewriter adds an LLM call per slot — only enable when explicitly requested
+    if spec.query_rewriting:
+        materializer.query_rewriter = QueryRewriter(client)
     executor = AdaptiveExecutor(
         materializer,
         default_slot_cost=config.execution.default_slot_cost,

@@ -37,6 +37,7 @@ from .models import (
 from .providers import AgnesClient, ChatResult
 from .qo import PhysicalPlan
 from .query_optimization import QueryVariant, canonical_evidence_id, formulate_query
+from .query_rewriting import QueryRewriter
 from .evidence_bundle import EvidenceBundle, EvidenceBundleExtractor, RetrievalPath, UnionExtractor
 from .retrieval import HybridRetriever, SparseAccessMode
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
@@ -1157,6 +1158,7 @@ class SlotMaterializer:
         dual_query_evidence_guard_disjoint_only: bool = True,
         dual_access_bundle: bool = False,
         evidence_bundle_extractor: EvidenceBundleExtractor | None = None,
+        query_rewriter: QueryRewriter | None = None,
     ) -> None:
         self.client = client
         self.retriever = retriever
@@ -1180,6 +1182,7 @@ class SlotMaterializer:
         self.dual_query_evidence_guard = dual_query_evidence_guard
         self.dual_query_evidence_guard_disjoint_only = dual_query_evidence_guard_disjoint_only
         self.dual_access_bundle = dual_access_bundle
+        self.query_rewriter = query_rewriter
         if self.dual_access_bundle and not self.question_context:
             raise ValueError("dual_access_bundle requires question_context")
         if self.dual_access_bundle and self.dual_query_retrieval:
@@ -1326,6 +1329,16 @@ class SlotMaterializer:
         query_variant: QueryVariant | None = None,
     ) -> tuple[list[BindingRow], RunMetrics]:
         slot_query = slot.query_text(bindings)
+        rewriter_queries: list[str] = [slot_query]
+        if self.query_rewriter is not None:
+            rewrite_started = time.perf_counter()
+            rewritten = self.query_rewriter.rewrite(
+                slot_query,
+                self.question_context or "",
+                bindings,
+            )
+            rewriter_queries.append(rewritten)
+            slot_query = rewritten
         searches: list[RetrievalSearchTrace] = []
 
         def record_search(

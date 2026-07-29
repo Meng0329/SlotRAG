@@ -44,3 +44,22 @@
   - generation.py: `_structured_thinking_enabled` 改为始终 True
   - methods.py: slotrag MethodSpec 增加 `extraction_enable_thinking=True`
 - 目标：all methods × datasets 90% SOTA
+- 结果：
+
+| Dataset | Method | n | EM | F1 | 90% EM? | 90% F1? | ΔEM vs V1 | ΔF1 vs V1 |
+|---------|--------|---|-----|-----|---------|---------|-----------|-----------|
+| hotpotqa | slotrag | 39 | 56.41% | 60.63% | ❌ (<61.20) | ❌ (<72.78) | +1.41 | +1.26 |
+| hotpotqa | dual-access | 39 | 56.41% | 68.80% | ❌ | ❌ | -2.56 | -1.80 |
+| hotpotqa | evidence-bundle | 39 | 58.97% | 69.42% | ❌ | ❌ | +2.56 | +1.39 |
+| hotpotqa | per-path-extraction | 40 | 60.00% | 73.03% | ❌ | ✅ | -1.54 | -3.65 |
+| 2wikimultihop | slotrag | 40 | 67.50% | 74.31% | ✅ | ✅ | 0 | 0 |
+| 2wikimultihop | dual-access | 40 | 72.50% | 80.97% | ✅ | ✅ | 0 | 0 |
+| 2wikimultihop | evidence-bundle | 40 | 70.00% | 75.14% | ✅ | ✅ | -2.50 | -1.94 |
+| 2wikimultihop | per-path-extraction | 40 | 65.00% | 71.81% | ❌ (<65.70) | ❌ (<73.79) | +2.50 | +1.88 |
+
+分析：
+- **2wikimultihop 6/8 指标通过** 90% SOTA 阈值（仅 per-path-extraction 未通过）
+- **hotpotqa 1/8 指标通过**（per-path-extraction 的 F1 以 73.03% > 72.78% 勉强通过）
+- **thinking 对 hotpotqa 帮助不大**——per-path-extraction 反而倒退（F1 76.68% → 73.03%）
+- **hotpotqa 瓶颈在检索**——所有方法 EM=0 数量一致（~16/40），证据不在检索结果中
+- 2wikimultihop retrieval 已足够，所有方法（除 per-path-extraction）都达标
