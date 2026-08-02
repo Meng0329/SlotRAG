@@ -147,7 +147,7 @@ ABLATION_METHODS = [
 
 
 METHODS: dict[str, MethodSpec] = {
-    "slotrag": MethodSpec("slotrag", "slotrag", structured_answer_contract=True, extraction_enable_thinking=True),
+    "slotrag": MethodSpec("slotrag", "slotrag", structured_answer_contract=True, extraction_enable_thinking=True, question_grounded_retrieval=True),
     "slotrag-sufficiency": MethodSpec(
         "slotrag-sufficiency",
         "slotrag",
@@ -219,6 +219,24 @@ METHODS: dict[str, MethodSpec] = {
         extraction_enable_thinking=True,  # Now properly wired through evidence bundle extractors
         structured_answer_contract=True,
         description="v74 per-path extraction with cross-path merge (treatment)",
+    ),
+    # ====== V6: question-grounded + dual-query with structured output ======
+    "slotrag-question-grounded-v6": MethodSpec(
+        "slotrag-question-grounded-v6",
+        "slotrag",
+        question_grounded_retrieval=True,
+        structured_answer_contract=True,
+        extraction_enable_thinking=True,
+        description="v6: slotrag + question_grounded_retrieval (question+slot query) + structured output + gen fixes",
+    ),
+    "slotrag-dual-query-v6": MethodSpec(
+        "slotrag-dual-query-v6",
+        "slotrag",
+        question_grounded_retrieval=True,
+        dual_query_retrieval=True,
+        structured_answer_contract=True,
+        extraction_enable_thinking=True,
+        description="v6: slotrag + dual_query_retrieval (slot & question+slot RRF) + structured output + gen fixes",
     ),
     # ====== V5: Query Rewriting for multi-hop retrieval ======
     "slotrag-query-rewriting": MethodSpec(
