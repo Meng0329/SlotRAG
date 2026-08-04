@@ -53,11 +53,15 @@
 - [x] 深度失败诊断完成
   - **strategyqa EM=0.08 是格式假象**：用 primary_score (accuracy) 实际 0.84
   - **drop EM 无效**：已用 drop_f1 (0.62)
-  - **真实瓶颈**：hotpotqa/2wiki evidence_recall 低 (0.755/0.810 vs 1.000)，musique budget_exceeded (9个)
-- [x] 第一轮假设生成 (H-001 top_k, H-002 LLM budget, H-003 evidence quality)
+  - **真实瓶颈 (H-004)**: 检索不是瓶颈，是答案生成质量
+    - hotpotqa: 21/98 recall=1.0 但 EM=0（检索对，答案错）
+    - 2wiki: 21/100 recall=1.0 但 EM=0
+    - ~57% 措辞/格式问题 (F1≥0.5)，~43% 明显错误 (F1<0.5)
 - [x] 采样一致性 bug 修复 (generate_sealed_samples.py)
-- [x] Tier 1 实验启动 (baseline + H-001 + H-002, DEVELOPMENT_SET n=20×5)
-- [ ] Tier 1 实验结果分析
+- [x] **Tier 1 实验完成**: H-001 rejected (p=0.13), H-002 rejected (p=0.41)
+- [x] H-004 validated (生成质量是瓶颈)
+- [ ] H-005 (答案契约) 待验证 — 需改核心生成代码
+- [ ] H-006 (生成推理) 待验证 — 需改核心生成代码
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动
