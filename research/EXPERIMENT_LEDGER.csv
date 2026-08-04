@@ -6,3 +6,4 @@ E3,Phase3,H-001,all-5-datasets,slotrag-baseline,20,evaluation,2027,completed,202
 E4,Phase3,H-001,all-5-datasets,slotrag-finalk20,20,evaluation,2027,completed,2026-08-05T01:06:00Z,2026-08-05T01:06:00Z,2026-08-05T01:40:00Z,0.6902,0.6902,0.00,0.00,100,0,,,0,Tier 1 H-001: 仅 musique +0.108 (p=0.13不显著), 其他4数据集无差异
 E5,Phase3,H-002,all-5-datasets,slotrag-morebudget,20,evaluation,2027,completed,2026-08-05T01:40:00Z,2026-08-05T01:40:00Z,2026-08-05T02:10:00Z,0.6902,0.6902,0.00,0.00,100,0,,,0,Tier 1 H-002: musique +0.033 (p=0.41不显著), 拒绝
 E6,Phase3,H-005,all-5-datasets,slotrag-entity-contract,20,evaluation,2027,running,2026-08-05T05:00:00Z,2026-08-05T05:00:00Z,,0.00,0.00,0.00,0.00,0,0,,,0,Tier 2 H-005: entity_answer_contract=True, 验证能否回收57%接近正确错误
+E7,Phase3,H-005,all-5-datasets,slotrag-entity-contract,20,evaluation,2027,completed,2026-08-05T05:00:00Z,2026-08-05T05:00:00Z,2026-08-05T05:50:00Z,0.00,0.00,0.00,0.00,100,0,,,0,H-005 REJECTED: 全面下降 -0.02~-0.05, entity约束过度导致多实体答案被截断
