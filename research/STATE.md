@@ -49,7 +49,16 @@
 - [x] 最强 baseline 确定 (ircot/graphrag/planrag/hybrid)
 - [x] drop 主指标改为 drop_f1 (EM 对所有方法无效)
 
-### Phase 3: 假设循环 ⏳ 待启动
+### Phase 3: 假设循环 🔄 进行中
+- [x] 深度失败诊断完成
+  - **strategyqa EM=0.08 是格式假象**：用 primary_score (accuracy) 实际 0.84
+  - **drop EM 无效**：已用 drop_f1 (0.62)
+  - **真实瓶颈**：hotpotqa/2wiki evidence_recall 低 (0.755/0.810 vs 1.000)，musique budget_exceeded (9个)
+- [x] 第一轮假设生成 (H-001 top_k, H-002 LLM budget, H-003 evidence quality)
+- [x] 采样一致性 bug 修复 (generate_sealed_samples.py)
+- [x] Tier 1 实验启动 (baseline + H-001 + H-002, DEVELOPMENT_SET n=20×5)
+- [ ] Tier 1 实验结果分析
+
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 

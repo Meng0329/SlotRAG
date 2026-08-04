@@ -23,7 +23,7 @@
 
 ### H-001: 检索 top_k 增加可显著提升 evidence recall
 
-- **状态**: proposed
+- **状态**: testing
 - **描述**: SlotRAG 在 hotpotqa 上 evidence recall 0.755 vs hybrid 1.000，核心差距在于 evidence_count 1-3 vs 10。增加 hybrid retrieval top_n 和 slot materialization top_k 可提升召回。
 - **预测**: 将 top_n 从 10 增加到 20，evidence recall 从 0.755 提升到 >0.85，hotpotqa primary_score 提升 5-8%
 - **验证方法**: Tier 1 实验 (DEVELOPMENT_SET, n=20, hotpotqa)，修改 config 的 retrieval.top_n 和 materialization_top_k
@@ -31,8 +31,8 @@
 - **风险**: 更多 evidence 可能引入噪音；LLM 调用成本增加；effect 可能小于预期
 - **依赖**: 无
 - **创建时间**: 2026-08-05T02:00:00Z
-- **最后更新**: 2026-08-05T02:00:00Z
-- **证据**: hotpotqa evidence_recall slotrag=0.755 vs hybrid=1.000; evidence_count slotrag=1-3 vs hybrid=10; manifest retrieval.final_k=10
+- **最后更新**: 2026-08-05T03:00:00Z
+- **证据**: hotpotqa evidence_recall slotrag=0.755 vs hybrid=1.000; evidence_count slotrag=1-3 vs hybrid=10; manifest retrieval.final_k=10。**冒烟测试 (DEVELOPMENT_SET, n=20): baseline primary=0.735, evidence_recall=0.825 — 比 seed=2040 的 0.6887 高，DEVELOPMENT_SET 基线更高**
 
 ### H-002: 增加 LLM planning 预算可降低 musique 的 budget_exceeded 失败
 

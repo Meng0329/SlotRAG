@@ -11,28 +11,25 @@
 ### 诊断基线 (seed=2040, eval split, n=100, contaminated)
 
 > **⚠️ 诊断性数据**：此矩阵基于 CONTAMINATED_EVAL_DIAGNOSTIC_SET (seed=2040)。结果用于建立真实基线和识别瓶颈，**不得**用于论文主表。
+>
+> **审计修正 (2026-08-05)**：此前用 `em` 列评估 strategyqa，导致"0.08 灾难性失败"的错误结论。实际主指标是 `primary_score`（strategyqa 用 accuracy，drop 用 drop_f1）。修正后所有单元格使用正确主指标。
 
 | 数据集 | 指标 | SlotRAG | 最强 Baseline | Delta | 判定 |
 |--------|------|---------|---------------|-------|------|
-| hotpotqa | EM | 0.5612 | ircot (0.6800) | -0.1188 | ❌ LOSS |
-| hotpotqa | F1 | 0.6887 | graphrag (0.8087) | -0.1200 | ❌ LOSS |
-| 2wikimultihop | EM | 0.5900 | graphrag (0.7300) | -0.1400 | ❌ LOSS |
-| 2wikimultihop | F1 | 0.6872 | graphrag (0.8199) | -0.1327 | ❌ LOSS |
-| musique | EM | 0.3736 | planrag (0.4828) | -0.1092 | ❌ LOSS |
-| musique | F1 | 0.4818 | planrag (0.5748) | -0.0930 | ❌ LOSS |
-| strategyqa | EM | 0.0800 | hybrid (0.9000) | -0.8200 | ❌ LOSS |
-| strategyqa | F1 | 0.0800 | hybrid (0.9000) | -0.8200 | ❌ LOSS |
-| drop | EM | 0.0100 | planrag (0.0102) | -0.0002 | ❌ LOSS |
-| drop | F1 | 0.4405 | planrag (0.5419) | -0.1014 | ❌ LOSS |
+| hotpotqa | primary (F1) | 0.6887 | graphrag (0.8087) | -0.1200 | ❌ LOSS |
+| 2wikimultihop | primary (F1) | 0.6872 | graphrag (0.8199) | -0.1327 | ❌ LOSS |
+| musique | primary (F1) | 0.4818 | planrag (0.5748) | -0.0930 | ❌ LOSS |
+| strategyqa | primary (acc) | **0.8400** | hybrid (0.9000) | **-0.0600** | ❌ LOSS |
+| drop | primary (drop_f1) | 0.6245 | planrag (0.7120) | -0.0875 | ❌ LOSS |
 
-**Strongest-Baseline Coverage: 0/10 = 0%**
+**Strongest-Baseline Coverage: 0/5 = 0%**（按每数据集主指标计 5 个单元格）
 
 ### 判定说明
 
-- **所有单元格为 LOSS**。效应量均 >0.2，差距是真实存在的，非统计噪音。
-- 所有 delta 为负，无 "point-estimate-only win"，无 "tie"。
-- strategyqa 差距最大（-0.82），slotrag 在该数据集上近乎失效（0.08 vs 0.90）。
-- drop 的 EM 指标无效（所有方法 ~0.01），主指标应为 drop_f1，但即使 drop_f1 也落后 0.10。
+- **strategyqa 修正**：EM=0.08 是格式假象（yes/no vs True/False），accuracy=0.84 是真实水平。差距仅 -0.06。
+- **drop 修正**：EM=0.01 无效，drop_f1=0.62 是真实水平。
+- 所有单元格仍为 LOSS，但 strategyqa 从"灾难"变为"小幅落后"。
+- 真实差距从平均 -0.25 修正为平均 -0.10（按主指标）。
 
 ---
 
