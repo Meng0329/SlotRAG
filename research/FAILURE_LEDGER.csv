@@ -1,1 +1,4 @@
 failure_id,experiment_id,dataset,question_id,method,failure_type,error_message,reproducible,root_cause,resolution,status,created_at
+F1,seed2040-diagnostic,hotpotqa,5a739b195542,slotrag,generation_wrong,recall=1.0但EM=0检索对答案错,true,generation quality bottleneck,H-005/H-006验证中,open,2026-08-05T04:30:00Z
+F2,seed2040-diagnostic,hotpotqa,multiple,slotrag,format_wording,57%的recall=1.0&EM=0错误是F1≥0.5措辞格式问题,true,answer contract mismatch,H-005目标,open,2026-08-05T04:30:00Z
+F3,seed2040-diagnostic,2wikimultihop,multiple,slotrag,generation_wrong,43%的recall=1.0&EM=0错误是F1<0.5明显错误,true,generation reasoning,H-006目标,open,2026-08-05T04:30:00Z
