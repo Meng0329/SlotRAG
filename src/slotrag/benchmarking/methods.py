@@ -900,19 +900,24 @@ def _finalize(
     result: ExecutionResult,
     *,
     structured_answer_contract: bool = False,
+    entity_answer_contract: bool = False,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
     started = time.perf_counter()
+    answer_kind = (
+        _answer_kind(dataset, question)
+        if structured_answer_contract
+        else _answer_kind(dataset)
+    )
+    # H-005: entity answer contract — force canonical entity names for short answers
+    if entity_answer_contract and answer_kind == "short":
+        answer_kind = "entity"
     answer, response = generate_answer_response(
         client,
         question.question,
         result,
-        answer_kind=(
-            _answer_kind(dataset, question)
-            if structured_answer_contract
-            else _answer_kind(dataset)
-        ),
+        answer_kind=answer_kind,
         structured_output=structured_answer_contract,
     )
     metrics = merge_metrics(
@@ -1354,8 +1359,15 @@ def _run_slotrag(
             question,
             result,
             structured_answer_contract=True,
+            entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
         )
-    return _finalize(client, dataset, question, result)
+    return _finalize(
+        client,
+        dataset,
+        question,
+        result,
+        entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
+    )
 
 
 def run_method(

@@ -71,6 +71,7 @@ class ExecutionConfig(BaseModel):
     materialization_top_k: int = Field(default=5, gt=0, le=50)
     max_binding_contexts: int = Field(default=2, gt=0, le=50)
     max_retrieval_calls: int = Field(default=4, gt=0, le=100)
+    entity_answer_contract: bool = Field(default=False)
 
 
 class DataConfig(BaseModel):

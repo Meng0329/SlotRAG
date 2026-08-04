@@ -65,6 +65,11 @@ def generate_answer_response(
             "boolean": "The answer must be exactly True or False.",
             "list": "The answer must contain only the requested comma-separated list.",
             "number": "The answer must contain only the requested number or short span.",
+            "entity": (
+                "The answer must be exactly one canonical entity name as it appears in the "
+                "supplied evidence, with no extra qualifiers, articles, or descriptive text. "
+                "If the evidence gives a full name, return the full name."
+            ),
         }.get(answer_kind, "The answer must contain only a concise answer span.")
         system_instruction = (
             "Answer the question based on the supplied evidence. "
@@ -74,6 +79,10 @@ def generate_answer_response(
         format_instruction = {
             "boolean": "Return exactly True or False.",
             "number": "Return only the requested number or short span.",
+            "entity": (
+                "Return exactly one canonical entity name as it appears in the supplied "
+                "evidence, with no extra qualifiers, articles, or descriptive text."
+            ),
         }.get(answer_kind, "Return only a concise answer span.")
         system_instruction = (
             "Answer the question based on the supplied evidence. "

@@ -1668,7 +1668,7 @@ def test_no_polar_consensus_ablation_only_disables_projection(monkeypatch):
 
     finalized = []
 
-    def finalize(_client, _dataset, _question, result):
+    def finalize(_client, _dataset, _question, result, **kwargs):
         finalized.append(result)
         return result.model_copy(update={"answer": "generated"})
 
