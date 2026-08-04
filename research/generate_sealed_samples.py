@@ -58,6 +58,7 @@ def load_exposed():
     return exposed
 
 def generate(stage, set_name, size, datasets, output_dir, seed=2027):
+    from slotrag.benchmarking.datasets import DATASETS
     output_dir = Path(output_dir)
     set_ids = load_set(set_name)
     exposed = load_exposed()
@@ -65,6 +66,7 @@ def generate(stage, set_name, size, datasets, output_dir, seed=2027):
 
     total_created = {}
     for ds in datasets:
+        spec = DATASETS[ds]
         records = load_dataset(SPLIT_FILES[ds])
         allowed = set_ids.get(ds, set())
         excluded = exposed.get(ds, set())
@@ -84,14 +86,21 @@ def generate(stage, set_name, size, datasets, output_dir, seed=2027):
         with open(sample_path, 'w') as f:
             for rid in sorted(selected):
                 rec = records[rid]
+                # 用 _gold_evidence 规范化 gold_evidence（dict/list → source_id list）
+                from slotrag.benchmarking.datasets import _gold_evidence
+                gold_ev = _gold_evidence(spec, rec)
                 # 适配 QuestionRecord 需要的字段
                 out = {
                     'id': rid,
                     'question': rec.get('question', ''),
                     'passages': rec.get('passages', []),
                     'answers': rec.get('answers', []),
-                    'gold_evidence': rec.get('gold_evidence', []),
-                    'metadata': rec.get('metadata', {}),
+                    'gold_evidence': gold_ev,
+                    'metadata': {
+                        **rec.get('metadata', {}),
+                        'evidence_available': bool(gold_ev),
+                        'type': rec.get('type'),
+                    },
                 }
                 f.write(json.dumps(out, ensure_ascii=False) + '\n')
         total_created[ds] = len(selected)
