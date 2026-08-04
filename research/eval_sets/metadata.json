@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-08-04T21:30:00Z",
+  "random_seed": 2027,
+  "dev_ratio": 0.3,
+  "val_ratio": 0.3,
+  "test_ratio": 0.4,
+  "stats": {
+    "total_eval": 32620,
+    "exposed": 1239,
+    "clean": 31381,
+    "dev": 9412,
+    "val": 9412,
+    "test": 12557
+  },
+  "script_version": "1.0.0",
+  "exposed_registry": "research/EXPOSED_SAMPLE_REGISTRY.csv",
+  "manifes_path": "runs/vldb2027-submission-qwen36-v3-rescored-v2-final/manifest.json"
+}

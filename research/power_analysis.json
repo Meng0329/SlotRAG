@@ -1,0 +1,90 @@
+{
+  "analysis_timestamp": "2026-08-04T21:30:00Z",
+  "parameters": {
+    "alpha": 0.05,
+    "power": 0.8,
+    "min_effect": 0.05
+  },
+  "recommendations": [
+    {
+      "dataset": "2wikimultihop",
+      "metric": "em",
+      "max_variance": 0.0024742940516273844,
+      "required_n": 16,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "2wikimultihop",
+      "metric": "f1",
+      "max_variance": 0.0021834152707611632,
+      "required_n": 14,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "drop",
+      "metric": "em",
+      "max_variance": 0.00010901613910870467,
+      "required_n": 2,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "drop",
+      "metric": "f1",
+      "max_variance": 0.0008546657525723656,
+      "required_n": 6,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "hotpotqa",
+      "metric": "em",
+      "max_variance": 0.0024925525925925916,
+      "required_n": 16,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "hotpotqa",
+      "metric": "f1",
+      "max_variance": 0.0017312733119758039,
+      "required_n": 11,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "musique",
+      "metric": "em",
+      "max_variance": 0.002751802880169111,
+      "required_n": 18,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "musique",
+      "metric": "f1",
+      "max_variance": 0.002350980135745805,
+      "required_n": 15,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "strategyqa",
+      "metric": "em",
+      "max_variance": 0.0012630559,
+      "required_n": 8,
+      "current_n": 100,
+      "sufficient": true
+    },
+    {
+      "dataset": "strategyqa",
+      "metric": "f1",
+      "max_variance": 0.0012566045423035863,
+      "required_n": 8,
+      "current_n": 100,
+      "sufficient": true
+    }
+  ]
+}

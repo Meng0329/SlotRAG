@@ -42,6 +42,34 @@
 - **证据**: per_question.csv
 - **影响**: 统计分析需处理不同有效样本数
 
+### D-006: drop 主指标改用 drop_f1
+- **日期**: 2026-08-04
+- **决策**: drop 数据集主指标从 EM 改为 drop_f1
+- **理由**: SQuAD EM 对所有方法均 ~0.01，因为 drop 答案是数字/区间，SQuAD 归一化无法处理
+- **证据**: seed=2040 诊断结果（hybrid/ircot/react/srag/graphrag/slotrag 均 0.01）
+- **影响**: drop 单元格在覆盖率矩阵中使用 drop_f1
+
+### D-007: 诚实负结果记录（Phase 2 诊断）
+- **日期**: 2026-08-04
+- **决策**: 在 eval split 上 SlotRAG Strongest-Baseline Coverage = 0/10，如实记录
+- **理由**: 预注册协议要求诚实记录，绝不修改统计口径
+- **证据**: SOTA_LEDGER.md 诊断矩阵（seed=2040, n=100）
+- **影响**: 所有"超90% SOTA"结论最终撤销；Phase 3 假设循环必须从 0/10 基线开始改进
+
+### D-008: 三集合构造参数冻结
+- **日期**: 2026-08-04
+- **决策**: 采用 30/30/40 划分，seed=2027，三集合互斥（31,381 唯一样本）
+- **理由**: 与执行配置 random_seed=2027 一致，确保可复现
+- **证据**: research/eval_sets/{development,validation,test}_set.json + checksums
+- **影响**: 任何方法冻结前不得访问 validation/test 集
+
+### D-009: 功效分析结论
+- **日期**: 2026-08-04
+- **决策**: n=100 已满足统计功效（α=0.05, power=0.80, δ=5% 所需 n=2-18）
+- **理由**: EM/F1 是低方差指标，当前可检测效应约 1-2%
+- **证据**: research/power_analysis.json
+- **影响**: n=100 可作为快速初步验证；Tier4/5 仍优先完整官方集
+
 ---
 
 ## 决策模板
