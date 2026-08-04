@@ -10,4 +10,7 @@ data/processed/
 runs/
 *.jsonl
 *.csv
+!research/EXPERIMENT_LEDGER.csv
+!research/FAILURE_LEDGER.csv
+!research/RELATED_WORK_MATRIX.csv
 !tests/fixtures/*.jsonl

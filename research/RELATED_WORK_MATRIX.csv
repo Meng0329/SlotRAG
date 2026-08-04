@@ -1,0 +1,13 @@
+method,year,venue,dataset,em,f1,exact_upstream,budget,model,notes,source_url
+ircot,2024,ICLR,hotpotqa,68.0,76.2,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+ircot,2024,ICLR,2wikimultihop,65.0,73.8,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+react,2023,ICLR,hotpotqa,64.0,73.5,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+react,2023,ICLR,2wikimultihop,63.0,72.1,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+planrag,2024,NeurIPS,hotpotqa,60.0,70.5,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline (30 timeout failures),runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+planrag,2024,NeurIPS,2wikimultihop,62.0,71.8,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+srag,2024,ACL,hotpotqa,66.0,75.0,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+srag,2024,ACL,2wikimultihop,64.0,73.2,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+graphrag,2024,ICLR,hotpotqa,62.0,71.5,false,4_steps/qwen3.6-27b,qwen3.6-27b,simplified implementation,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+graphrag,2024,ICLR,2wikimultihop,60.0,70.0,false,4_steps/qwen3.6-27b,qwen3.6-27b,simplified implementation,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+hybrid,2024,EMNLP,hotpotqa,67.0,75.5,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
+hybrid,2024,EMNLP,2wikimultihop,66.0,74.8,false,4_steps/qwen3.6-27b,qwen3.6-27b,adapted baseline,runs/vldb2027-submission-qwen36-v3-rescored-v2-final
