@@ -16,7 +16,7 @@ import signal
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +176,25 @@ def load_shared_index(dataset, index_stage, cfg, *, reranker_client=None, rerank
     index = SCI(retriever, manifest, manifest_path=manifest_path)
     index.build_index()
     print(f"  Index ready in {time.time() - t0:.1f}s", flush=True)
+
+    # === Release transient structures no longer needed after vector wiring ===
+    # These hold large dicts/lists (hash_to_row ~484k entries, the '.npy' mmap
+    # handle, the raw hashed-row list). Freeing them shrinks the working set so
+    # the 10GB cap has headroom for the concurrent workers.
+    del vectors_2d, hash_keys, hash_to_row, vectors
+    # dummy_client (local EmbeddingClient) is superseded by cfg-based clients in
+    # each worker; its embedded httpx handle would keep a socket + buffer held.
+    for attr in ("_client", "client"):
+        if hasattr(dummy_client, attr):
+            c = getattr(dummy_client, attr)
+            if hasattr(c, "close"):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+    del dummy_client
+    gc.collect()
+    print(f"  [index] transient freed -> RSS={_rss_gb():.1f}GB", flush=True)
     return index
 
 
@@ -194,6 +213,10 @@ def process_question(method, dataset, question, cfg, index, output_dir, stage_na
                 return existing
         except Exception:
             pass
+
+    # Memory gate is handled by the process_dataset sliding window: it stops
+    # submitting new items whenever RSS crosses the soft/cap threshold, so a
+    # worker only ever starts while the process is known to be under budget.
 
     from slotrag.providers import AgnesClient
     import httpx
@@ -253,6 +276,29 @@ def save_checkpoint(checkpoint_file: Path, completed_ids: set[str], stats: dict)
     }, ensure_ascii=False, indent=2))
 
 
+# === Memory safety configuration ===
+# User requirement: hard cap at 10GB process RSS, always auto-release before OOM.
+#
+# Measured footprint (hotpotqa index): index base 4.5GB, one retrieval peaks
+# at ~+1.8GB (dense scoring + result objects), and RSS does NOT return to the
+# base after the call (glibc malloc keeps the arena). So with N concurrent
+# workers the realistic ceiling is roughly  base + N * 1.8GB.
+#   10GB cap  ->  N <= 3  is safe (4.5 + 3*1.8 = 9.9GB)
+# The window will cap out around 3 workers; anything more OOMs the box.
+MEMORY_CAP_GB = 10.0          # hard ceiling — force-gc when crossed
+MEMORY_SOFT_GB = 7.0          # soft threshold — window shrinks + gc
+# Window parameters derived from the measured per-worker footprint.
+WINDOW_MAX_WORKERS = 3        # hard ceiling for in-flight work (not 32!)
+WINDOW_LAUNCH = 2             # conservative start
+WINDOW_FLOOR = 2              # never go below this many in flight
+WINDOW_GROWTH_STEP = 1        # grow by one worker per sustained-health tick
+
+# Shared throttle flag: the monitor thread sets this when RSS is critical so
+# the process_dataset window loop stops topping up even while it's blocked in
+# wait(FIRST_COMPLETED). Reset once RSS recovers.
+_mem_throttle_evt = threading.Event()
+
+
 def memory_report(tag: str = ""):
     """Log current RSS to stderr every call. Returns RSS in GB."""
     try:
@@ -261,35 +307,94 @@ def memory_report(tag: str = ""):
                 if line.startswith("VmRSS:"):
                     rss_kb = int(line.split()[1])
                     rss_gb = rss_kb / 1024 / 1024
-                    print(f"[MEM {tag}] RSS={rss_gb:.1f}GB", flush=True)
+                    if tag:
+                        print(f"[MEM {tag}] RSS={rss_gb:.1f}GB (cap {MEMORY_CAP_GB:.0f}GB)", flush=True)
                     return rss_gb
     except Exception:
         pass
     return 0.0
 
 
+def _rss_gb():
+    """Read current RSS without logging spam."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024 / 1024
+    except Exception:
+        pass
+    return 0.0
+
+
+def auto_release(force: bool = False):
+    """Heal memory pressure: run gc, drop caches that Python can free.
+
+    Called from the monitor thread when RSS crosses thresholds. `force`
+    skips the soft-threshold check and always gc's (used before launching
+    a new dataset, and when over the hard cap).
+    """
+    if force:
+        released = gc.collect()
+        print(f"  [auto_release] forced gc: {released} objects collected -> RSS={_rss_gb():.1f}GB", flush=True)
+        return
+    if _rss_gb() >= MEMORY_SOFT_GB:
+        released = gc.collect()
+        returned_to_os = _rss_gb()
+        print(f"  [auto_release] soft-threshold gc: {released} objects -> RSS={returned_to_os:.1f}GB", flush=True)
+
+
+def _monitor_memory_loop(stop_evt):
+    """Background thread: telemetry + sets the throttle flag for the window.
+
+    When RSS crosses the soft/cap thresholds it forces a gc AND sets
+    `_mem_throttle_evt` so the process_dataset loop immediately stops topping
+    up new work even while it is blocked inside wait(FIRST_COMPLETED). The flag
+    is cleared only after RSS drops back below the soft threshold.
+    """
+    import time as _time
+    while not stop_evt.is_set():
+        rss = _rss_gb()
+        if rss >= MEMORY_CAP_GB:
+            print(f"  [MONITOR] WARNING RSS={rss:.1f}GB at/{MEMORY_CAP_GB:.0f}GB cap — throttle+release", flush=True)
+            _mem_throttle_evt.set()
+            auto_release(force=True)
+        elif rss >= MEMORY_SOFT_GB:
+            if not _mem_throttle_evt.is_set():
+                print(f"  [MONITOR] RSS={rss:.1f}GB at/{MEMORY_SOFT_GB:.0f}GB soft — throttle+gc", flush=True)
+            _mem_throttle_evt.set()
+            auto_release()
+        else:
+            if _mem_throttle_evt.is_set():
+                print(f"  [MONITOR] RSS={rss:.1f}GB recovered below soft — unthrottle", flush=True)
+            _mem_throttle_evt.clear()
+            if rss >= MEMORY_CAP_GB * 0.5:
+                # below soft but still worth an occasional log
+                print(f"  [MONITOR] RSS={rss:.1f}GB", flush=True)
+        stop_evt.wait(15.0)
+
+
 def free_index(index):
-    """Explicitly free a shared index to release memory."""
+    """Explicitly free a shared index to release memory (incl. mmap-backed vecs)."""
     if index is None:
         return
     try:
         # Release retriever's passage references
         if hasattr(index, "_retriever") and index._retriever:
             ret = index._retriever
-            if hasattr(ret, "_passage_vectors"):
-                ret._passage_vectors = None
-            if hasattr(ret, "_passages"):
-                ret._passages = None
-            if hasattr(ret, "passages_list"):
-                ret.passages_list = None
+            for attr in ("_passage_vectors", "_passages", "passages_list"):
+                if hasattr(ret, attr):
+                    setattr(ret, attr, None)
         # Release the index's own references
-        if hasattr(index, "_index"):
-            index._index = None
-        if hasattr(index, "index"):
-            index.index = None
+        for attr in ("_index", "index", "_retriever"):
+            if hasattr(index, attr):
+                setattr(index, attr, None)
     except Exception:
         pass
     gc.collect()
+    # Second pass with loopback ref clearing coverage
+    gc.collect()
+    print(f"  [free_index] done -> RSS={_rss_gb():.1f}GB", flush=True)
 
 
 def process_dataset(dataset, method, questions, cfg, index, output_dir, stage_name, seed,
@@ -305,93 +410,153 @@ def process_dataset(dataset, method, questions, cfg, index, output_dir, stage_na
 
     print(f"  {dataset}: {len(items)} pending / {len(questions)} total", flush=True)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {}
-        for m, d, q, idx in items:
-            future = executor.submit(process_question, m, d, q, cfg, idx,
-                                     output_dir, stage_name, seed)
-            futures[future] = (m, d, q)
+    # Memory-aware sliding window. We never submit all items at once: a bounded
+    # in-flight set grows toward WINDOW_MAX_WORKERS when RSS is low and shrinks
+    # toward WINDOW_FLOOR when RSS climbs, so the process stays under the hard
+    # cap. Measured per-worker peak is ~1.8GB, so at a 4.5GB index base the
+    # safe concurrency is 3 (not 32) regardless of pool size.
+    window_max = min(max_workers, WINDOW_LAUNCH)
+    window_floor = WINDOW_FLOOR
+    pending_iter = iter(items)
+    in_flight = {}                     # future -> (method, dataset, question)
+    exhausted = False
+    healthy_ticks = 0                  # consecutive below-soft RSS readings
 
-        for future in as_completed(futures):
+    def _submit_one():
+        nonlocal exhausted
+        try:
+            m, d, q, idx = next(pending_iter)
+        except StopIteration:
+            exhausted = True
+            return
+        fut = executor.submit(process_question, m, d, q, cfg, idx,
+                              output_dir, stage_name, seed)
+        in_flight[fut] = (m, d, q)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Seed a conservative window (WINDOW_LAUNCH) to avoid an initial RSS spike.
+        for _ in range(window_max):
+            _submit_one()
+
+        while in_flight or not exhausted:
             if _shutdown_requested:
                 print(f"\nShutdown requested, saving checkpoint...", flush=True)
                 save_checkpoint(checkpoint_file, completed_ids, stats)
                 return completed_count
 
-            method_name, ds, question = futures[future]
-            try:
-                record = future.result()
-                completed_count += 1
-                stats["total"] += 1
-                rss_gb = memory_report()
-                if record.get("result", {}).get("status") == "ok":
-                    stats["ok"] += 1
-                    em = record.get("scores", {}).get("em", 0) or 0
-                    f1 = record.get("scores", {}).get("f1", 0) or 0
-                    print(f"[{completed_count}/{total_all}] {ds}/{method_name}: OK (EM={em:.2%}, F1={f1:.2%}) RAM={rss_gb:.1f}GB", flush=True)
-                else:
+            # If throttled but no work in flight, wait for unthrottle before
+            # blocking on wait() below (avoids busy-spin on empty in_flight).
+            while (not exhausted and not in_flight
+                   and _mem_throttle_evt.is_set() and not _shutdown_requested):
+                time.sleep(1.0)
+
+            if not in_flight:
+                # All pending drained to empty and either exhausted or
+                # unthrottled: top up before waiting.
+                while not exhausted and len(in_flight) < window_max:
+                    _submit_one()
+                if not in_flight:
+                    continue
+
+            done, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                method_name, ds, question = in_flight.pop(future)
+                try:
+                    record = future.result()
+                    completed_count += 1
+                    stats["total"] += 1
+                    rss_gb = memory_report()
+                    if record.get("result", {}).get("status") == "ok":
+                        stats["ok"] += 1
+                        em = record.get("scores", {}).get("em", 0) or 0
+                        f1 = record.get("scores", {}).get("f1", 0) or 0
+                        print(f"[{completed_count}/{total_all}] {ds}/{method_name}: OK (EM={em:.2%}, F1={f1:.2%}) RAM={rss_gb:.1f}GB", flush=True)
+                    else:
+                        stats["failed"] += 1
+                        err = record.get("result", {}).get("error", "")
+                        print(f"[{completed_count}/{total_all}] {ds}/{method_name}: FAILED: {err} RAM={rss_gb:.1f}GB", flush=True)
+                    key = f"{ds}/{method_name}"
+                    ms = stats["by_method"].setdefault(key, {"ok": 0, "failed": 0, "total": 0})
+                    ms["total"] += 1
+                    if record.get("result", {}).get("status") == "ok":
+                        ms["ok"] += 1
+                    else:
+                        ms["failed"] += 1
+                    completed_ids.add(question.id)
+                    append_progress(progress_file, {
+                        "id": question.id, "dataset": ds, "method": method_name,
+                        "status": record.get("result", {}).get("status"),
+                        "em": record.get("scores", {}).get("em"),
+                        "f1": record.get("scores", {}).get("f1"),
+                    })
+
+                    # Intermediate checkpoint + progress summary every 50 items
+                    if completed_count % 50 == 0:
+                        save_checkpoint(checkpoint_file, completed_ids, stats)
+                        elapsed_h = (time.time() - start_time) / 3600
+                        rate = completed_count / max(time.time() - start_time, 1) * 3600
+                        eta_h = (total_all - completed_count) / rate if rate > 0 else 0
+
+                        # Running stats per dataset
+                        by_ds = Counter()
+                        by_ds_ok = Counter()
+                        ds_ems = {}; ds_f1s = {}
+                        if progress_file.exists():
+                            for line in progress_file.read_text().strip().split("\n"):
+                                if not line: continue
+                                e = json.loads(line)
+                                d = e["dataset"]
+                                by_ds[d] += 1
+                                if e.get("status") == "ok":
+                                    by_ds_ok[d] += 1
+                                    ds_ems.setdefault(d, []).append(e.get("em", 0) or 0)
+                                    ds_f1s.setdefault(d, []).append(e.get("f1", 0) or 0)
+                        print(f"\n{'─' * 50}", flush=True)
+                        print(f"  Elapsed: {elapsed_h:.1f}h | Rate: {rate:.0f}/hr | ETA: {eta_h:.1f}h", flush=True)
+                        for d in ["hotpotqa", "2wikimultihop"]:
+                            n_ok = by_ds_ok.get(d, 0)
+                            n_total = by_ds.get(d, 0)
+                            em_avg = sum(ds_ems.get(d, [0])) / n_ok * 100 if n_ok else 0
+                            f1_avg = sum(ds_f1s.get(d, [0])) / n_ok * 100 if n_ok else 0
+                            print(f"  {d:20s} ok={n_ok:4d}/{n_total:4d} EM={em_avg:6.2f}% F1={f1_avg:6.2f}%", flush=True)
+                        print(f"{'─' * 50}\n", flush=True)
+                except Exception as e:
+                    completed_count += 1
+                    stats["total"] += 1
                     stats["failed"] += 1
-                    err = record.get("result", {}).get("error", "")
-                    print(f"[{completed_count}/{total_all}] {ds}/{method_name}: FAILED: {err} RAM={rss_gb:.1f}GB", flush=True)
-                key = f"{ds}/{method_name}"
-                ms = stats["by_method"].setdefault(key, {"ok": 0, "failed": 0, "total": 0})
-                ms["total"] += 1
-                if record.get("result", {}).get("status") == "ok":
-                    ms["ok"] += 1
+                    print(f"[{completed_count}/{total_all}] {ds}/{method_name}: EXCEPTION: {type(e).__name__}: {e}", flush=True)
+
+                # === Memory-aware window resize ===
+                rss_now = _rss_gb()
+                if rss_now >= MEMORY_CAP_GB:
+                    auto_release(force=True)
+                    window_max = window_floor
+                    healthy_ticks = 0
+                    print(f"  [window] RSS={rss_now:.1f}GB >= cap {MEMORY_CAP_GB:.0f}GB -> shrink to {window_floor}, hold", flush=True)
+                elif rss_now >= MEMORY_SOFT_GB:
+                    window_max = window_floor
+                    healthy_ticks = 0
+                    auto_release()
+                    print(f"  [window] RSS={rss_now:.1f}GB >= soft {MEMORY_SOFT_GB:.0f}GB -> shrink to {window_floor}", flush=True)
                 else:
-                    ms["failed"] += 1
-                completed_ids.add(question.id)
-                append_progress(progress_file, {
-                    "id": question.id, "dataset": ds, "method": method_name,
-                    "status": record.get("result", {}).get("status"),
-                    "em": record.get("scores", {}).get("em"),
-                    "f1": record.get("scores", {}).get("f1"),
-                })
+                    # Below soft: count consecutive healthy completions; grow
+                    # only after sustained health (hysteresis avoids oscillation).
+                    healthy_ticks += 1
+                    if healthy_ticks >= 4 and window_max < WINDOW_MAX_WORKERS:
+                        window_max = min(WINDOW_MAX_WORKERS, window_max + WINDOW_GROWTH_STEP)
+                        healthy_ticks = 0
+                        print(f"  [window] RSS={rss_now:.1f}GB healthy -> grow to {window_max}", flush=True)
 
-                # Checkpoint + progress summary every 50 items
-                if completed_count % 50 == 0:
-                    save_checkpoint(checkpoint_file, completed_ids, stats)
-                    elapsed_h = (time.time() - start_time) / 3600
-                    rate = completed_count / max(time.time() - start_time, 1) * 3600
-                    eta_h = (total_all - completed_count) / rate if rate > 0 else 0
+                # Top up window up to current cap, but only if the monitor
+                # hasn't throttled us (i.e. RSS just peaked while we were
+                # blocked in wait(FIRST_COMPLETED)).
+                while (not exhausted
+                       and len(in_flight) < window_max
+                       and not _mem_throttle_evt.is_set()):
+                    _submit_one()
 
-                    # Running stats per dataset
-                    by_ds = Counter()
-                    by_ds_ok = Counter()
-                    ds_ems = {}; ds_f1s = {}
-                    if progress_file.exists():
-                        for line in progress_file.read_text().strip().split("\n"):
-                            if not line: continue
-                            e = json.loads(line)
-                            d = e["dataset"]
-                            by_ds[d] += 1
-                            if e.get("status") == "ok":
-                                by_ds_ok[d] += 1
-                                ds_ems.setdefault(d, []).append(e.get("em", 0) or 0)
-                                ds_f1s.setdefault(d, []).append(e.get("f1", 0) or 0)
-                    print(f"\n{'─' * 50}", flush=True)
-                    print(f"  Elapsed: {elapsed_h:.1f}h | Rate: {rate:.0f}/hr | ETA: {eta_h:.1f}h", flush=True)
-                    for d in ["hotpotqa", "2wikimultihop"]:
-                        n_ok = by_ds_ok.get(d, 0)
-                        n_total = by_ds.get(d, 0)
-                        em_avg = sum(ds_ems.get(d, [0])) / n_ok * 100 if n_ok else 0
-                        f1_avg = sum(ds_f1s.get(d, [0])) / n_ok * 100 if n_ok else 0
-                        print(f"  {d:20s} ok={n_ok:4d}/{n_total:4d} EM={em_avg:6.2f}% F1={f1_avg:6.2f}%", flush=True)
-                    print(f"{'─' * 50}\n", flush=True)
-
-                    # Memory safety: if RSS > 100GB, pause and gc
-                    current_rss = memory_report("safety")
-                    if current_rss > 100:
-                        print(f"  WARNING: RSS={current_rss:.0f}GB > 100GB, running gc...", flush=True)
-                        gc.collect()
-                        memory_report("after_gc")
-
-            except Exception as e:
-                completed_count += 1
-                stats["total"] += 1
-                stats["failed"] += 1
-                print(f"[{completed_count}/{total_all}] {ds}/{method_name}: EXCEPTION: {type(e).__name__}: {e}", flush=True)
-
+    if completed_count % 50 == 0:
+        save_checkpoint(checkpoint_file, completed_ids, stats)
     return completed_count
 
 
@@ -421,11 +586,20 @@ def main():
     stats = {"total": len(completed_ids), "ok": len(completed_ids), "failed": 0, "by_method": {}}
 
     total_all = sample_size * len(datasets) * len(methods)
-    max_workers = 32
+    # ThreadPoolExecutor capacity. The memory window caps actual in-flight work
+    # at WINDOW_MAX_WORKERS (3) regardless — this is just pool sizing, not the
+    # concurrency limit. Sized to the window so we don't allocate 32 thread
+    # stacks (~8MB each) that will never be used under the 10GB cap.
+    max_workers = WINDOW_MAX_WORKERS
     start_time = time.time()
 
     print(f"Total items: {total_all}, Already completed: {len(completed_ids)}", flush=True)
     memory_report("start")
+
+    # Background RSS monitor: periodic gc + telemetry.
+    _mem_stop = threading.Event()
+    _mem_thread = threading.Thread(target=_monitor_memory_loop, args=(_mem_stop,), daemon=True)
+    _mem_thread.start()
 
     reranker_client, reranker_http = build_reranker_client(cfg)
 
@@ -477,6 +651,8 @@ def main():
         # Final save
         save_checkpoint(checkpoint_file, completed_ids, stats)
         reranker_http.close()
+        _mem_stop.set()
+        _mem_thread.join(timeout=2.0)
 
     elapsed_h = (time.time() - start_time) / 3600
 
