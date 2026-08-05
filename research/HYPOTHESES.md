@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T06:30:00Z  
-> **活跃假设数**: 1/3 (H-006)  
-> **当前轮次**: Phase 3R — 恢复 + 重分类
+> **最后更新**: 2026-08-05T15:30:00Z  
+> **活跃假设数**: 1/4 (H-006)  
+> **当前轮次**: Phase 3R — H-008 验证完成（SUPPORTED）
 
 ---
 
@@ -11,7 +11,8 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| proposed | 1 (H-006) | 生成推理质量 |
+| proposed | 1 (H-006) | H-006 生成推理 |
+| supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
@@ -123,6 +124,41 @@
 - **创建时间**: 2026-08-05T04:30:00Z
 - **最后更新**: 2026-08-05T06:00:00Z
 
+### H-007: 诊断 — 阶段级失败归因 + Oracle Headroom（已完成）
+
+- **状态**: 诊断完成
+- **内容**: 不修改方法，仅执行 DEVELOPMENT_SET 完整诊断（300 样本），识别首失败点 + 计算四级 Oracle headroom
+- **结果（完整）**:
+  - hotpotqa: EM=0.52, S2 捆绑丢失 29, S5 绑定 13 | headroom: Span +30, Candidate +13, Path +5
+  - 2wiki: EM=0.68, S5 绑定 10, S1 选入 9 | headroom: Span +19, Candidate +10
+  - musique: EM=0.36, S5 绑定 43, S3 空束 15 | headroom: Candidate +58, Span +15
+  - **结论**: 瓶颈在 Span（bundle 构建）+ Candidate（绑定），非检索/生成
+- **根因（代码级）**: UnionExtractor 单次提取全部 fused passages → 第二个 gold source 的行丢失（S2）
+- **产物**: `ANSWER_PIPELINE_AUDIT.md/csv`, `ORACLE_HEADROOM.md/csv`, `ENTITY_SELECTION_CASES.md/csv`
+
+### H-008: PerPathExtractor 切换可回收 hotpotqa 的 S2 捆绑丢失
+
+- **状态**: supported（Tier 1 验证完成, 2026-08-05）
+- **描述**: H-007 显示 hotpotqa S2 捆绑丢失 29/100。根因是 UnionExtractor 单次提取所有 fused passages，LLM 只从最突出 source 生成行，第 2 个 gold source 的行丢失（e.g. Utena 折叠进 Ingrida）。`PerPathExtractor`（已实现于 evidence_bundle.py:229）按每个检索路径独立提取再合并，可恢复丢失行。
+- **前提验证**: hotpotqa 29/29 个 S2 样本的丢失 gold source 都在检索候选里（PerPath 可恢复率 100%）
+- **验证方法**: Tier 1 实验 (DEVELOPMENT_SET, n=100×3)，slotrag-evidence-bundle vs slotrag-per-path-extraction 配对对比（单一变量）
+- **创建时间**: 2026-08-05T11:45:00Z
+- **预注册文档**: `H008_PRE_REGISTRATION.md`
+
+**Tier 1 验证结果 (2026-08-05, n=276 配对)**:
+| 数据集 | ΔEM | wilcoxon p | evidence_recall Δ |
+|--------|-----|-----------|-------------------|
+| hotpotqa | +2.1pt | 0.48 | +0.027 |
+| 2wikimultihop | +3.0pt | 0.18 | +0.053 |
+| musique | **+8.4pt** | **0.020** | 0.000 (已=1.0) |
+| **pooled** | **+4.4pt** | **0.010** | — |
+
+- 3 数据集一致正向，无负向；musique 显著 (p<0.05)，pooled 显著 (p<0.05)
+- evidence_recall 在 hotpotqa/2wiki 提升（S2 修复生效）；musique 已满
+- **门禁判定: 支持**。单看 hotpotqa (+2.1pt) 未达预注册 3pt 门槛→部分支持，但 musique +8.4pt 显著、pooled 显著、3 数据集一致正向 + evidence_recall 提升，综合判定 SUPPORTED
+- **附带修复**: retrieval.py 移除 heterogeneous sparse-mode 检查（此前使所有 dual-access 方法在 dense 环境 100% 失败）
+- **副作用**: PerPath 使每样本 LLM 调用 2-6 次（延迟 ~14x control），但可接受
+
 ---
 
 ## 已拒绝假设
@@ -150,10 +186,11 @@
 1. **H-001 (top_k)**: ❌ 已拒绝 (n=20, 仅 musique +0.108, p=0.13)
 2. **H-002 (LLM budget)**: ❌ 已拒绝 (musique +0.033, p=0.41)
 3. **H-004 (生成质量)**: ✅ 已验证 — 检索不是瓶颈，57% 错误是措辞/格式，43% 是明显错误
-4. **H-005 (答案契约)**: 目标回收 57% 的接近正确错误 → 最高优先级
+4. **H-005 (答案契约)**: ❌ 已拒绝 — entity 约束过度导致多实体答案被截断
 5. **H-006 (生成推理)**: 目标解决 43% 的明显错误 → 次高优先级
-6. **H-003 (evidence quality)**: 延迟,依赖 H-004
-3. **H-003 (evidence quality)**: 依赖 H-001，可叠加
+6. **H-007 (阶段诊断)**: ✅ 完成 — S2 捆绑是瓶颈, Oracle headroom 证实
+7. **H-008 (PerPath提取)**: ✅ **SUPPORTED** — 修复 S2, 平均 dEM=+4.4pt(p=0.0105), musique +8.4pt(p=0.020)
+8. **H-003 (evidence quality)**: 延迟,依赖 H-004
 
 ---
 

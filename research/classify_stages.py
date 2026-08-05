@@ -125,6 +125,11 @@ def classify_one(item: dict, sample: dict) -> dict:
             selected_ids.update(sel)
     evidence_ids = set(e.get("source_id", "") for e in evidence if e.get("source_id"))
     selected_ids |= evidence_ids
+    # Evidence-bundle path (evidence_bundle=True) records retrieval candidates in
+    # evidence_inventory.available_evidence_ids instead of materialization.searches
+    # (which is empty for _extract_via_bundle). Fall back to it when searches are absent.
+    if not candidate_pool and avail_ids:
+        candidate_pool = set(avail_ids)
 
     # ---- S0: gold source never in any retrieval candidate ----
     gold_not_candidate = [g for g in gold_ids if g not in candidate_pool]
@@ -174,6 +179,13 @@ def classify_one(item: dict, sample: dict) -> dict:
                 b = er.get("bindings") or {}
                 trace_row_bindings.append(b)
                 trace_bindings.extend(_safe_binding_values(b))
+    # Evidence-bundle path stores extracted rows in result.rows[].bindings instead of
+    # materialization.extracted_rows (which is empty for _extract_via_bundle).
+    # Include them so S5/S6/S8 checks work on bundle data.
+    for row in rows or []:
+        b = row.get("bindings") or {}
+        trace_row_bindings.append(b)
+        trace_bindings.extend(_safe_binding_values(b))
 
     # ---- S5: gold answer core missing from extracted bindings ----
     gold_tokens = set(_norm(gold_str).split())

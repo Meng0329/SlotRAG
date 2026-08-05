@@ -567,10 +567,9 @@ class HybridRetriever:
         if not queries:
             return []
         if self.dense_enabled or (self.rerank_enabled and self.reranker_client):
-            if any(mode != "configured" for mode in modes):
-                raise ValueError(
-                    "heterogeneous sparse access modes require sparse-only retrieval"
-                )
+            # Sparse access modes only affect the batched inverted-index scan below;
+            # in the dense/rerank fallback each query runs a full search and the
+            # mode is recorded for trace purposes only, so heterogeneous modes are safe.
             return [self.search(query, top_k=top_k) for query in queries]
         if not self.passages or self._bm25 is None:
             return [[] for _query in queries]
