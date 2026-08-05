@@ -49,7 +49,7 @@
 - [x] 最强 baseline 确定 (ircot/graphrag/planrag/hybrid)
 - [x] drop 主指标改为 drop_f1 (EM 对所有方法无效)
 
-### Phase 3: 假设循环 🔄 进行中
+### Phase 3: 假设循环 ⏸️ 已暂停
 - [x] 深度失败诊断完成
   - **strategyqa EM=0.08 是格式假象**：用 primary_score (accuracy) 实际 0.84
   - **drop EM 无效**：已用 drop_f1 (0.62)
@@ -60,8 +60,9 @@
 - [x] 采样一致性 bug 修复 (generate_sealed_samples.py)
 - [x] **Tier 1 实验完成**: H-001 rejected (p=0.13), H-002 rejected (p=0.41)
 - [x] H-004 validated (生成质量是瓶颈)
-- [ ] H-005 (答案契约) 待验证 — 需改核心生成代码
-- [ ] H-006 (生成推理) 待验证 — 需改核心生成代码
+- [x] H-005 rejected (entity contract, -0.02~-0.05)
+- [x] **3 连续假设拒绝 → STOP_REPORT 触发**
+- [ ] **已暂停，等待用户选择重新规划方向 (A-E)**
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动
