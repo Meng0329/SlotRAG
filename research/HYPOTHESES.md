@@ -270,3 +270,31 @@
 
 *本文件由 hypothesis-generator agent 维护。*  
 *下一轮验证: Phase 3 Tier 1 实验后更新。*
+
+---
+
+### H-013: per-path 提取在 2wiki 上负效果（S1 空提取/污染导致 join 断链）——待设计
+
+- **状态**: proposed（2026-08-06）
+- **根因证据**（H-012 Tier 2 分析）:
+  1. 2wiki 叠加方法 F1=0.629 vs baseline 0.78-0.79（**-16pt**）
+  2. 28/100 样本 F1=0，其中 **27/28 join_output_rows=0**（96%）
+  3. 手动复现：per-path 提取时 Dell Henderson#0 空 rows、Dana Blankstein#0 提取错误实体；union 提取（1 次看全部）正确提取 Dell Henderson
+  4. Tier 1 (n=20) 叠加 0.776 >> 单维度 0.59，但 Tier 2 (n=100) 叠加 0.629——**Tier 1 是幸运样本，冒烟测试陷阱**
+- **机制**: per-path 每 passage 独立提取，2wiki 需跨 passage 推理时产生空提取/无关实体，污染 S1 绑定 → join 断链
+- **候选修复**: 
+  a) 2wiki 上回退 union 提取（关系过滤后合并）
+  b) per-path 提取后做关系过滤（只保留与问题相关的实体）
+  c) 条件化：复杂多跳数据集禁用 per-path
+- **风险**: per-path 在 musique/strategyqa 上正效果（那些数据集 WIN），全局移除会丢收益
+- **待验证**: 需在 2wiki 上对比 union vs per-path 的 S1 提取质量
+
+---
+
+### H-013 验证结果 (2026-08-06, Tier 1 n=20, 2wiki)
+
+**union vs per-path 配对**: wins=1 losses=2 ties=17, mean_diff=-0.021, p=0.786
+- **结论: 否定简单回退方向**。union 提取在 2wiki 上不优于 per-path（甚至略差）。
+- 2wiki 的 join 断链不是"per-path 提取"的锅——union 同样无法从跨 passage 推理提取中间变量。
+- **真实根因**: 2wiki 的跨 passage 推理本质困难。S1 需要的中间实体（如 director）需从多 passage 交叉推理，单点提取器（无论 union/per-path）都无法可靠解决。
+- **方向修正**: H-013 需转向架构级方案（如多 hop 迭代重检索、evidence 链推理），而非提取器切换。
