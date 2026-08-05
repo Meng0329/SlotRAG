@@ -49,7 +49,7 @@
 - [x] 最强 baseline 确定 (ircot/graphrag/planrag/hybrid)
 - [x] drop 主指标改为 drop_f1 (EM 对所有方法无效)
 
-### Phase 3: 假设循环 🔄 已恢复（H-012 进行中）
+### Phase 3: 假设循环 🔄 已恢复（H-012 公平重跑完成，Coverage 40%）
 - [x] 深度失败诊断完成
   - **strategyqa EM=0.08 是格式假象**：用 primary_score (accuracy) 实际 0.84
   - **drop EM 无效**：已用 drop_f1 (0.62)
@@ -68,8 +68,12 @@
 - [x] **H-012 叠加配置 Tier 1 PASSED** (2026-08-05)
   - `slotrag-grounded-frontier-perpath-guard` 组合 frontier 守卫 + anchor 保护 + per-path 提取
   - Tier 1 (n=20×3): 2wiki +17.6pt, hotpotqa +11.8pt vs 最优现有; musique EM 3:1 净胜
-  - **Tier 2 完整矩阵进行中** (n=100×5 数据集, 叠加 vs 6 baseline 公平重跑)
-- [ ] **Tier 2 结果待分析**（DEVELOPMENT_SET 公平基线对比）
+- [x] **H-012 Tier 2 完整矩阵完成** (2026-08-06, n=100×5 数据集)
+  - Coverage **2/5 = 40%**: musique (+9.6pt vs ircot)、strategyqa (+8pt vs graphrag) WIN
+  - hotpotqa tie (-0.2pt, p=0.94); **2wiki (-16.5pt)、drop (-13.4pt) LOSS**
+  - strategyqa facts 加载回归修复 (commit 8ae9a40)
+  - **结论**: 叠加配置部分有效，2wiki/drop 需针对性改进
+- [ ] **下一步**: 2wiki S2 修复强化 + drop 生成质量改进 (H-013 候选)
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动

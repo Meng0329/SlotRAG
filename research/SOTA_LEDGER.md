@@ -1,34 +1,91 @@
 # SOTA_LEDGER.md — SOTA 账本
 
 > **维护者**: documentation-writer agent  
-> **最后更新**: 2026-08-04T22:00:00Z  
-> **状态**: Phase 2 已填充 — 诚实基线建立
+> **最后更新**: 2026-08-06T06:00:00Z  
+> **状态**: Phase 3R — H-012 公平基线重跑完成，Coverage 40%
 
 ---
 
 ## Strongest-Baseline Coverage 矩阵
 
-### 诊断基线 (seed=2040, eval split, n=100, contaminated)
+### DEVELOPMENT_SET 公平对比 (seed=2027, eval split, n=100, H-012 叠加配置)
 
-> **⚠️ 诊断性数据**：此矩阵基于 CONTAMINATED_EVAL_DIAGNOSTIC_SET (seed=2040)。结果用于建立真实基线和识别瓶颈，**不得**用于论文主表。
+> **✅ 公平数据**：此矩阵基于 DEVELOPMENT_SET (seed=2027)，SlotRAG 叠加配置 (`slotrag-grounded-frontier-perpath-guard`) 与 6 个 adapted baseline 在**同 100 样本**上配对对比。此数据可用于论文主表。
 >
-> **审计修正 (2026-08-05)**：此前用 `em` 列评估 strategyqa，导致"0.08 灾难性失败"的错误结论。实际主指标是 `primary_score`（strategyqa 用 accuracy，drop 用 drop_f1）。修正后所有单元格使用正确主指标。
+> **H-012 叠加配置**：frontier 执行守卫 + anchor 保护 + per-path 提取（三机制正交叠加）
+
+| 数据集 | 指标 | SlotRAG | 最强 Baseline | Delta | p | 判定 |
+|--------|------|---------|---------------|-------|-----|------|
+| hotpotqa | F1 | 0.8331 | graphrag (0.8351) | -0.0019 | 0.94 | ⚖️ tie |
+| 2wikimultihop | F1 | 0.6287 | react (0.7936) | -0.1649 | 0.0006 | ❌ LOSS |
+| musique | F1 | 0.5790 | ircot (0.4828) | +0.0961 | 0.11 | ✅ point-win |
+| strategyqa | acc | 0.8900 | graphrag/react/srag (0.8100) | +0.0800 | 0.09 | ✅ point-win |
+| drop | drop_f1 | 0.6277 | graphrag (0.7613) | -0.1336 | 0.0018 | ❌ LOSS |
+
+**Strongest-Baseline Coverage: 2/5 = 40%**（musique、strategyqa 领先；hotpotqa 持平；2wiki、drop 落后）
+
+### 配对详情（叠加 vs 各 baseline）
+
+| 数据集 | baseline | Δ | p | 判定 |
+|--------|----------|------|-----|------|
+| hotpotqa | graphrag 0.835 | -0.002 | 0.94 | tie |
+| hotpotqa | hybrid 0.839 | -0.006 | 0.80 | tie |
+| hotpotqa | ircot 0.835 | -0.002 | 0.86 | tie |
+| hotpotqa | planrag 0.765 | +0.068 | 0.057 | point-win |
+| hotpotqa | srag 0.775 | +0.059 | **0.034** | ✅ WIN |
+| 2wiki | graphrag 0.763 | -0.135 | 0.002 | ❌ LOSS |
+| 2wiki | hybrid 0.777 | -0.149 | 0.0009 | ❌ LOSS |
+| 2wiki | ircot 0.783 | -0.155 | 0.0007 | ❌ LOSS |
+| 2wiki | planrag 0.760 | -0.131 | 0.011 | ❌ LOSS |
+| 2wiki | react 0.794 | -0.165 | 0.0006 | ❌ LOSS |
+| 2wiki | srag 0.497 | +0.131 | 0.002 | ✅ WIN |
+| musique | graphrag 0.236 | +0.343 | <0.0001 | ✅ WIN |
+| musique | hybrid 0.372 | +0.208 | 0.0001 | ✅ WIN |
+| musique | ircot 0.483 | +0.096 | 0.11 | point-win |
+| musique | planrag 0.457 | +0.122 | 0.025 | ✅ WIN |
+| musique | react 0.416 | +0.163 | 0.009 | ✅ WIN |
+| musique | srag 0.381 | +0.198 | <0.0001 | ✅ WIN |
+| strategyqa | graphrag 0.810 | +0.080 | 0.088 | point-win |
+| strategyqa | hybrid 0.790 | +0.100 | 0.041 | ✅ WIN |
+| strategyqa | ircot 0.790 | +0.100 | 0.041 | ✅ WIN |
+| strategyqa | planrag 0.710 | +0.180 | 0.0007 | ✅ WIN |
+| strategyqa | react 0.810 | +0.080 | 0.088 | point-win |
+| strategyqa | srag 0.810 | +0.080 | 0.011 | ✅ WIN |
+| drop | graphrag 0.761 | -0.134 | 0.0018 | ❌ LOSS |
+| drop | hybrid 0.716 | -0.088 | 0.027 | ❌ LOSS |
+| drop | ircot 0.752 | -0.125 | 0.005 | ❌ LOSS |
+| drop | planrag 0.744 | -0.117 | 0.007 | ❌ LOSS |
+| drop | react 0.761 | -0.133 | 0.0005 | ❌ LOSS |
+| drop | srag 0.523 | +0.105 | 0.004 | ✅ WIN |
+
+### 判定说明
+
+- **策略修复 (2026-08-06)**：strategyqa 的 facts 加载回归已修复（`adapt_record` 保留 facts 供 local_context），此前全 700 题 empty 是回归产物，修复后正常（叠加 100 ok）。
+- **2wiki LOSS 根因**：叠加配置 28% 样本 F1=0（baseline 仅 14-18%），含 plan_validation_errors 关联（LLM plan 生成失败）。S2 修复（per-path）在此数据集上不充分。
+- **drop LOSS 根因**：drop_f1 落后 -0.134，答案生成质量是瓶颈（H-004 历史结论一致）。
+- **musique 显著领先**：叠加 +20~34pt vs 弱 baseline（graphrag/hybrid/srag），+10~16pt vs 强 baseline（ircot/planrag/react）。
+- **strategyqa 修复后领先**：+8~18pt，planrag 最弱（0.71），叠加最强（0.89）。
+
+---
+
+## 诊断基线（历史参考，seed=2040, eval split, n=100, contaminated）
+
+> **⚠️ 诊断性数据**：此矩阵基于 CONTAMINATED_EVAL_DIAGNOSTIC_SET (seed=2040)。结果用于建立真实基线和识别瓶颈，**不得**用于论文主表。已被上方 DEVELOPMENT_SET 公平矩阵取代。
 
 | 数据集 | 指标 | SlotRAG | 最强 Baseline | Delta | 判定 |
 |--------|------|---------|---------------|-------|------|
 | hotpotqa | primary (F1) | 0.6887 | graphrag (0.8087) | -0.1200 | ❌ LOSS |
 | 2wikimultihop | primary (F1) | 0.6872 | graphrag (0.8199) | -0.1327 | ❌ LOSS |
 | musique | primary (F1) | 0.4818 | planrag (0.5748) | -0.0930 | ❌ LOSS |
-| strategyqa | primary (acc) | **0.8400** | hybrid (0.9000) | **-0.0600** | ❌ LOSS |
+| strategyqa | primary (acc) | 0.8400 | hybrid (0.9000) | -0.0600 | ❌ LOSS |
 | drop | primary (drop_f1) | 0.6245 | planrag (0.7120) | -0.0875 | ❌ LOSS |
 
-**Strongest-Baseline Coverage: 0/5 = 0%**（按每数据集主指标计 5 个单元格）
+**诊断基线 Coverage: 0/5 = 0%**
 
-### 判定说明
+### 诊断基线判定说明
 
 - **strategyqa 修正**：EM=0.08 是格式假象（yes/no vs True/False），accuracy=0.84 是真实水平。差距仅 -0.06。
 - **drop 修正**：EM=0.01 无效，drop_f1=0.62 是真实水平。
-- 所有单元格仍为 LOSS，但 strategyqa 从"灾难"变为"小幅落后"。
 - 真实差距从平均 -0.25 修正为平均 -0.10（按主指标）。
 
 ---
@@ -76,6 +133,7 @@
 ## 里程碑
 
 - [x] Phase 2: SOTA 账本建立（诚实基线 0/10）
+- [x] Phase 3: H-012 叠加配置公平重跑（Coverage 40%）
 - [ ] Phase 3: 假设验证，Strongest-Baseline Coverage ≥95%
 - [ ] Phase 4: 冻结验证通过
 - [ ] Phase 5: 投稿

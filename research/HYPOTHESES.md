@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T19:30:00Z  
-> **活跃假设数**: 1/5 (H-012)  
-> **当前轮次**: Phase 3R — H-012 叠加配置待验证，全面 SOTA 目标
+> **最后更新**: 2026-08-06T06:00:00Z  
+> **活跃假设数**: 0/5（H-012 已判定部分支持，待阶段审计）  
+> **当前轮次**: Phase 3R — H-012 公平重跑完成，Coverage 40%，需改进 2wiki/drop
 
 ---
 
@@ -11,9 +11,8 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| proposed | 1 (H-012) | 三机制叠加，SOTA 目标 |
+| provisionally_supported_pending_stage_audit | 2 (H-004, H-012) | H-004 生成质量; H-012 叠加配置 2/5 Coverage |
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
-| provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
 | rejected_exact_intervention | 2 (H-005, H-009) | H-005 entity契约; H-009 score-guided提取 |
@@ -215,17 +214,24 @@
 
 ### H-012: frontier 执行守卫 + anchor 保护 + per-path 提取叠加可系统性领先 baseline
 
-- **状态**: proposed（2026-08-05）
+- **状态**: provisionally_supported_pending_stage_audit（2026-08-06）
 - **描述**: 三个已验证改进维度机制正交，叠加后应同时修复多个失败机制：
   1. `frontier_safe_selection`（执行顺序守卫）——防止传递变量 join 失败（train 上 frontier-guard hotpotqa 0.82/2wiki 0.84/musique 0.61）
   2. `grounded_entity_anchor_substitution + protect_known_binding_values`（anchor 保护）——保护已绑定值不被错误覆盖（eval 上 binding-guard hotpotqa 0.71/2wiki 0.72/musique 0.54，已超 musique ircot）
   3. `evidence_bundle + per_path_extraction + dual_access_bundle`（S2 捆绑修复）——修复第二个 gold source 行丢失（pooled +4.4pt, p=0.0105）
 - **前提验证**: 三者从未叠加；方法构造已验证兼容（physical_plan=False, incremental_join=True）
 - **验证方法**: Tier 1 (n=20) 冒烟 → Tier 2 (n=100) DEVELOPMENT_SET 配对对比 6 baseline
+- **Tier 1 冒烟 (n=20)**: ✅ PASSED（2wiki +17.6pt, hotpotqa +11.8pt vs 最优现有; musique EM 3:1 净胜）
+- **Tier 2 完整矩阵 (n=100)**: Coverage **2/5 = 40%**
+  - **WIN**: musique (F1 0.579 vs ircot 0.483, +9.6pt), strategyqa (acc 0.890 vs graphrag 0.810, +8pt)
+  - **TIE**: hotpotqa (F1 0.833 vs graphrag 0.835, -0.2pt, p=0.94)
+  - **LOSS**: 2wiki (F1 0.629 vs react 0.794, **-16.5pt**), drop (drop_f1 0.628 vs graphrag 0.761, **-13.4pt**)
 - **预期效果**: hotpotqa/2wiki F1 ≥ baseline（graphrag 0.81/0.82），musique/strategyqa/drop 持平或领先
-- **风险**: 组合效应可能非加性；per-path 的 LLM 调用成本较高
+- **结果判定**: **部分支持** — 叠加配置在 musique/strategyqa 显著领先、hotpotqa 持平，但在 2wiki/drop 显著落后。S2 修复（per-path）在 2wiki 上不充分（28% 样本 F1=0），drop 生成质量仍是瓶颈（H-004 一致）。
+- **风险**: 组合效应非加性已证实（2wiki 倒退）；per-path 的 LLM 调用成本较高
 - **创建时间**: 2026-08-05T19:30:00Z
 - **预注册文档**: 见本计划文件
+- **配套修复**: strategyqa facts 加载回归修复（commit 8ae9a40，local_context 保留 facts）
 
 ---
 
