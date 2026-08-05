@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T17:30:00Z  
-> **活跃假设数**: 1/5 (H-006)  
-> **当前轮次**: Phase 3R — H-009 拒绝（不一致），H-006 待验证
+> **最后更新**: 2026-08-05T18:30:00Z  
+> **活跃假设数**: 0/5 (H-010 已否决, H-006 依赖缺失)  
+> **当前轮次**: Phase 3R — H-010 可行性否决（投票/compact-value 均不可行），H-006 前提不成立
 
 ---
 
@@ -11,13 +11,14 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| proposed | 1 (H-006) | H-006 生成推理 |
+| proposed | 0 | — |
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
 | rejected_exact_intervention | 2 (H-005, H-009) | H-005 entity契约; H-009 score-guided提取 |
-| deferred | 1 (H-003) | evidence quality,待理解根因 |
+| rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
+| deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
 ---
 
@@ -114,7 +115,7 @@
 
 ### H-006: 生成阶段推理质量（evidence→answer）是 43% 明显错误的根因
 
-- **状态**: proposed
+- **状态**: deferred（前提不成立, 2026-08-05）
 - **描述**: recall=1.0 但 EM=0 的错误中 ~43% 是 F1<0.5 的明显错误（答案跑偏，如输出 'University of Mississippi' 但问题问别的）。说明生成阶段未正确利用已检索到的证据。
 - **预测**: 改进 evidence→answer 的推理（如增加结构化证据利用）可提升
 - **验证方法**: 诊断 F1<0.5 样本的生成失败原因，针对性设计
@@ -123,6 +124,12 @@
 - **依赖**: H-004
 - **创建时间**: 2026-08-05T04:30:00Z
 - **最后更新**: 2026-08-05T06:00:00Z
+
+**可行性重新评估 (2026-08-05)**:
+- H-010 的 F1<0.5 细分诊断显示：hotpotqa 的 6/8 明显错误是**检索/选入问题（gold 不在 evidence）**，非生成推理问题
+- 2wiki 的 11/16 明显错误是提取遗漏（gold 在 evidence 但未入 rows）
+- **生成推理干预的适用面极窄**：只对"gold 已入 rows 但生成选错"的样本有效，这在 F1<0.5 子群中占少数
+- **结论: 延迟**。H-006 的"改进生成推理"无法针对主要失败机制（提取遗漏+检索选入），需先解决 S5 的上游问题
 
 ### H-007: 诊断 — 阶段级失败归因 + Oracle Headroom（已完成）
 
@@ -176,6 +183,35 @@
 
 - **结论: 拒绝**。score-guided 效果取决于检索 score 质量——2wiki 的 score 可靠（正效果），hotpotqa 的 score 误导（负效果）。不一致，非稳健改进。
 - 与 H-005 同模式：某干预一个数据集有效、另一个无效。
+
+### H-010: 绑定值选择干预（跨来源投票 / compact-value 提取）— 可行性否决
+
+- **状态**: rejected_after_feasibility（未投入实验, 2026-08-05）
+- **描述**: H-009 后定位到 S5_WRONG_VALUE 的两个候选干预方向，均被系统性可行性分析否决。
+- **干预候选 A — 跨来源行投票**（多条独立检索路径对同一 (slot, value) 的一致性）：
+  - 45 个 S5 样本中仅 2/45 (4%) gold 的"跨来源票数"超过错误值
+  - 58% 的 S5 样本 gold 根本不在 rows 里（投票无从谈起）
+  - **不可行**——最多恢复 4%
+- **干预候选 B — compact-value 提取**（约束提取器输出证据中最紧凑的实体变体）：
+  - A_gold_in_pred 子群（2wiki 10-14 样本）gold 紧凑形式确实在 evidence 出现≥2 次且已在 rows 里（如 `Solothurn`→`Solothurn, Switzerland`）
+  - 但无 oracle 规则能区分"该紧凑化"（`Solothurn`）与"不该紧凑化"（`Tooting, London, England` 是合法答案）
+  - hotpotqa 的 SUBSTR 子群是措辞/标点差异（`1969–1974` vs `1969 until 1974`）、描述性 gold（`the east of Ireland`），无法紧凑化
+  - **不可行**——H-005（答案契约）已证明提示词约束不可靠，且无确定性恢复规则
+
+**可行性分析证据**:
+- 45 个 S5 样本：gold 在 rows 里 19/45 (42%)，但跨来源投票可恢复仅 2/45 (4%)
+- F1<0.5 明显错误细分：
+  - hotpotqa 8 个：2/8 gold 在 evidence（提取遗漏），**6/8 gold 不在 evidence（检索/选入问题）**
+  - 2wiki 16 个：11/16 gold 在 evidence（提取遗漏），5/16 不在
+- A_gold_in_pred 子群（2wiki）在 control 和 treat 都错 → PerPath 结构固有，与 score-guided 无关
+
+**结论**: S5 的修复需要同时解决提取遗漏（gold 在 evidence 但未入 rows）和检索/选入（gold 不在 evidence）两个机制，没有单一确定性干预能覆盖。与 H-005/H-009 同模式的"提示词干预"已两次证明不可靠。
+
+### H-011: 检索/选入阶段修复 gold 不在 evidence 的错误 — 待探索
+
+- **状态**: deferred（未进入验证）
+- **描述**: F1<0.5 的 S5 中，hotpotqa 6/8、2wiki 5/16 的 gold 完全不在 evidence 里。这些不是提取问题，是检索候选或选入环节丢失。H-007 已证明 hotpotqa S0=0（检索零失败），因此是 S1/S2 选入环节。但 musique 的 EVIDENCE_NOT_SELECTED (37%) 已显示这是数据集特有的硬瓶颈，PerPath 修复有限。
+- **风险**: H-001 (top_k) 和 H-002 (budget) 已证明"增加检索/预算"不转化答案质量。选入环节的修复方向不明。
 
 ---
 
