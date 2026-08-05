@@ -61,7 +61,8 @@
 ### 判定说明
 
 - **策略修复 (2026-08-06)**：strategyqa 的 facts 加载回归已修复（`adapt_record` 保留 facts 供 local_context），此前全 700 题 empty 是回归产物，修复后正常（叠加 100 ok）。
-- **2wiki LOSS 根因**：叠加配置 28% 样本 F1=0（baseline 仅 14-18%），含 plan_validation_errors 关联（LLM plan 生成失败）。S2 修复（per-path）在此数据集上不充分。
+- **2wiki LOSS 根因**：叠加配置 28% 样本 F1=0（baseline 仅 14-18%），其中 **27/28 join_output_rows=0**（join 断链）。深挖：S1 提取不出跨 passage 的中间实体（如 director），导致 S2 join 断链 → rows=0 → 瞎猜。union/per-path 提取均无法解决（H-013 否定，p=0.786）——**架构级困难（跨 passage 推理）**。
+- **drop LOSS 根因**：drop_f1 落后 -0.134，32 个 F1=0 样本**全部 join_output_rows=0**（同 2wiki 模式）。drop 特殊：gold 是多值数字（'88.32 88.32 11.68'），slot 提取压缩为单值 → F1=0。graphrag 无 slot 架构、自由文本生成 → 无 join 断链 → 效果好。**SlotRAG 的 slot 提取架构对 drop 多值数字答案不适配**。
 - **drop LOSS 根因**：drop_f1 落后 -0.134，答案生成质量是瓶颈（H-004 历史结论一致）。
 - **musique 显著领先**：叠加 +20~34pt vs 弱 baseline（graphrag/hybrid/srag），+10~16pt vs 强 baseline（ircot/planrag/react）。
 - **strategyqa 修复后领先**：+8~18pt，planrag 最弱（0.71），叠加最强（0.89）。
