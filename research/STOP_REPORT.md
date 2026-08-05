@@ -1,8 +1,9 @@
-# STOP_REPORT.md — 阶段 3 暂停报告
+# STOP_REPORT.md — 阶段 3 暂停报告（PROVISIONAL）
 
 > **报告时间**: 2026-08-05  
 > **触发条件**: 用户选择暂停（选项 2），连续 3 假设被拒绝  
-> **状态**: 已停止，等待重新规划
+> **状态**: ⚠️ **PROVISIONAL 草稿** — 已由 Phase 3R 纠正协议降级。以下结论为"待审计假设"，非已验证事实。
+> **修正**: 2026-08-05 — 见 research/LEDGER_CONSISTENCY_AUDIT.md
 
 ---
 
@@ -27,27 +28,31 @@
 
 ---
 
-## 2. 核心诊断发现
+## 2. 核心诊断发现（⚠️ 以下为待审计假设，非结论）
 
-### 2.1 检索不是瓶颈
+> **纠正 (Phase 3R)**: evidence_recall=1.0 只证明 gold source 被检索到，**不证明** gold answer span 进入生成器文本、正确 binding 被提取、正确 path 存活、候选实体已生成。以下"发现"需通过阶段级审计（S0-S9）验证。
+
+### 2.1 检索可能不是瓶颈（待审计）
 - hotpotqa: 98 题中仅 2 题检索错（recall<0.5）
 - 2wiki: 100 题中仅 4 题检索错
-- **增加检索量（H-001）和预算（H-002）均无统计显著提升**
+- **但**: recall=1.0 可能掩盖 S1-S5 阶段（gold source 检索到但 span/binding/path 丢失）
 
-### 2.2 生成是瓶颈
-- hotpotqa: 21/98 题 **recall=1.0 但 EM=0**（检索全对，答案错）
+### 2.2 "生成是瓶颈"（待审计，H-004 provisionally_supported_pending_stage_audit）
+- hotpotqa: 21/98 题 **recall=1.0 但 EM=0**（source 全对，答案错）
 - 2wiki: 21/100 题同样
-- 这些错误的分布：
-  - **实体选择错误: 13/21 (62%)** — 证据里有正确答案但模型选错
-  - 截断/过短: 6/21 (29%)
-  - trace 污染: 1/21, 过长: 1/21
+- **但**: 这些错误的真实首次失败阶段（S2-S7）未知，不能归因于"最终选择"
 
-### 2.3 现有修复机制不足
+### 2.3 "62% 实体选择错误"（待审计，需重建 13/21）
+- **⚠️ 此结论已被纠正协议质疑**。13/21 的 62% 数字需追溯到具体 question IDs（见 ENTITY_SELECTION_CASES.csv）
+- 若无法重建则撤销 62% 结论
+- "实体选择错误"只能指 S6，不能把所有 recall=1&EM=0 归入该类
+
+### 2.4 现有修复机制不足（事实）
 - `evidence_surface_grounding_repair` 只修复 country/nationality/citizenship 3 类属性
-- **无法解决 62% 的实体选择错误**
+- **但**: 这是事实，不构成"生成是唯一根因"的证据
 
-### 2.4 指标洞察
-- strategyqa EM=0.08 是格式假象（accuracy=0.84），真实差距仅 -0.06
+### 2.5 指标洞察（事实）
+- strategyqa EM=0.08 是格式假象（accuracy=0.84）
 - drop EM 无效，drop_f1=0.62 是真实水平
 
 ---
@@ -99,14 +104,11 @@ SlotRAG 的 slot-based 规划本身就足够精准，额外检索/预算冗余�
 
 ---
 
-## 5. 建议
+## 5. 建议（⚠️ 已纠正：方向需经 Oracle Headroom 门禁决定）
 
-**优先考虑方向 C（答案消歧）+ 方向 A（证据链推理）组合**：
-1. 利用 SlotRAG 已有的 slot-based 检索，把"从证据选实体"从生成模型职责中解耦
-2. 用专门机制（如跨 slot 证据投票/消歧）选择正确答案
-3. 这直接针对 62% 的实体选择错误
+**纠正 (Phase 3R)**: 方向 C 不再是"当前最优"。方向选择必须基于 H-007 的 Oracle Headroom 分析结果，按第八节预注册门禁自动决定。禁止预先假设 C 或 C+A。
 
-**同时准备方向 E 作为兜底**（诚实负结果论文），确保无论实验结果如何都有产出。
+方向 A-E 列为候选，等待门禁评估。
 
 ---
 
@@ -114,7 +116,8 @@ SlotRAG 的 slot-based 规划本身就足够精准，额外检索/预算冗余�
 
 所有实验结果、假设记录、诊断数据已提交到 git：
 - 分支: `research/phase0-audit`
-- 最新 commit: `1165faf`
+- STOP_REPORT 撰写时 HEAD: `1165faf`（H-005 拒绝时点）
+- 实际 HEAD: `d675aa1`（含后续 H-005 提交）— 已核对，`5bca169` 是 STATE 更新中间 commit
 - 实验账本: `research/EXPERIMENT_LEDGER.csv`
 - 假设池: `research/HYPOTHESES.md`
 - 失败账本: `research/FAILURE_LEDGER.csv`

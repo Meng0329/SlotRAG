@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T06:00:00Z  
+> **最后更新**: 2026-08-05T06:30:00Z  
 > **活跃假设数**: 1/3 (H-006)  
-> **当前轮次**: Phase 3 Round 3 完成
+> **当前轮次**: Phase 3R — 恢复 + 重分类
 
 ---
 
@@ -12,9 +12,10 @@
 | 状态 | 数量 | 说明 |
 |------|------|------|
 | proposed | 1 (H-006) | 生成推理质量 |
-| testing | 0 | |
-| validated | 1 (H-004) | 检索不是瓶颈，生成是瓶颈 |
-| rejected | 3 (H-001, H-002, H-005) | 检索量/预算/格式约束无效 |
+| provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
+| stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
+| rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
+| rejected_exact_intervention | 1 (H-005) | 仅拒绝 entity_answer_contract=True |
 | deferred | 1 (H-003) | evidence quality,待理解根因 |
 
 ---
@@ -23,7 +24,7 @@
 
 ### H-001: 检索 top_k 增加可显著提升 evidence recall
 
-- **状态**: rejected
+- **状态**: stratum_specific_signal
 - **描述**: SlotRAG 在 hotpotqa 上 evidence recall 0.755 vs hybrid 1.000，核心差距在于 evidence_count 1-3 vs 10。增加 hybrid retrieval top_n 和 slot materialization top_k 可提升召回。
 - **预测**: 将 top_n 从 10 增加到 20，evidence recall 从 0.755 提升到 >0.85，hotpotqa primary_score 提升 5-8%
 - **验证方法**: Tier 1 实验 (DEVELOPMENT_SET, n=20, hotpotqa)，修改 config 的 retrieval.top_n 和 materialization_top_k
@@ -42,7 +43,7 @@
 
 ### H-002: 增加 LLM planning 预算可降低 musique 的 budget_exceeded 失败
 
-- **状态**: rejected
+- **状态**: rejected_exact_budget_configuration
 - **描述**: SlotRAG 在 musique 上有 9 个 budget_exceeded 失败（全部 3hop/4hop），但 hybrid 无失败。增加 max_llm_calls 和 max_replans 可让复杂问题完成规划。
 - **预测**: max_llm_calls 从 64 增加到 96，musique budget_exceeded 从 9 降至 ≤3，musique primary_score +3-5%
 - **验证方法**: Tier 1 实验 (DEVELOPMENT_SET, n=20, musique)，修改 execution config
@@ -76,7 +77,7 @@
 
 ### H-004: SlotRAG 的答案生成质量是主要瓶颈（检索几乎不是瓶颈）
 
-- **状态**: validated
+- **状态**: provisionally_supported_pending_stage_audit
 - **描述**: Tier 1 证明检索更多和预算更多都不提升答案质量，且 seed=2040 诊断显示 recall=1.0 但 EM=0 的错误占主导。瓶颈在答案生成质量而非检索。
 - **预测**: 对 recall=1.0 但 EM=0 的样本（检索已全对但答案错），修改生成阶段可提升
 - **验证方法**: 诊断 hotpotqa/2wiki 上 recall=1.0 但 EM=0 的样本，分析生成失败原因
@@ -95,7 +96,7 @@
 
 ### H-005: 答案契约/措辞规范化可回收 ~50% 的"接近正确"错误
 
-- **状态**: rejected
+- **状态**: rejected_exact_intervention
 - **描述**: recall=1.0 但 EM=0 的错误中 ~57% 是 F1≥0.5 的接近正确答案（措辞/格式与黄金答案不完全一致，如 'Crown Holdings' vs 'Crown Holdings, Inc.')。改进答案契约或措辞规范化可回收这些。
 - **预测**: 对 F1≥0.5 的接近正确错误，改进答案生成提示（如要求输出规范实体名、避免描述性答案）可提升 EM
 - **验证方法**: Tier 1 实验，修改 generation prompt 或 answer contract
