@@ -1,0 +1,58 @@
+agnes:
+  base_url: http://10.200.37.71:8801/v1
+  model: qwen3.6-27b
+  api_key_env: SLOTRAG_AGNES_API_KEY
+  timeout_seconds: 60
+  max_retries: 3
+  retry_backoff_seconds: 0.5
+  max_tokens: 4096
+  temperature: 0.0
+
+embedding:
+  base_url: http://0.0.0.0:30000/v1
+  model: Qwen/Qwen3-Embedding-0.6B
+  api_key_env: SLOTRAG_EMBEDDING_API_KEY
+  timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: 0.25
+  dimension: 1024
+  batch_size: 32
+
+reranker:
+  base_url: http://10.200.37.71:8801/v1
+  model: bge-reranker-v2-m3
+  api_key_env: SLOTRAG_RERANKER_API_KEY
+  timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: 0.25
+  enabled: true
+  top_n: 10
+
+retrieval:
+  bm25_k: 50
+  dense_k: 50
+  final_k: 10
+  rrf_k: 60
+  bm25_weight: 0.5
+  dense_weight: 0.5
+  chunk_tokens: 384
+  chunk_overlap: 64
+
+execution:
+  max_replans: 24
+  default_slot_cost: 1.0
+  unbound_argument_cost: 2.0
+  random_seed: 2027
+  materialization_top_k: 5
+  max_binding_contexts: 2
+  max_retrieval_calls: 4
+
+data:
+  cache_dir: data/raw
+  processed_dir: data/processed
+
+rate_limit:
+  provider_rpm: 30
+  operational_rpm: 20
+  max_concurrency: 4
+  state_dir: runs/.rate-limits
