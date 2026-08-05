@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T18:30:00Z  
-> **活跃假设数**: 0/5 (H-010 已否决, H-006 依赖缺失)  
-> **当前轮次**: Phase 3R — H-010 可行性否决（投票/compact-value 均不可行），H-006 前提不成立
+> **最后更新**: 2026-08-05T19:30:00Z  
+> **活跃假设数**: 1/5 (H-012)  
+> **当前轮次**: Phase 3R — H-012 叠加配置待验证，全面 SOTA 目标
 
 ---
 
@@ -11,7 +11,7 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| proposed | 0 | — |
+| proposed | 1 (H-012) | 三机制叠加，SOTA 目标 |
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
@@ -212,6 +212,20 @@
 - **状态**: deferred（未进入验证）
 - **描述**: F1<0.5 的 S5 中，hotpotqa 6/8、2wiki 5/16 的 gold 完全不在 evidence 里。这些不是提取问题，是检索候选或选入环节丢失。H-007 已证明 hotpotqa S0=0（检索零失败），因此是 S1/S2 选入环节。但 musique 的 EVIDENCE_NOT_SELECTED (37%) 已显示这是数据集特有的硬瓶颈，PerPath 修复有限。
 - **风险**: H-001 (top_k) 和 H-002 (budget) 已证明"增加检索/预算"不转化答案质量。选入环节的修复方向不明。
+
+### H-012: frontier 执行守卫 + anchor 保护 + per-path 提取叠加可系统性领先 baseline
+
+- **状态**: proposed（2026-08-05）
+- **描述**: 三个已验证改进维度机制正交，叠加后应同时修复多个失败机制：
+  1. `frontier_safe_selection`（执行顺序守卫）——防止传递变量 join 失败（train 上 frontier-guard hotpotqa 0.82/2wiki 0.84/musique 0.61）
+  2. `grounded_entity_anchor_substitution + protect_known_binding_values`（anchor 保护）——保护已绑定值不被错误覆盖（eval 上 binding-guard hotpotqa 0.71/2wiki 0.72/musique 0.54，已超 musique ircot）
+  3. `evidence_bundle + per_path_extraction + dual_access_bundle`（S2 捆绑修复）——修复第二个 gold source 行丢失（pooled +4.4pt, p=0.0105）
+- **前提验证**: 三者从未叠加；方法构造已验证兼容（physical_plan=False, incremental_join=True）
+- **验证方法**: Tier 1 (n=20) 冒烟 → Tier 2 (n=100) DEVELOPMENT_SET 配对对比 6 baseline
+- **预期效果**: hotpotqa/2wiki F1 ≥ baseline（graphrag 0.81/0.82），musique/strategyqa/drop 持平或领先
+- **风险**: 组合效应可能非加性；per-path 的 LLM 调用成本较高
+- **创建时间**: 2026-08-05T19:30:00Z
+- **预注册文档**: 见本计划文件
 
 ---
 
