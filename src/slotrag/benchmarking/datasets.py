@@ -115,16 +115,24 @@ def _gold_evidence(spec: DatasetSpec, record: dict[str, Any]) -> list[str]:
     return []
 
 
-def adapt_record(spec: DatasetSpec, record: dict[str, Any], index: int, *, split: str) -> QuestionRecord:
+def adapt_record(
+    spec: DatasetSpec,
+    record: dict[str, Any],
+    index: int,
+    *,
+    split: str,
+    exclude_facts: bool = False,
+) -> QuestionRecord:
     normalized = dict(record)
     strategyqa_facts = spec.name == "strategyqa" and any(
         str(item.get("id", "")).startswith("fact_")
         for item in (record.get("passages") or [])
         if isinstance(item, dict)
     )
-    if strategyqa_facts:
+    if strategyqa_facts and exclude_facts:
         # StrategyQA's bundled facts are supporting facts, not a corpus available
-        # to a query-time retriever. Keep them out of both protocol indexes.
+        # to a shared query-time retriever. Keep them out of the shared index
+        # (global_corpus); local_context keeps them as the question's own context.
         normalized["passages"] = []
     normalized["gold_evidence"] = _gold_evidence(spec, record)
     question = question_from_record(normalized, index=index)
@@ -150,6 +158,9 @@ def adapt_record(spec: DatasetSpec, record: dict[str, Any], index: int, *, split
             "evidence_protocol": "gold_facts_only",
             "protocol_warning": "strategyqa_facts_are_not_shared_corpus",
         })
+        if not exclude_facts:
+            # local_context: facts are available as the question's own context
+            metadata["available_evidence"] = True
     return question.model_copy(update={"metadata": metadata})
 
 
@@ -158,7 +169,10 @@ def load_all_questions(spec: DatasetSpec, root: Path, *, split: str) -> list[Que
     path = spec.path(root, split)
     if not path.exists():
         raise DatasetError(f"missing {spec.name} {split} file: {path}")
-    return [adapt_record(spec, record, index, split=split) for index, record in iter_jsonl(path)]
+    return [
+        adapt_record(spec, record, index, split=split, exclude_facts=True)
+        for index, record in iter_jsonl(path)
+    ]
 
 
 def _allocate_quotas(counts: Counter[str], size: int) -> dict[str, int]:

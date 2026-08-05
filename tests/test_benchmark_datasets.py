@@ -52,7 +52,8 @@ def test_stratified_sample_is_deterministic_and_round_trips_metadata(tmp_path):
     assert [item.metadata["stratum"] for item in reloaded] == [item.metadata["stratum"] for item in first]
 
 
-def test_strategyqa_facts_are_not_available_corpus_and_drop_stratum_provenance():
+def test_strategyqa_facts_kept_for_local_context_and_excluded_for_shared_index():
+    # local_context (default): facts are the question's own supporting context
     strategy = adapt_record(
         DATASETS["strategyqa"],
         {
@@ -65,10 +66,29 @@ def test_strategyqa_facts_are_not_available_corpus_and_drop_stratum_provenance()
         0,
         split="train",
     )
-    assert strategy.passages == []
-    assert strategy.metadata["available_evidence"] is False
+    assert [p.id for p in strategy.passages] == ["fact_0#0"]
+    assert strategy.metadata["available_evidence"] is True
     assert strategy.metadata["evidence_protocol"] == "gold_facts_only"
     assert strategy.metadata["protocol_warning"] == "strategyqa_facts_are_not_shared_corpus"
+
+    # shared index (exclude_facts=True): facts are not a shared corpus
+    shared = adapt_record(
+        DATASETS["strategyqa"],
+        {
+            "id": "sq1",
+            "question": "Is alpha true?",
+            "answers": ["True"],
+            "passages": [{"id": "fact_0#0", "doc_id": "fact_0", "text": "Alpha is true."}],
+            "type": "strategy",
+        },
+        0,
+        split="train",
+        exclude_facts=True,
+    )
+    assert shared.passages == []
+    assert shared.metadata["available_evidence"] is False
+    assert shared.metadata["evidence_protocol"] == "gold_facts_only"
+    assert shared.metadata["protocol_warning"] == "strategyqa_facts_are_not_shared_corpus"
 
     drop = adapt_record(
         DATASETS["drop"],
