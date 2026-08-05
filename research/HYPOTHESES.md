@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-05T15:30:00Z  
-> **活跃假设数**: 1/4 (H-006)  
-> **当前轮次**: Phase 3R — H-008 验证完成（SUPPORTED）
+> **最后更新**: 2026-08-05T17:30:00Z  
+> **活跃假设数**: 1/5 (H-006)  
+> **当前轮次**: Phase 3R — H-009 拒绝（不一致），H-006 待验证
 
 ---
 
@@ -16,7 +16,7 @@
 | provisionally_supported_pending_stage_audit | 1 (H-004) | 待阶段级审计 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 1 (H-005) | 仅拒绝 entity_answer_contract=True |
+| rejected_exact_intervention | 2 (H-005, H-009) | H-005 entity契约; H-009 score-guided提取 |
 | deferred | 1 (H-003) | evidence quality,待理解根因 |
 
 ---
@@ -158,6 +158,24 @@
 - **门禁判定: 支持**。单看 hotpotqa (+2.1pt) 未达预注册 3pt 门槛→部分支持，但 musique +8.4pt 显著、pooled 显著、3 数据集一致正向 + evidence_recall 提升，综合判定 SUPPORTED
 - **附带修复**: retrieval.py 移除 heterogeneous sparse-mode 检查（此前使所有 dual-access 方法在 dense 环境 100% 失败）
 - **副作用**: PerPath 使每样本 LLM 调用 2-6 次（延迟 ~14x control），但可接受
+
+### H-009: 相关性引导的提取（score-guided extraction）可回收绑定值错误
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-05）
+- **描述**: H-008 后三数据集阶段分解显示 hotpotqa/2wiki 的下一瓶颈是 BINDING_OR_GEN（43%/28%），其中 52% 是 S5_WRONG_VALUE（绑定值完全错）。根因：gold 在最终 evidence 的 passage 里，但提取提示 (`evidence_bundle.py`) 把全部 passage 平铺给 LLM 无相关性信号，LLM 提取了最突出但错误的值（如 "Gibson acoustic" 而非 "rhythm guitar"）。
+- **前提验证**: 3 样本 (5a84e109/5ac4e593/5a7a88e4) 的 gold 都在 evidence passage 里但不在 rows bindings → 提取阶段遗漏，非传播/检索
+- **干预**: 提取提示加检索相关性 score 引导 LLM 优先从高相关 passage 提取
+- **创建时间**: 2026-08-05T16:00:00Z
+- **预注册文档**: `H009_PRE_REGISTRATION.md`
+
+**Tier 1 验证结果 (2026-08-05, n=188 配对)**:
+| 数据集 | ΔEM | wilcoxon p | wins/losses |
+|--------|-----|-----------|-------------|
+| hotpotqa | **-3.2pt** | 0.18 | 1/4 |
+| 2wikimultihop | +5.3pt | 0.059 | 6/1 |
+
+- **结论: 拒绝**。score-guided 效果取决于检索 score 质量——2wiki 的 score 可靠（正效果），hotpotqa 的 score 误导（负效果）。不一致，非稳健改进。
+- 与 H-005 同模式：某干预一个数据集有效、另一个无效。
 
 ---
 

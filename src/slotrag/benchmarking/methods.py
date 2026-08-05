@@ -77,6 +77,7 @@ class MethodSpec:
     dual_access_bundle: bool = False
     evidence_bundle: bool = False
     per_path_extraction: bool = False
+    score_guided_extraction: bool = False
     query_rewriting: bool = False
     description: str = ""
 
@@ -219,6 +220,17 @@ METHODS: dict[str, MethodSpec] = {
         extraction_enable_thinking=True,  # Now properly wired through evidence bundle extractors
         structured_answer_contract=True,
         description="v74 per-path extraction with cross-path merge (treatment)",
+    ),
+    "slotrag-score-guided-extraction": MethodSpec(
+        "slotrag-score-guided-extraction",
+        "slotrag",
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        score_guided_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        description="H-009: per-path extraction with retrieval-score-guided passage prioritization",
     ),
     # ====== V6: question-grounded + dual-query with structured output ======
     "slotrag-question-grounded-v6": MethodSpec(
@@ -1289,8 +1301,10 @@ def _run_slotrag(
             materializer_options["evidence_surface_grounding_repair"] = True
     if spec.evidence_bundle:
         thinking = bool(spec.extraction_enable_thinking)
+        score_guided = bool(spec.score_guided_extraction)
         evidence_bundle_extractor = (
-            PerPathExtractor(enable_thinking=thinking) if spec.per_path_extraction else UnionExtractor(enable_thinking=thinking)
+            PerPathExtractor(enable_thinking=thinking, score_guided=score_guided)
+            if spec.per_path_extraction else UnionExtractor(enable_thinking=thinking, score_guided=score_guided)
         )
         materializer = SlotMaterializer(
             client, retriever, evidence_bundle_extractor=evidence_bundle_extractor,

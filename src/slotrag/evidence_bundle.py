@@ -89,8 +89,12 @@ class EvidenceBundleExtractor(ABC):
     is responsible for that common post-processing step.
     """
 
-    def __init__(self, enable_thinking: bool = False) -> None:
+    def __init__(self, enable_thinking: bool = False, score_guided: bool = False) -> None:
         self._enable_thinking = enable_thinking
+        # When True, retrieval relevance scores are attached to each passage in the
+        # extraction prompt so the LLM can prioritize high-relevance passages when
+        # selecting binding values (H-009). Default False preserves existing behavior.
+        self._score_guided = score_guided
 
     @abstractmethod
     def extract(
@@ -139,7 +143,10 @@ class UnionExtractor(EvidenceBundleExtractor):
         for result in bundle.fused_results:
             sid = result.passage.id
             by_source[sid] = result
-            passage_payload.append({"source_id": sid, "text": result.passage.text})
+            row: dict[str, str] = {"source_id": sid, "text": result.passage.text}
+            if self._score_guided and hasattr(result, "score"):
+                row["score"] = round(result.score, 4)
+            passage_payload.append(row)
 
         if not passage_payload:
             return ExtractionOutcome(
@@ -163,12 +170,23 @@ class UnionExtractor(EvidenceBundleExtractor):
 
         system_msg, user_msg = messages_template
         user_msg = {**user_msg}
-        user_msg["content"] = (
-            f"Relation: {slot.predicate}\n"
-            f"Slot query: {bundle.paths[0].query if bundle.paths else ''}\n"
-            f"Known bindings: {repr(effective_bindings)}\n"
-            f"Passages: {repr(passage_payload)}"
-        )
+        if self._score_guided:
+            user_msg["content"] = (
+                f"Relation: {slot.predicate}\n"
+                f"Slot query: {bundle.paths[0].query if bundle.paths else ''}\n"
+                f"Known bindings: {repr(effective_bindings)}\n"
+                f"Passages: {repr(passage_payload)}\n"
+                "Higher 'score' means the passage is more relevant to the slot query. "
+                "Prefer extracting binding values from higher-score passages; ignore "
+                "passages whose content does not address the relation."
+            )
+        else:
+            user_msg["content"] = (
+                f"Relation: {slot.predicate}\n"
+                f"Slot query: {bundle.paths[0].query if bundle.paths else ''}\n"
+                f"Known bindings: {repr(effective_bindings)}\n"
+                f"Passages: {repr(passage_payload)}"
+            )
 
         response = client.complete(
             [system_msg, user_msg],
@@ -270,7 +288,10 @@ class PerPathExtractor(EvidenceBundleExtractor):
             for result in path.results:
                 sid = result.passage.id
                 by_source[sid] = result
-                passage_payload.append({"source_id": sid, "text": result.passage.text})
+                row: dict[str, str] = {"source_id": sid, "text": result.passage.text}
+                if self._score_guided and hasattr(result, "score"):
+                    row["score"] = round(result.score, 4)
+                passage_payload.append(row)
 
             source_ids = list(by_source)
             tool = extraction_tool_fn(
@@ -284,14 +305,27 @@ class PerPathExtractor(EvidenceBundleExtractor):
 
             system_msg, user_msg = messages_template
             user_msg = {**user_msg}
-            user_msg["content"] = (
-                f"Relation: {slot.predicate}\n"
-                f"Path query: {path.query}\n"
-                f"Query variant: {path.query_variant}\n"
-                f"Sparse access mode: {path.sparse_access_mode}\n"
-                f"Known bindings: {repr(effective_bindings)}\n"
-                f"Passages: {repr(passage_payload)}"
-            )
+            if self._score_guided:
+                user_msg["content"] = (
+                    f"Relation: {slot.predicate}\n"
+                    f"Path query: {path.query}\n"
+                    f"Query variant: {path.query_variant}\n"
+                    f"Sparse access mode: {path.sparse_access_mode}\n"
+                    f"Known bindings: {repr(effective_bindings)}\n"
+                    f"Passages: {repr(passage_payload)}\n"
+                    "Higher 'score' means the passage is more relevant to the path query. "
+                    "Prefer extracting binding values from higher-score passages; ignore "
+                    "passages whose content does not address the relation."
+                )
+            else:
+                user_msg["content"] = (
+                    f"Relation: {slot.predicate}\n"
+                    f"Path query: {path.query}\n"
+                    f"Query variant: {path.query_variant}\n"
+                    f"Sparse access mode: {path.sparse_access_mode}\n"
+                    f"Known bindings: {repr(effective_bindings)}\n"
+                    f"Passages: {repr(passage_payload)}"
+                )
 
             response = client.complete(
                 [system_msg, user_msg],
