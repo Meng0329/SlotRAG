@@ -49,7 +49,7 @@
 - [x] 最强 baseline 确定 (ircot/graphrag/planrag/hybrid)
 - [x] drop 主指标改为 drop_f1 (EM 对所有方法无效)
 
-### Phase 3: 假设循环 ⏸️ 已暂停
+### Phase 3: 假设循环 🔄 已恢复（H-012 进行中）
 - [x] 深度失败诊断完成
   - **strategyqa EM=0.08 是格式假象**：用 primary_score (accuracy) 实际 0.84
   - **drop EM 无效**：已用 drop_f1 (0.62)
@@ -62,7 +62,14 @@
 - [x] H-004 validated (生成质量是瓶颈)
 - [x] H-005 rejected (entity contract, -0.02~-0.05)
 - [x] **3 连续假设拒绝 → STOP_REPORT 触发**
-- [ ] **已暂停，等待用户选择重新规划方向 (A-E)**
+- [x] H-008 SUPPORTED (PerPath 修复 S2, pooled +4.4pt p=0.0105)
+- [x] H-009 REJECTED (score-guided 不一致)
+- [x] H-010 REJECTED (跨来源投票/compact-value 均不可行, 可行性分析否决)
+- [x] **H-012 叠加配置 Tier 1 PASSED** (2026-08-05)
+  - `slotrag-grounded-frontier-perpath-guard` 组合 frontier 守卫 + anchor 保护 + per-path 提取
+  - Tier 1 (n=20×3): 2wiki +17.6pt, hotpotqa +11.8pt vs 最优现有; musique EM 3:1 净胜
+  - **Tier 2 完整矩阵进行中** (n=100×5 数据集, 叠加 vs 6 baseline 公平重跑)
+- [ ] **Tier 2 结果待分析**（DEVELOPMENT_SET 公平基线对比）
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动
