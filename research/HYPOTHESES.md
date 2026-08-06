@@ -16,7 +16,7 @@
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
 | rejected_exact_intervention | 9 (H-005, H-009, H-014, H-015, H-016, H-017, H-018, H-019, H-020) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真; H-019 证据重排; H-020 候选抽取选择 |
-| rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
+| rejected_after_feasibility | 2 (H-010, H-021) | H-010 跨来源投票+compact-value 均不可行; H-021 确定性比较算子仅 1/9 恢复 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
 ---
@@ -450,6 +450,20 @@
 - **第 9 个连续零/负效果生成干预**: H-005/009/014/015a/016/017/018/019/020 全部失败。
 - **决定性洞察**: 生成器既无视 evidence 的**呈现**（H-019），也无法在 grounded 候选里**选准**（H-020）——瓶颈已从"输出契约"收敛到"模型选型能力"，架构侧（无论输入还是输出侧）无解。
 - **后续**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型）；否则接受 Coverage 2/5 收尾。
+
+---
+
+### H-021: 比较类问题的确定性比较算子（绕过生成器的架构级杠杆）
+
+- **状态**: rejected_after_feasibility（2026-08-06）
+- **动机**: H-020 暴露 2wiki **25/100 是比较类问题**（`Who is older`/`Which film was released earlier`），9 个比较类错误。比较类的正确答案是纯确定性可算的——如果 rows 物化了被比较实体的数值属性（出生/死亡/发布年份），一个 `min/max` 比较算子就能绕过生成器。这是 H-005~H-020 之后唯一的架构级杠杆（不碰生成器，用算子替代）。
+- **可行性诊断**（H-012 Tier2 n=100）:
+  1. **rows 无年份列**: rows 只物化 `answer` 列（115 次）+ 少量关系列，**没有任何出生/死亡/发布年份列**
+  2. **离线 regex 模拟**: 对 9 个错误比较样本提取年份 + 排序 → **仅 1/9 恢复**（Marius Mitu vs Bea Palya，两实体出生日期精确到日在同 passage）
+  3. **其余 8 个失败根因**: 年份**无法归属到实体**（Extreme Ops 只有 1959 一个年份 / Ngrtd 有 4 个年份分不清归属）、gold 不在 evidence（2/9）、**需要跨 passage join 到导演再找导演生日**（The Hellstrom / Treasure / Sunset Derby 等，导演关系跨 passage）
+- **判决: 拒绝**。正确的年份归属本身就需要跨 passage multi-hop 推理（先 join 到导演，再物化导演的出生年）——这正是 H-014 桥接已证失败的环节。regex 做不到，而 LLM 提取又已被 H-014/H-020 证明在跨实体归属上不可靠。**恢复率 11% 远低于门禁 ≥50%**。
+- **闭环**: 2wiki 的比较类错误既不能被提示修复（H-005~H-019），也不能被确定性算子修复（H-021）。比较类的正确答案依赖"先 join 到导演实体 → 再物化导演的出生年"——这个 join 是架构的 hard case，需要更强模型的跨实体推理。
+- **系统性结论**: 输入侧（H-005~H-019）+ 输出侧（H-020）+ 确定性算子（H-021）全部穷尽。**2wiki/drop 的 LOSS 是模型级能力天花板，架构侧无解**。剩余选项: 接受 2/5 Coverage，或模型级生成器升级。
 
 ---
 
