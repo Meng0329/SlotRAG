@@ -80,6 +80,7 @@ class MethodSpec:
     score_guided_extraction: bool = False
     query_rewriting: bool = False
     evidence_curation: bool = False
+    drop_short_answer: bool = False
     description: str = ""
 
 
@@ -467,6 +468,22 @@ METHODS: dict[str, MethodSpec] = {
         evidence_curation=True,
         description="H-015: H-012 stacked + generation evidence curation (dedupe + cap to 8)",
     ),
+    "slotrag-grounded-frontier-perpath-short": MethodSpec(
+        "slotrag-grounded-frontier-perpath-short",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        drop_short_answer=True,
+        description="H-016: H-012 stacked + drop free-text short answer (multi-token gold)",
+    ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
         "slotrag",
@@ -847,13 +864,18 @@ def _retrieval_result(items: list[RetrievalResult], *, slot_id: str, metrics: Ru
     )
 
 
-def _answer_kind(dataset: str, question: QuestionRecord | None = None) -> str:
+def _answer_kind(dataset: str, question: QuestionRecord | None = None, *, drop_short: bool = False) -> str:
     if dataset == "strategyqa":
         return "boolean"
     if dataset == "drop":
         if question is not None and str(question.metadata.get("operation_type", "")).casefold() == "listing":
             return "list"
-        return "number"
+        # H-016: drop gold answers are token-sets / phrases (e.g. '99 99',
+        # 'Marriage living together'), not single numbers. The "number" answer
+        # kind constrains the generator to a number-only span, which prevents
+        # producing the full token set. "short" allows a concise multi-token
+        # answer without forcing a single number.
+        return "short" if drop_short else "number"
     return "short"
 
 
@@ -999,6 +1021,7 @@ def _finalize(
     structured_answer_contract: bool = False,
     entity_answer_contract: bool = False,
     evidence_curation: bool = False,
+    drop_short: bool = False,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
@@ -1006,9 +1029,9 @@ def _finalize(
     if evidence_curation:
         result = _curate_evidence(result)
     answer_kind = (
-        _answer_kind(dataset, question)
+        _answer_kind(dataset, question, drop_short=drop_short)
         if structured_answer_contract
-        else _answer_kind(dataset)
+        else _answer_kind(dataset, drop_short=drop_short)
     )
     # H-005: entity answer contract — force canonical entity names for short answers
     if entity_answer_contract and answer_kind == "short":
@@ -1200,7 +1223,7 @@ def slotrag_compile_options(
     question: QuestionRecord,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {
-        "answer_kind": _answer_kind(dataset),
+        "answer_kind": _answer_kind(dataset, drop_short=spec.drop_short_answer),
         "field_extremum_templates": spec.field_extremum_templates,
         "polar_comparison_templates": spec.polar_comparison_templates,
     }
@@ -1463,6 +1486,7 @@ def _run_slotrag(
             structured_answer_contract=True,
             entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
             evidence_curation=spec.evidence_curation,
+            drop_short=spec.drop_short_answer,
         )
     return _finalize(
         client,
@@ -1471,6 +1495,7 @@ def _run_slotrag(
         result,
         entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
         evidence_curation=spec.evidence_curation,
+        drop_short=spec.drop_short_answer,
     )
 
 
