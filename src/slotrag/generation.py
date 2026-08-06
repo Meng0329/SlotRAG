@@ -27,6 +27,61 @@ def _answer_tool(answer_kind: str) -> dict[str, object]:
     }
 
 
+def _candidate_spans_tool() -> dict[str, object]:
+    """H-020: enumerate candidate answer spans, grounded in evidence by construction."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_candidate_spans",
+            "description": (
+                "List up to 5 candidate answer spans, each a contiguous substring of the "
+                "supplied evidence. Do not paraphrase; copy spans verbatim from the passages."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spans": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Candidate answer spans, verbatim from evidence.",
+                        "maxItems": 5,
+                    },
+                    "passage_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Source ids of the passages each span came from.",
+                        "maxItems": 5,
+                    },
+                },
+                "required": ["spans", "passage_ids"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _select_answer_tool() -> dict[str, object]:
+    """H-020: select the single candidate that best answers the question."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "emit_selected_answer",
+            "description": (
+                "Select the single candidate span that best answers the question. If none "
+                "of the candidates answer the question, emit an empty string."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"},
+                },
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
 def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
     if response.tool_calls:
         arguments = client.require_tool(response, "emit_final_answer")
@@ -35,6 +90,69 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
             return answer.strip()
         return ""
     return (response.content or "").strip()
+
+
+def _extract_then_select_answer(
+    client: AgnesClient,
+    question: str,
+    result: ExecutionResult,
+    messages: list[dict[str, object]],
+) -> tuple[str | None, list[ChatResult]]:
+    """H-020 two-stage output contract: enumerate grounded candidates, then select.
+
+    Step 1 — ``emit_candidate_spans``: the generator may only emit contiguous
+    spans copied verbatim from the supplied evidence, so the answer is grounded
+    by construction and there is no room for the internal answer prior to leak.
+
+    Step 2 — ``emit_selected_answer``: given the candidates, the generator picks
+    the single span that best answers the question (or emits an empty string if
+    none match).
+
+    Returns ``(answer, responses)`` where ``answer`` is ``None`` when the
+    contract failed (no candidates emitted, empty selection, tool error) so the
+    caller falls back to the free-generation path.
+    """
+    responses: list[ChatResult] = []
+    response = client.complete(
+        messages,
+        tools=[_candidate_spans_tool()],
+        tool_choice={"type": "function", "function": {"name": "emit_candidate_spans"}},
+        temperature=0.0,
+    )
+    responses.append(response)
+    arguments = client.require_tool(response, "emit_candidate_spans")
+    spans = arguments.get("spans") or []
+    passage_ids = arguments.get("passage_ids") or []
+    spans = [
+        str(span).strip()
+        for span in (spans if isinstance(spans, list) else [])
+        if isinstance(span, str) and span.strip()
+    ]
+    if not spans:
+        return None, responses
+    step2_messages = list(messages) + [
+        {
+            "role": "user",
+            "content": (
+                "The following candidate answer spans were extracted verbatim from the evidence:\n"
+                f"{json.dumps({'spans': spans, 'passage_ids': passage_ids}, ensure_ascii=False)}\n\n"
+                "Select the single candidate span that best answers the question. "
+                "Call emit_selected_answer exactly once."
+            ),
+        },
+    ]
+    response = client.complete(
+        step2_messages,
+        tools=[_select_answer_tool()],
+        tool_choice={"type": "function", "function": {"name": "emit_selected_answer"}},
+        temperature=0.0,
+    )
+    responses.append(response)
+    arguments = client.require_tool(response, "emit_selected_answer")
+    answer = arguments.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip(), responses
+    return None, responses
 
 
 def _structured_thinking_enabled(result: ExecutionResult, *, enabled: bool = False) -> bool:
@@ -57,8 +175,16 @@ def generate_answer_response(
     structured_output: bool = False,
     generation_thinking: bool = False,
     generation_fidelity: bool = False,
+    extract_then_select: bool = False,
 ) -> tuple[str, ChatResult]:
-    """Generate an answer from selected evidence and retain provider metadata."""
+    """Generate an answer from selected evidence and retain provider metadata.
+
+    H-020: when ``extract_then_select`` is set, run the two-stage output
+    contract (grounded candidate extraction, then selection). If the contract
+    fails (no candidates / empty selection / tool error), fall back to the
+    normal free-generation path so H-020 can only add grounded answers, never
+    remove an answer.
+    """
     evidence = [
         {
             "source_id": item.source_id,
@@ -123,6 +249,22 @@ def generate_answer_response(
             ),
         },
     ]
+    if extract_then_select:
+        # H-020: two-stage output contract. Fall back to free generation on
+        # any contract failure so the method never loses an answer it could
+        # already produce.
+        answer, select_responses = _extract_then_select_answer(client, question, result, messages)
+        if answer is not None:
+            combined = select_responses[-1].model_copy(update={
+                "logical_calls": len(select_responses),
+                "usage": Usage(
+                    prompt_tokens=sum(item.usage.prompt_tokens for item in select_responses),
+                    completion_tokens=sum(item.usage.completion_tokens for item in select_responses),
+                ),
+                "latency_ms": sum(item.latency_ms for item in select_responses),
+            })
+            return answer, combined
+        # fall through to free generation below
     responses: list[ChatResult] = []
     for attempt in range(2):
         # H-017: thinking on first attempt (multi-hop/arithmetic reasoning),

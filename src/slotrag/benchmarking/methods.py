@@ -84,6 +84,7 @@ class MethodSpec:
     generation_thinking: bool = False
     generation_fidelity: bool = False
     evidence_rerank: bool = False
+    extract_then_select: bool = False
     description: str = ""
 
 
@@ -534,6 +535,22 @@ METHODS: dict[str, MethodSpec] = {
         structured_answer_contract=True,
         evidence_rerank=True,
         description="H-019: H-012 stacked + question-aware evidence re-ranking before generation (align with graphrag ranked passages)",
+    ),
+    "slotrag-grounded-frontier-perpath-select": MethodSpec(
+        "slotrag-grounded-frontier-perpath-select",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        extract_then_select=True,
+        description="H-020: H-012 stacked + extract-then-select output contract (enumerate grounded evidence spans, then select; fallback to free generation)",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -1107,6 +1124,7 @@ def _finalize(
     generation_thinking: bool = False,
     generation_fidelity: bool = False,
     evidence_rerank: bool = False,
+    extract_then_select: bool = False,
     reranker_client=None,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
@@ -1132,6 +1150,7 @@ def _finalize(
         structured_output=structured_answer_contract,
         generation_thinking=generation_thinking,
         generation_fidelity=generation_fidelity,
+        extract_then_select=extract_then_select,
     )
     metrics = merge_metrics(
         result.metrics,
@@ -1580,6 +1599,7 @@ def _run_slotrag(
             generation_thinking=spec.generation_thinking,
             generation_fidelity=spec.generation_fidelity,
             evidence_rerank=spec.evidence_rerank,
+            extract_then_select=spec.extract_then_select,
             reranker_client=getattr(retriever, "reranker_client", None),
         )
     return _finalize(
@@ -1593,6 +1613,7 @@ def _run_slotrag(
         generation_thinking=spec.generation_thinking,
         generation_fidelity=spec.generation_fidelity,
         evidence_rerank=spec.evidence_rerank,
+        extract_then_select=spec.extract_then_select,
         reranker_client=getattr(retriever, "reranker_client", None),
     )
 
