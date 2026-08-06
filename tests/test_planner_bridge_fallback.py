@@ -140,3 +140,52 @@ def test_bridge_fallback_requires_question_context():
     assert result.status == "empty"
     assert materializer.client.calls == 0
     assert result.metrics.bridge_fallbacks == 0
+
+
+class _JoinRepairMaterializer(_BridgeMaterializer):
+    """S1 returns person Ada; S2 extracts rows with a *different* person
+    (simulating the 2wiki join-chain break: S2's intermediate entity extraction
+    disagrees with S1's anchor). The bridge retry infers the correct person so
+    the join on `person` succeeds."""
+
+    def materialize(self, slot, bindings):
+        self.calls.append((slot.id, dict(bindings)))
+        if slot.id == "S1":
+            return [BindingRow(
+                slot_id="S1", bindings={"person": "Ada"},
+                source_id="p1", source_span="Ada founded X", confidence=1,
+            )], RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
+        # S2: after the bridge retry (client called emit_bridge_entities), return
+        # the matching person Ada. Otherwise return the wrong person Grace so the
+        # join on `person` yields nothing on the first attempt.
+        if any("emit_bridge_entities" in tool for tool in getattr(self.client, "tool_names", [])):
+            return [BindingRow(
+                slot_id="S2", bindings={"person": "Ada", "company": "X"},
+                source_id="p2", source_span="Ada founded X", confidence=1,
+            )], RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
+        return [BindingRow(
+            slot_id="S2", bindings={"person": "Grace", "company": "Y"},
+            source_id="p2", source_span="Grace led Y", confidence=1,
+        )], RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
+
+    def materialize_many(self, slot, contexts):
+        rows = []; metrics = RunMetrics()
+        for context in contexts or [{}]:
+            current, current_metrics = self.materialize(slot, context)
+            rows.extend(current)
+            metrics = metrics.model_copy(update={
+                "documents_accessed": metrics.documents_accessed + current_metrics.documents_accessed,
+                "passages_processed": metrics.passages_processed + current_metrics.passages_processed,
+                "extraction_llm_calls": metrics.extraction_llm_calls + current_metrics.extraction_llm_calls,
+            })
+        return rows, metrics
+
+
+def test_bridge_fallback_repairs_join_break():
+    materializer = _JoinRepairMaterializer()
+    executor = AdaptiveExecutor(materializer, options=ExecutionOptions(bridge_entity_fallback=True))
+    result = executor.execute(_plan())
+    assert result.status == "ok"
+    assert result.rows == [{"person": "Ada", "company": "X"}]
+    assert result.metrics.bridge_fallbacks == 1
+    assert result.metrics.bridge_successes == 1

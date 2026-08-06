@@ -2618,20 +2618,28 @@ class AdaptiveExecutor:
         slot: Slot,
         binding_contexts: list[dict[str, str]],
         metrics: RunMetrics,
+        *,
+        join_field: str | None = None,
     ) -> tuple[list[BindingRow], RunMetrics]:
         """Infer candidate bridge entities via LLM and re-materialize the slot.
 
         Prompt: question + slot query + known bound values + the evidence passages
         retrieved for this slot. The LLM must return candidate values for the
         slot's *unbound* variable (the intermediate entity linking the known
-        binding to the target). Each candidate becomes a new binding context;
-        materialize_many then re-retrieves with that value as an anchor.
+        binding to the target). When ``join_field`` is given (join-chain break
+        repair), infer candidate values for that specific join key instead: the
+        current slot's rows failed to share it with earlier slots, so the bridge
+        entity is that missing key value. Each candidate becomes a new binding
+        context; materialize_many then re-retrieves with that value as an anchor.
         """
         metrics = metrics.model_copy(update={"bridge_fallbacks": metrics.bridge_fallbacks + 1})
-        unbound = sorted(slot.variables - set(binding_contexts[0].keys()))
-        if not unbound:
-            return [], metrics
-        target_var = unbound[0]
+        if join_field is not None:
+            target_var = join_field
+        else:
+            unbound = sorted(slot.variables - set(binding_contexts[0].keys()))
+            if not unbound:
+                return [], metrics
+            target_var = unbound[0]
         evidence_texts = []
         for record in getattr(self.materializer, "last_evidence", []):
             if record.slot_id == slot.id:
@@ -3335,6 +3343,50 @@ class AdaptiveExecutor:
                 # choosing a connected next slot. Actual values are propagated
                 # through binding_contexts above.
                 all_bindings = {key: "<bound>" for row in current for key in row.bindings}
+            elif self._should_bridge_fallback(slot, binding_contexts):
+                # The join produced no rows: the current slot's extracted rows do
+                # not share the join key with the earlier slots. Infer candidate
+                # bridge entities for the current slot, re-materialize it, and
+                # re-run the join against the updated rows.
+                join = next((j for j in plan.joins if (j.left_slot in materialized and j.right_slot == slot.id) or (j.right_slot in materialized and j.left_slot == slot.id)), None)
+                join_field = join.right_field if (join is not None and join.right_slot == slot.id) else (join.left_field if join is not None else None)
+                bridge_rows, metrics = self._bridge_entity_fallback(
+                    slot, binding_contexts, metrics, join_field=join_field,
+                )
+                if bridge_rows:
+                    rows = bridge_rows
+                    if self.options.incremental_join:
+                        join = next((j for j in plan.joins if (j.left_slot in materialized and j.right_slot == slot.id) or (j.right_slot in materialized and j.left_slot == slot.id)), None)
+                        if join is not None:
+                            # Re-join the current slot's repaired rows against the
+                            # earlier materialized rows (not the emptied `current`).
+                            left = materialized[join.left_slot] if join.left_slot in materialized else materialized[join.right_slot]
+                            if join.right_slot == slot.id:
+                                join_input = len(left) + len(rows)
+                                current = _join_rows(left, rows, join.left_field, join.right_field)
+                            else:
+                                join_input = len(left) + len(rows)
+                                current = _join_rows(rows, left, join.left_field, join.right_field)
+                            metrics = metrics.model_copy(update={
+                                "join_input_rows": metrics.join_input_rows + join_input,
+                                "join_output_rows": metrics.join_output_rows + len(current),
+                            })
+                        else:
+                            previous_slots = set(materialized) - {slot.id}
+                            if _operator_connects_branches(plan, previous_slots, slot.id):
+                                join_input = len(current) + len(rows)
+                                current = _cross_join_rows(current, rows)
+                                metrics = metrics.model_copy(update={
+                                    "join_input_rows": metrics.join_input_rows + join_input,
+                                    "join_output_rows": metrics.join_output_rows + len(current),
+                                })
+                if current:
+                    all_bindings = {key: "<bound>" for row in current for key in row.bindings}
+                else:
+                    return ExecutionResult(
+                        rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                        slot_traces=slot_traces, status="empty",
+                    )
             else:
                 return ExecutionResult(
                     rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
