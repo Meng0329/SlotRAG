@@ -83,6 +83,7 @@ class MethodSpec:
     drop_short_answer: bool = False
     generation_thinking: bool = False
     generation_fidelity: bool = False
+    evidence_rerank: bool = False
     description: str = ""
 
 
@@ -517,6 +518,22 @@ METHODS: dict[str, MethodSpec] = {
         structured_answer_contract=True,
         generation_fidelity=True,
         description="H-018: H-012 stacked + evidence-fidelity generation (prefer fuller evidence span over shortened answer)",
+    ),
+    "slotrag-grounded-frontier-perpath-rerank": MethodSpec(
+        "slotrag-grounded-frontier-perpath-rerank",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        evidence_rerank=True,
+        description="H-019: H-012 stacked + question-aware evidence re-ranking before generation (align with graphrag ranked passages)",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -1046,6 +1063,37 @@ def _curate_evidence(result: ExecutionResult, *, max_items: int = 8) -> Executio
     return result.model_copy(update={"evidence": curated})
 
 
+def _rerank_evidence(
+    result: ExecutionResult,
+    reranker_client,
+    question: str,
+    *,
+    top_k: int = 8,
+) -> ExecutionResult:
+    """H-019: re-rank evidence passages against the question before generation.
+
+    SlotRAG currently dumps all slot materializations flat (often 12+ unranked
+    passages). graphrag gives the generator ranked passages; this aligns the
+    evidence presentation by relevance so the gold passage surfaces first.
+    Uses the existing bge-reranker-v2-m3 via retriever.reranker_client.
+    """
+    if not result.evidence or reranker_client is None:
+        return result
+    docs = [item.source_span for item in result.evidence]
+    try:
+        reranked = reranker_client.rerank(question, docs, top_n=len(docs))
+    except Exception:
+        return result
+    if not reranked:
+        return result
+    # reranked is sorted by relevance descending; each item.index points into docs
+    ranked = [result.evidence[item.index] for item in reranked]
+    # Reorder to relevance, then cap to top_k (ordering is the primary fix;
+    # truncation is secondary).
+    return result.model_copy(update={"evidence": ranked[:top_k]})
+
+
+
 def _finalize(
     client: AgnesClient,
     dataset: str,
@@ -1058,12 +1106,16 @@ def _finalize(
     drop_short: bool = False,
     generation_thinking: bool = False,
     generation_fidelity: bool = False,
+    evidence_rerank: bool = False,
+    reranker_client=None,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
     started = time.perf_counter()
     if evidence_curation:
         result = _curate_evidence(result)
+    if evidence_rerank:
+        result = _rerank_evidence(result, reranker_client, question.question)
     answer_kind = (
         _answer_kind(dataset, question, drop_short=drop_short)
         if structured_answer_contract
@@ -1527,6 +1579,8 @@ def _run_slotrag(
             drop_short=spec.drop_short_answer,
             generation_thinking=spec.generation_thinking,
             generation_fidelity=spec.generation_fidelity,
+            evidence_rerank=spec.evidence_rerank,
+            reranker_client=getattr(retriever, "reranker_client", None),
         )
     return _finalize(
         client,
@@ -1538,6 +1592,8 @@ def _run_slotrag(
         drop_short=spec.drop_short_answer,
         generation_thinking=spec.generation_thinking,
         generation_fidelity=spec.generation_fidelity,
+        evidence_rerank=spec.evidence_rerank,
+        reranker_client=getattr(retriever, "reranker_client", None),
     )
 
 
