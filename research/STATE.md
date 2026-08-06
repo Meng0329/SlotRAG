@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-04T22:00:00Z  
+> **最后更新**: 2026-08-06T18:00:00Z  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 2（SOTA 账本）— 已完成，诚实基线建立
+> **当前阶段**: Phase 3（假设循环）— H-017 rejected，Coverage 维持 40%
 
 ---
 
@@ -85,6 +85,11 @@
   - short 改 1 样本且变差 (drop_f1 0.581→0.531, gold '70.7' → '70.7%' %破坏 token)
   - 洞察: drop F1=0 是**算术推理失败**（gold 是计算值，仅 3/100 在原文），非格式/证据问题
   - 2wiki+drop 均定位为**推理深度**瓶颈，需显式推理链或接受 LOSS
+- [x] **H-017 已拒绝** (生成阶段显式推理链 thinking, Tier 1 n=20×2, 2wiki+drop, commit 7987181)
+  - 2wiki 20/20 答案一字不差 (F1 0.7262→0.7262, Δ=0)；drop 19/20 不变、1 样本因 provider SchemaError 变差 (0.6305→0.5805)
+  - thinking 机制**已生效** (enable_thinking=True 首次尝试走通) 但 qwen3.6-27b 的 thinking 不改变任何生成决策
+  - 与 H-005/H-009 同模式：提示级/模式级干预在生成阶段已穷尽，零效果
+- [ ] **结论**: 2wiki/drop 的生成瓶颈无法通过 prompt/模式开关修复。剩余选项：接受 2wiki+drop LOSS 保 Coverage 3/5=60%，或模型级替换（超出 slot 架构干预范围）
 - [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
 ### Phase 4: 冻结验证 ⏳ 待启动

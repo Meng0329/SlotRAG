@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-06T12:00:00Z  
-> **活跃假设数**: 0/5（H-012 部分支持；H-014/H-015a/H-016 已拒绝）  
-> **当前轮次**: Phase 3R — 2wiki/drop 均定位为推理深度问题，需显式推理链
+> **最后更新**: 2026-08-06T18:00:00Z  
+> **活跃假设数**: 0/5（H-012 部分支持；H-013/H-014/H-015a/H-016/H-017 已拒绝）  
+> **当前轮次**: Phase 3R — 2wiki/drop 生成阶段已穷尽提示级干预（thinking/curation/short-answer/bridge），需接受 LOSS 或架构级替换
 
 ---
 
@@ -15,7 +15,7 @@
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 5 (H-005, H-009, H-014, H-015, H-016) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案 |
+| rejected_exact_intervention | 6 (H-005, H-009, H-014, H-015, H-016, H-017) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
@@ -382,3 +382,34 @@
 - **结论: 拒绝**。short 只改了 1 个样本且变差（gold `'70.7'` guard 输出 `'70.7'` F1=1.0，short 输出 `'70.7%'` F1=0.0——`%` 破坏 token 集）。生成器未因去约束而产出多 token 答案。
 - **真实根因（追加诊断）**: 多 token gold 中 F1=0 的样本（如 gold `'13144 13144'` → pred `'7,761'`，gold `'255 3754'` → pred `'1,482 whites...'`）是**算术推理失败**（算错数），不是格式问题。drop 的 gold 是**计算值**（仅 3/100 在原文 passage 中出现），slot 提取无法做算术。
 - **方向修正**: drop 的瓶颈是**算术推理能力**，非答案格式/证据/提取。SlotRAG 需在生成阶段显式做算术（类似 graphrag 的 thinking），或接受 drop LOSS（该数据集 gold 不可提取）。
+
+---
+
+### H-017: 生成阶段显式推理链（thinking）可修复 2wiki 多跳 + drop 算术
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-06）
+- **根因证据**（H-014/H-015a/H-016 汇总）:
+  1. 2wiki F1=0 样本中 3/4 gold 在 evidence 但**生成选错**（推理深度不足）
+  2. drop 32 个 F1=0 全是**算术推理失败**（gold 是计算值，仅 3/100 在原文）
+  3. graphrag 的优势 = 生成器 free-text thinking（逐步多跳/算术推理）
+  4. SlotRAG `_structured_thinking_enabled` 硬编码 False（V5c 修复 thinking→over-caution）
+- **干预**: MethodSpec.generation_thinking → `generate_answer_response` 首次尝试开启 `enable_thinking`（生成器先逐步推理再出最终 span），空答案重试时关闭（over-caution 恢复）。目标同时修复 2wiki（多跳推理）+ drop（算术）。
+- **验证方法**: Tier 1 (n=20×2, 2wiki+drop) perpath-guard vs perpath-think 配对对比（单一变量）
+- **预期效果**: 2wiki F1 ≥ 0.794（react）；drop drop_f1 ≥ 0.761（graphrag）
+- **创建时间**: 2026-08-06
+- **commit**: 7987181
+
+**Tier 1 验证结果 (2026-08-06, n=20 2wiki + n=20 drop)**:
+| 数据集 | guard | think | Δ | wins/losses/ties |
+|--------|-------|-------|-----|------------------|
+| 2wikimultihop | 0.7262 | 0.7262 | **0.0000** | 0/0/20 |
+| drop | 0.6305 | 0.5805 | **-0.0500** | 0/1/19 |
+
+- **结论: 拒绝**。显式 reasoning chain **完全无效**——2wiki 20/20 答案一字不差，drop 19/20 不变。
+  1. **thinking 机制已生效**：`enable_thinking=True` 走通（generation_llm_calls=1 且首次尝试开启），但生成器输出的最终 span 与关闭 thinking 时**完全相同**——qwen3.6-27b 的 thinking 没有改变任何决策。
+  2. **唯一变差的样本是 provider 异常**：drop_2548 think 返回 `SchemaError: expected exactly one Agnes tool call named emit_evidence_rows`（提取工具调用数异常 → status=failed, failure_category=configuration），与 thinking 无关，guard 同样本正常。
+  3. **与 H-005/H-009 同模式**：又一种"提示/模式干预"在两个数据集上零效果。生成阶段瓶颈不是"缺思考时间"，而是**模型本身在给定 evidence 上的答案生成能力**（或检索/选入）。
+- **方向修正**: 2wiki/drop 的生成瓶颈无法通过 `enable_thinking` 开关修复。剩余方向：
+  a) **接受 2wiki+drop LOSS**，保 Coverage 3/5=60%——两个 LOSS 数据集 gold 均难以从 evidence 直接生成
+  b) 生成器模型升级（qwen3.6-27b → 更强推理模型），但改模型超出 slot 架构干预范围
+  c) drop 的算术问题：需要专门的数值计算模块（symbolic execution），非 LLM 生成可解
