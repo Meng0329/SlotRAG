@@ -2717,6 +2717,18 @@ class AdaptiveExecutor:
                 seen.add(key)
                 new_contexts.append(context)
         rows, slot_metrics = self.materializer.materialize_many(slot, new_contexts)
+        metrics = metrics.model_copy(update={
+            "documents_accessed": metrics.documents_accessed + slot_metrics.documents_accessed,
+            "passages_processed": metrics.passages_processed + slot_metrics.passages_processed,
+            "retrieval_calls": metrics.retrieval_calls + slot_metrics.retrieval_calls,
+            "llm_calls": metrics.llm_calls + slot_metrics.llm_calls,
+            "extraction_llm_calls": metrics.extraction_llm_calls + slot_metrics.extraction_llm_calls,
+            "prompt_tokens": metrics.prompt_tokens + slot_metrics.prompt_tokens,
+            "completion_tokens": metrics.completion_tokens + slot_metrics.completion_tokens,
+            "extraction_prompt_tokens": metrics.extraction_prompt_tokens + slot_metrics.extraction_prompt_tokens,
+            "extraction_completion_tokens": metrics.extraction_completion_tokens + slot_metrics.extraction_completion_tokens,
+            "latency_ms": metrics.latency_ms + slot_metrics.latency_ms,
+        })
         if rows:
             metrics = metrics.model_copy(update={"bridge_successes": metrics.bridge_successes + 1})
         return rows, metrics
