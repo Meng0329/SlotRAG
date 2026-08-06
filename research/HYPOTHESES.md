@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-06T06:00:00Z  
-> **活跃假设数**: 0/5（H-012 已判定部分支持，待阶段审计）  
-> **当前轮次**: Phase 3R — H-012 公平重跑完成，Coverage 40%，需改进 2wiki/drop
+> **最后更新**: 2026-08-06T10:00:00Z  
+> **活跃假设数**: 0/5（H-012 已判定部分支持，待阶段审计；H-014 已拒绝）  
+> **当前轮次**: Phase 3R — H-014 桥接回退 Tier 1 否定，2wiki 需绕开 slot join 的生成策略
 
 ---
 
@@ -15,7 +15,7 @@
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 2 (H-005, H-009) | H-005 entity契约; H-009 score-guided提取 |
+| rejected_exact_intervention | 3 (H-005, H-009, H-014) | H-005 entity契约; H-009 score-guided提取; H-014 桥接实体回退 |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
@@ -298,3 +298,37 @@
 - 2wiki 的 join 断链不是"per-path 提取"的锅——union 同样无法从跨 passage 推理提取中间变量。
 - **真实根因**: 2wiki 的跨 passage 推理本质困难。S1 需要的中间实体（如 director）需从多 passage 交叉推理，单点提取器（无论 union/per-path）都无法可靠解决。
 - **方向修正**: H-013 需转向架构级方案（如多 hop 迭代重检索、evidence 链推理），而非提取器切换。
+
+---
+
+### H-014: 桥接实体重检索回退可修复 2wiki join 断链
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-06）
+- **根因证据**（H-012 Tier 2 + 手动验证）:
+  1. 2wiki 叠加方法 28/100 样本 F1=0，其中 **27/28 join_output_rows=0**
+  2. S1 提取不出跨 passage 的中间实体（如 director = Dell Henderson），per-path 空 rows 或错误实体
+  3. S2 用空/错误绑定 → 检索无果 → `if not rows:` → status="empty" → 瞎猜
+  4. **手动验证可行**: LLM 显式 "BRIDGE entity" 提示能正确推理出 "Dell Henderson"
+- **机制**: slot 执行是链式的，任一环节空提取就整体断链。架构缺"推理中间实体 → 回填绑定 → 重试物化"的回退。
+- **干预**: `ExecutionOptions.bridge_entity_fallback`。空提取/join 断链时（`if not rows:` + join-empty 分支），LLM 推理候选桥接实体 → 合成新 binding_context → `materialize_many` 重试。单轮、开关默认关闭。
+- **验证方法**: Tier 1 (n=20, 2wiki) perpath-guard vs perpath-bridge → Tier 2 (n=100) 配对对比
+- **预期效果**: 2wiki F1 从 0.629 提升至 ≥ react 0.794；join_output_rows=0 样本数下降 ≥50%
+- **风险**: LLM 桥接推理不可靠；额外调用成本（仅空提取时触发）；drop 不受益（不同根因）
+- **创建时间**: 2026-08-06
+- **预注册文档**: 本计划文件 + 代码 commit 1ed57e2
+
+**Tier 1 验证结果 (2026-08-06, n=20, 2wiki)**:
+| 指标 | perpath-guard | perpath-bridge | Δ |
+|------|--------------|----------------|-----|
+| F1 | 0.7262 | 0.6333 | **-9.3pt** |
+| join_output_rows=0 | 20/20 | 20/20 | 0 |
+| budget_exceeded | 1 | 3 | +2 |
+| bridge fallback 触发 | 0 | 8 | +8 |
+| bridge 修复成功 | 0 | 7 | +7 |
+
+- **结论: 拒绝**。桥接回退**机制层面**有效（8 次触发 7 次成功重检索），但 **答案质量不升反降**（F1 -9.3pt）：
+  1. **修复后 join 仍空**：重检索的 rows 最终仍为空（`rows: []`），bridge 修复的实体与 S1 锚点仍不匹配——join 链结构性断裂，单实体推理无法修复
+  2. **答案来自 evidence 而非 rows**：2wiki 答案生成走 evidence-based 路径（`_deterministic_output`），rows 空不影响答案，bridge 修复的 rows 从未到达生成阶段
+  3. **预算副作用**：bridge 重物化消耗 LLM/检索预算，3 个样本因预算耗尽失败（guard 仅 1）
+- **根因洞察**: 2wiki 的 join 断链不是"缺中间实体推理"，而是**多跳推理本质困难**（Dell Henderson 手动可推理，但规模化时 LLM 候选与 S1 锚点值不一致）。与 H-013 结论一致：2wiki 需要的不是提取器/重检索修复，而是**跨 passage 联合推理**（如 evidence 链直接生成答案，绕开 slot join 架构）。
+- **方向修正**: 不再尝试修复 join 链。2wiki 应转向"绕过 slot join"的生成策略——用全 evidence 联合推理直接出答案（类似 graphrag/hybrid 的自由文本生成），或仅在 2wiki 上降级为非 join 模式。
