@@ -17,6 +17,7 @@
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
 | rejected_exact_intervention | 9 (H-005, H-009, H-014, H-015, H-016, H-017, H-018, H-019, H-020) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真; H-019 证据重排; H-020 候选抽取选择 |
 | rejected_after_feasibility | 2 (H-010, H-021) | H-010 跨来源投票+compact-value 均不可行; H-021 确定性比较算子仅 1/9 恢复 |
+| diagnostic | 1 (H-022) | 2wiki 错误最终聚类: 粒度错配不可修复 + 选型失败为真天花板 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
 ---
@@ -464,6 +465,20 @@
 - **判决: 拒绝**。正确的年份归属本身就需要跨 passage multi-hop 推理（先 join 到导演，再物化导演的出生年）——这正是 H-014 桥接已证失败的环节。regex 做不到，而 LLM 提取又已被 H-014/H-020 证明在跨实体归属上不可靠。**恢复率 11% 远低于门禁 ≥50%**。
 - **闭环**: 2wiki 的比较类错误既不能被提示修复（H-005~H-019），也不能被确定性算子修复（H-021）。比较类的正确答案依赖"先 join 到导演实体 → 再物化导演的出生年"——这个 join 是架构的 hard case，需要更强模型的跨实体推理。
 - **系统性结论**: 输入侧（H-005~H-019）+ 输出侧（H-020）+ 确定性算子（H-021）全部穷尽。**2wiki/drop 的 LOSS 是模型级能力天花板，架构侧无解**。剩余选项: 接受 2/5 Coverage，或模型级生成器升级。
+
+### H-022: 2wiki 错误最终聚类——粒度错配不可修复 + 选型失败为真天花板（诊断, 非干预）
+
+- **状态**: diagnostic（2026-08-06, H-012 Tier2 2wiki n=100 逐样本聚类）
+- **动机**: H-021 后尝试纯后处理"答案收窄"（pred 截断到大写前缀）以修复过扩展——验证发现零改进、32 回归，转而做**逐样本错误聚类**定位真天花板。
+- **错误账目**（2wiki n=100, 54 exact / 18 partial / 28 zero）:
+  1. **粒度错配 14**（`Konstfack department of graphic design` vs `Konstfack`、`Hollywood, California` vs `Hollywood`、`Canadian-American` vs `Canadian`）: pred⊃gold，gold 是 pred 的有序子序列。**关键发现: evidence 里 gold 和 pred 两种粒度都连续出现**（`Konstfack` 和 `Konstfack department of graphic design` 同在 passage）→ 生成器选的是 evidence 里"更精细的下层实体标签"，不是幻觉。**信息论不可修复**——指标要求 gold 精确粒度，而后处理无法无监督推断问题语义要哪个粒度。
+  2. **选型失败 20**（gold 连续在 evidence 但生成器选错候选）: 比较二选一选反（`Marius Mitu`/`Puberun`/`The Sweet Life Of Count Bobby`）、粒度二选一选错（`Sweden` vs `Greek-Swedish`）、错误地理位置（`Crenshaw` vs `South Los Angeles`、`Constantinople` vs `Hungary`）。**全部 status='ok'**（27/28 F1=0 是 ok 非 empty/budget）→ 架构链已跑通，失败纯在生成/选型。
+  3. **其他 23**: 截断 4 + 实体选错 2 + 其余。
+- **后处理不可行的决定性证据**:
+  - naive 前缀收窄（pred→首个大写 run）：9 恢复但 **32 回归**（净 -9.97/100）——因为 already-correct 样本（`The Man with the Glass Eye`）同样是大写前缀结构
+  - "循证收窄"（完整 pred 在 evidence 则不动，否则收窄到最长连续前缀）：0 改进 3 回归——因为**两类样本的完整 pred 都在 evidence 里连续**，判别条件无区分力
+- **判决: 2wiki LOSS = 模型级选型天花板**。生成器在 evidence 呈现多个合法候选（比较的两个实体 / 两种粒度）时无法选对，且该选型能力 qwen3.6-27b 不具备。**无架构侧杠杆剩余**——后处理（收窄/循证）破坏 > 收益，算子（H-021）不可归属，提示/契约（H-005~H-020）零效果。
+- **对论文的含义**: 2wiki LOSS 是"选型能力"的模型级天花板，非 SlotRAG 架构缺陷。诚实基线 Coverage 维持 40%（2/5），除非模型级生成器升级。
 
 ---
 

@@ -107,6 +107,12 @@
   - 2wiki 25/100 比较类问题, 9 个比较类错误; 离线 regex 模拟仅 **1/9 恢复** (Marius Mitu vs Bea Palya 同 passage)
   - rows 无年份列; 其余 8 个年份无法归属到实体/需跨 passage join 到导演再找导演生日 (H-014 已证失败)
   - **闭环**: 输入侧 (H-005~H-019) + 输出侧 (H-020) + 确定性算子 (H-021) 全部穷尽; 2wiki/drop LOSS 是模型级能力天花板
+- [x] **H-022 诊断完成** (2wiki 错误最终聚类, 2026-08-06)
+  - 2wiki n=100: 54 exact / 18 partial / 28 zero
+  - **粒度错配 14** (pred⊃gold, evidence 里两种粒度都连续, 如 Konstfack vs Konstfack department of graphic design) → 信息论不可修复
+  - **选型失败 20** (gold 连续在 evidence 但生成器选错候选, 27/28 F1=0 全 status='ok') → 纯模型选型天花板
+  - 后处理验证: 前缀收窄 +32 回归, 循证收窄 0 改进 → 无架构侧杠杆剩余
+  - **结论**: 2wiki LOSS 是"选型能力"模型级天花板, Coverage 维持 40%, 除非模型级生成器升级
 - [ ] **下一步**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型），或接受 Coverage 2/5 收尾
 
 ---
