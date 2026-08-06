@@ -78,7 +78,7 @@
   - 机制层面有效 (8 触发 7 成功重检索)，但 F1 -9.3pt (0.726→0.633)
   - 根因: 2wiki 答案走 evidence-based 路径，rows 空不影响生成；bridge 修复的 rows 未达生成阶段
   - **2wiki 需绕开 slot join 的生成策略** (跨 passage 联合推理直接出答案)
-- [ ] **下一步**: 2wiki 降级为非 join 模式 或 evidence 联合推理生成
+- [ ] **下一步**: H-015 生成证据策展（去重+上限/二次排序）修复 2wiki 生成错误
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动

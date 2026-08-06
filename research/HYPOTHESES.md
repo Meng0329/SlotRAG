@@ -2,8 +2,8 @@
 
 > **维护者**: hypothesis-generator agent  
 > **最后更新**: 2026-08-06T10:00:00Z  
-> **活跃假设数**: 0/5（H-012 已判定部分支持，待阶段审计；H-014 已拒绝）  
-> **当前轮次**: Phase 3R — H-014 桥接回退 Tier 1 否定，2wiki 需绕开 slot join 的生成策略
+> **活跃假设数**: 1/5（H-012 已判定部分支持，待阶段审计；H-014 已拒绝；H-015 proposed）  
+> **当前轮次**: Phase 3R — H-015 生成证据策展验证中，目标修复 2wiki 生成错误
 
 ---
 
@@ -18,6 +18,7 @@
 | rejected_exact_intervention | 3 (H-005, H-009, H-014) | H-005 entity契约; H-009 score-guided提取; H-014 桥接实体回退 |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
+| proposed | 1 (H-015) | 生成证据策展修复 2wiki 生成错误 |
 
 ---
 
@@ -331,4 +332,24 @@
   2. **答案来自 evidence 而非 rows**：2wiki 答案生成走 evidence-based 路径（`_deterministic_output`），rows 空不影响答案，bridge 修复的 rows 从未到达生成阶段
   3. **预算副作用**：bridge 重物化消耗 LLM/检索预算，3 个样本因预算耗尽失败（guard 仅 1）
 - **根因洞察**: 2wiki 的 join 断链不是"缺中间实体推理"，而是**多跳推理本质困难**（Dell Henderson 手动可推理，但规模化时 LLM 候选与 S1 锚点值不一致）。与 H-013 结论一致：2wiki 需要的不是提取器/重检索修复，而是**跨 passage 联合推理**（如 evidence 链直接生成答案，绕开 slot join 架构）。
-- **方向修正**: 不再尝试修复 join 链。2wiki 应转向"绕过 slot join"的生成策略——用全 evidence 联合推理直接出答案（类似 graphrag/hybrid 的自由文本生成），或仅在 2wiki 上降级为非 join 模式。
+- **生成证据再诊断**（Tier 1 n=20 追加）: 4 个 F1=0 样本中 **3 个 gold 在 evidence 里但生成选错**（如 Ham House 12 条 passage，答案却给 '22 September 1840'）。说明 2wiki 的失败不只在 join——**生成阶段在噪声/过量的 evidence 中选错事实**。graphrag 的优势是给生成器干净的前 10 排序 passage，SlotRAG 则倾倒所有 slot 检索物（可 12+ 条无排序）。
+- **方向修正**: 不再尝试修复 join 链。2wiki 的修复应聚焦**生成证据策展**：给生成器提供筛选/排序后的 evidence（而非全量倾倒），或跨 passage 联合推理直接出答案。
+
+---
+
+### H-015: 生成证据策展（evidence curation）可修复 2wiki 生成错误
+
+- **状态**: proposed（2026-08-06）
+- **根因证据**（H-014 Tier 1 追加诊断）:
+  1. 2wiki F1=0 样本中 3/4 gold 在 evidence 里但**生成选错**
+  2. Ham House 案例: 12 条 evidence passage，生成器给 '22 September 1840'（错）而非 gold 'Ham House'
+  3. graphrag 优势: 给生成器**干净的前 10 排序 passage**；SlotRAG 倾倒所有 slot 检索物（无排序、可 12+ 条）
+- **干预**: 生成阶段证据策展。两个候选:
+  a) **证据去重+上限**: 生成前对 evidence 去重、按槽位/相关性截断到 top-N（如 8 条），减少噪声
+  b) **二次排序**: 用 question 对 evidence 重新排序（轻量 rerank），把最相关 passage 放前面
+- **机制**: 生成器在噪声/过量 evidence 中无法聚焦问题相关事实。策展后 evidence 信号更清晰，生成更准。
+- **验证方法**: Tier 1 (n=20, 2wiki) guard vs guard+curation → Tier 2 (n=100)
+- **预期效果**: 2wiki F1 从 0.629 提升至 ≥ react 0.794（回收 gold-in-evidence-but-wrong 的 3/4）
+- **风险**: 策展可能截掉必要 passage（多跳需跨 passage）；与 H-001/H-003 的"加 evidence"方向相反（但那些是检索侧，这是生成侧）
+- **依赖**: H-014（已实现 bridge 可复用其证据选择逻辑）
+- **创建时间**: 2026-08-06
