@@ -10,9 +10,9 @@ budget:
   max_retrieval_calls: 8
   question_timeout_seconds: 600
 stages:
-  h018_tier1:
+  h018_tier2:
     split: evaluation
-    sample_size: 20
+    sample_size: 100
     methods:
       - slotrag-grounded-frontier-perpath-guard
       - slotrag-grounded-frontier-perpath-fidelity
