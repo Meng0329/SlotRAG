@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-06T21:00:00Z  
-> **活跃假设数**: 0/5（H-012 部分支持；H-013~H-019 全部拒绝）  
-> **当前轮次**: Phase 3R — 8 个生成侧干预全失败，生成器有内部答案先验，架构侧无解
+> **最后更新**: 2026-08-06T22:00:00Z  
+> **活跃假设数**: 0/5（H-012 部分支持；H-013~H-020 全部拒绝）  
+> **当前轮次**: Phase 3R — 9 个生成侧干预全失败（含 H-020 输出契约），生成器有内部答案先验，架构侧无解
 
 ---
 
@@ -15,7 +15,7 @@
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 8 (H-005, H-009, H-014, H-015, H-016, H-017, H-018, H-019) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真; H-019 证据重排 |
+| rejected_exact_intervention | 9 (H-005, H-009, H-014, H-015, H-016, H-017, H-018, H-019, H-020) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真; H-019 证据重排; H-020 候选抽取选择 |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
@@ -430,6 +430,26 @@
 - **结论: 拒绝**。生成器**完全无视 evidence 呈现**——即使把 12+ 无序 passage 重排为相关性 top-8，答案一字不差。生成器有内部答案先验，不因证据排序改变决策。
 - **第 8 个连续零效果生成侧干预**: H-005/009/014/015a/016/017/018/019。
 - **决定性洞察**: 检索、证据量、证据排序、提示措辞、thinking、契约——全部不影响 qwen3.6-27b 的生成。**瓶颈是模型自身的答案先验，架构侧无解。**
+
+---
+
+### H-020: extract-then-select 输出契约（候选抽取→选择，从构造上堵死内部先验）
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-06）
+- **动机**: 前 8 个生成干预（H-005~H-019）全部改变**输入侧**（evidence 量/排序/prompt 措辞/thinking/契约）。2wiki 的病灶却在**输出侧**：34/46 wrong 样本 gold 连续在 evidence 里（如 'Konstfack' 在 1476 字 passage、'Hollywood' 在 George B. Seitz 页），但生成器自由发挥写内部先验答案。**架构级修复 = 从构造上约束输出必须 grounded。**
+- **干预**: MethodSpec.extract_then_select → 两段式输出契约:
+  1. Step 1 `emit_candidate_spans`: 只允许枚举 evidence 里的**连续子串**（verbatim），候选 grounded by construction
+  2. Step 2 `emit_selected_answer`: 从候选中选一个（或空），必须匹配问题
+  3. 契约失败（无候选/空选择/工具错误）→ **回退到自由生成**，只加不加伤
+- **Tier 1 (n=20, 2wiki, commit ee4e4b3)**: guard 0.7262 → select 0.6155 (**Δ=-0.1107**), wins=0 losses=3 ties=17
+  - 机制**已生效**: select 的 generation_llm_calls=2（两段各一次调用），guard=1
+  - **3 个样本答案被改变，全部变差**: `Beji Caid Essebsi`→`Baker Brownell` (1.0→0)、`Broken Laws`→`Roy William Neill` (1.0→0)、`Schloss Persenbeug...`→`Archduke Hubert Salvator of Austria` (0.5→0.286)
+  - **2/2 回归的是 previously-correct (F1 1.0)**；**8 个 guard-wrong 样本 0 个被恢复**
+  - 两个 previously-correct 的 gold（'Broken Laws'、'Beji Caid Essebsi'）**都连续在 evidence 里**（'Broken Laws (1924)... directed by Roy William Neill'），但候选抽取把**导演名字**抽成候选、选择器选了导演而非电影名——比较类问题（"Which film has the director died earlier"）的中间实体泄漏进答案
+- **结论: 拒绝**。即使把输出契约收窄到"只能从 evidence 选"、两段式强制 grounded，qwen3.6-27b 依然选错——不是它**不愿**从 evidence 选，而是**选不准**（比较类问题的推理选型本身超出该模型能力）。候选抽取成功（gold 在候选中）但选择步骤无法对齐问题语义。
+- **第 9 个连续零/负效果生成干预**: H-005/009/014/015a/016/017/018/019/020 全部失败。
+- **决定性洞察**: 生成器既无视 evidence 的**呈现**（H-019），也无法在 grounded 候选里**选准**（H-020）——瓶颈已从"输出契约"收敛到"模型选型能力"，架构侧（无论输入还是输出侧）无解。
+- **后续**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型）；否则接受 Coverage 2/5 收尾。
 
 ---
 

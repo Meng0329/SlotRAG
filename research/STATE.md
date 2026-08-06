@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-06T20:00:00Z  
+> **最后更新**: 2026-08-06T22:00:00Z  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 3（假设循环）— H-017/H-018 rejected，生成瓶颈模型级不可解，Coverage 维持 40%
+> **当前阶段**: Phase 3（假设循环）— H-017~H-020 rejected，生成瓶颈模型级不可解（输入+输出契约均穷尽），Coverage 维持 40%
 
 ---
 
@@ -97,7 +97,12 @@
   - guard 0.7262 → rerank 0.7262 (**Δ=0.0000**), 20/20 一字不差
   - 机制生效 (reranker_calls=2)；**10/20 样本 evidence>8 被重排+截断到 8，0/10 答案变化**
   - 决定性证据: 生成器**完全无视 evidence 呈现**（重排 12+→8 无影响），有内部答案先验
-- [x] **系统性结论（8 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约——全部不影响 qwen3.6-27b 生成。瓶颈是模型自身答案先验，架构侧无解
+- [x] **H-020 已拒绝** (extract-then-select 输出契约, Tier 1 n=20, 2wiki, commit ee4e4b3)
+  - guard 0.7262 → select 0.6155 (**Δ=-0.1107**), wins=0 losses=3 ties=17
+  - 机制生效 (generation_llm_calls=2 两段式)；**3/20 答案被改变，全部变差**；2 个 previously-correct 被破坏（'Broken Laws'→导演 'Roy William Neill'、'Beji Caid Essebsi'→'Baker Brownell'），8 个 guard-wrong 0 恢复
+  - gold 在两个 previously-correct 里都连续在 evidence，但**候选抽取把中间实体（导演名）抽成候选，选择器选了导演而非电影名**——比较类问题选型超出 qwen3.6-27b 能力
+  - 决定性证据: 生成器在 grounded 候选中也**选不准**——瓶颈从"输出契约"收敛到"模型选型能力"
+- [x] **系统性结论（9 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约（含输出契约）——全部不影响 qwen3.6-27b 生成。瓶颈是模型自身答案先验 + 选型能力，架构侧无解
 - [ ] **下一步**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型），或接受 Coverage 2/5 收尾
 
 ---
