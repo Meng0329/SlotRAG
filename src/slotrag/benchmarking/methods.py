@@ -79,6 +79,7 @@ class MethodSpec:
     per_path_extraction: bool = False
     score_guided_extraction: bool = False
     query_rewriting: bool = False
+    evidence_curation: bool = False
     description: str = ""
 
 
@@ -449,6 +450,22 @@ METHODS: dict[str, MethodSpec] = {
         extraction_enable_thinking=True,
         structured_answer_contract=True,
         description="H-014: H-012 stacked + bridge-entity re-retrieval fallback for join chain repair",
+    ),
+    "slotrag-grounded-frontier-perpath-curate": MethodSpec(
+        "slotrag-grounded-frontier-perpath-curate",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        evidence_curation=True,
+        description="H-015: H-012 stacked + generation evidence curation (dedupe + cap to 8)",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -951,6 +968,28 @@ def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> s
     return value
 
 
+def _curate_evidence(result: ExecutionResult, *, max_items: int = 8) -> ExecutionResult:
+    """Deduplicate evidence by source and cap to the most relevant items.
+
+    H-015: 2wiki generation fails when the generator receives abundant/noisy
+    evidence (12+ unranked passages). Graphrag's advantage is a clean top-10;
+    curation restores that signal by collapsing repeated source spans and
+    bounding the evidence window fed to the generator.
+    """
+    seen: set[str] = set()
+    curated: list[EvidenceRecord] = []
+    for item in result.evidence:
+        if item.source_id in seen:
+            continue
+        seen.add(item.source_id)
+        curated.append(item)
+        if len(curated) >= max_items:
+            break
+    if len(curated) == len(result.evidence):
+        return result
+    return result.model_copy(update={"evidence": curated})
+
+
 def _finalize(
     client: AgnesClient,
     dataset: str,
@@ -959,10 +998,13 @@ def _finalize(
     *,
     structured_answer_contract: bool = False,
     entity_answer_contract: bool = False,
+    evidence_curation: bool = False,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
     started = time.perf_counter()
+    if evidence_curation:
+        result = _curate_evidence(result)
     answer_kind = (
         _answer_kind(dataset, question)
         if structured_answer_contract
@@ -1420,6 +1462,7 @@ def _run_slotrag(
             result,
             structured_answer_contract=True,
             entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
+            evidence_curation=spec.evidence_curation,
         )
     return _finalize(
         client,
@@ -1427,6 +1470,7 @@ def _run_slotrag(
         question,
         result,
         entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
+        evidence_curation=spec.evidence_curation,
     )
 
 
