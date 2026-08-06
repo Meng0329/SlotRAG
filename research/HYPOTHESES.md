@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-06T11:00:00Z  
-> **活跃假设数**: 0/5（H-012 已判定部分支持；H-014/H-015a 已拒绝）  
-> **当前轮次**: Phase 3R — 2wiki 生成侧两方案均负，需多跳推理链或接受 LOSS
+> **最后更新**: 2026-08-06T12:00:00Z  
+> **活跃假设数**: 0/5（H-012 部分支持；H-014/H-015a/H-016 已拒绝）  
+> **当前轮次**: Phase 3R — 2wiki/drop 均定位为推理深度问题，需显式推理链
 
 ---
 
@@ -15,7 +15,7 @@
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 4 (H-005, H-009, H-014, H-015) | H-005 entity契约; H-009 score-guided提取; H-014 桥接回退; H-015a 证据去重 |
+| rejected_exact_intervention | 5 (H-005, H-009, H-014, H-015, H-016) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案 |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
@@ -363,3 +363,22 @@
 - **结论: 拒绝 variant a**。证据去重+截断（7.3→4.5 条）**完全没改变任何答案**（0/20 变化）。
 - **洞察**: 生成错误不是证据**数量/噪声**问题——即使只给 4.5 条策展后的 evidence，生成器仍选错。证据去重只去除重复源，但 2wiki 的跨 passage 推理需要**联合阅读**多条 passage，截断反而可能丢失必要信息。
 - **方向**: H-015 剩余候选 b（question 相关性二次排序）可能更对症，但证据表明生成瓶颈是**推理深度**而非证据呈现。2wiki 需更根本的方案（如显式多跳推理链生成），或接受 2wiki LOSS 专注 drop。
+
+---
+
+### H-016: drop 用自由文本答案（short）替代 number 约束可修复多 token 答案
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-06）
+- **根因证据**:
+  1. 93/100 drop gold 是多 token 集合（`'99 99'`、`'Marriage living together'`）
+  2. `_answer_kind` 对 drop 返回 `"number"` → 强迫生成器只输出单个数字
+  3. 19 个 SlotRAG-only F1=0 中 17 个是多 token gold
+- **干预**: MethodSpec.drop_short_answer → `_answer_kind` 对 drop 用 `"short"`（自由简洁多 token span）
+- **Tier 1 验证结果 (n=20, drop)**:
+  | 指标 | guard (number) | short | Δ |
+  |------|---------------|-------|-----|
+  | drop_f1 | 0.5805 | 0.5305 | **-5pt** |
+  | 变化的样本 | — | 1 (worse) | -1 |
+- **结论: 拒绝**。short 只改了 1 个样本且变差（gold `'70.7'` guard 输出 `'70.7'` F1=1.0，short 输出 `'70.7%'` F1=0.0——`%` 破坏 token 集）。生成器未因去约束而产出多 token 答案。
+- **真实根因（追加诊断）**: 多 token gold 中 F1=0 的样本（如 gold `'13144 13144'` → pred `'7,761'`，gold `'255 3754'` → pred `'1,482 whites...'`）是**算术推理失败**（算错数），不是格式问题。drop 的 gold 是**计算值**（仅 3/100 在原文 passage 中出现），slot 提取无法做算术。
+- **方向修正**: drop 的瓶颈是**算术推理能力**，非答案格式/证据/提取。SlotRAG 需在生成阶段显式做算术（类似 graphrag 的 thinking），或接受 drop LOSS（该数据集 gold 不可提取）。

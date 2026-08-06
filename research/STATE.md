@@ -81,7 +81,11 @@
 - [x] **H-015a 已拒绝** (生成证据去重+截断, Tier 1 n=20, 2wiki)
   - evidence 7.3→4.5 条，但 0/20 样本答案变化 (F1 0.7262 不变)
   - 洞察: 生成错误不是 evidence 数量/噪声问题，是推理深度问题
-- [ ] **下一步**: 2wiki 需显式多跳推理链生成，或接受 2wiki LOSS 专注 drop
+- [x] **H-016 已拒绝** (drop 自由文本 short 答案, Tier 1 n=20, drop)
+  - short 改 1 样本且变差 (drop_f1 0.581→0.531, gold '70.7' → '70.7%' %破坏 token)
+  - 洞察: drop F1=0 是**算术推理失败**（gold 是计算值，仅 3/100 在原文），非格式/证据问题
+  - 2wiki+drop 均定位为**推理深度**瓶颈，需显式推理链或接受 LOSS
+- [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
 ### Phase 4: 冻结验证 ⏳ 待启动
 ### Phase 5: 论文 + Artifact ⏳ 待启动
