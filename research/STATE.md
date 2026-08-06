@@ -99,6 +99,32 @@
   - 决定性证据: 生成器**完全无视 evidence 呈现**（重排 12+→8 无影响），有内部答案先验
 - [x] **系统性结论（8 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约——全部不影响 qwen3.6-27b 生成。瓶颈是模型自身答案先验，架构侧无解
 - [ ] **下一步**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型），或接受 Coverage 2/5 收尾
+
+---
+
+## 金句 1: "之前还能 90% SOTA" 的准确解释（2026-08-06 澄清）
+
+**Phase 0 审计判定那些 >90% 结论无效**（`research/CURRENT_STATE_AUDIT.md`, commit e11d4fc）：
+- **split 错配**: V6c train (seed=314159) 与 baseline eval (seed=2040) **0% 重叠** → "超90% SOTA"对比不同分布，不可比
+- **eval 暴露**: seed=2040 n=100/dataset 已污染，只能作 diagnostic
+- **撤销列表**: "超90% SOTA"、"question_grounded_retrieval 突破90%"、"V6b 200样本验证通过"
+- 当前 40% 是**同一套系统在干净 DEVELOPMENT_SET 上的严格重测**，musique/strategyqa WIN 是真实存在的
+
+## 金句 2: 生成瓶颈的准确边界（2026-08-06 诊断细化）
+
+**不是所有 LOSS 都是生成器天花板**。gold 连续性诊断（n=100/dataset）：
+
+| 数据集 | correct 时 gold 连续% | wrong 时 gold 连续% | 判定 |
+|--------|----------------------|---------------------|------|
+| musique | **96%** | 63% | ✅ WIN — 正确性=gold 可读性 |
+| strategyqa | 0% (boolean) | 0% | ✅ WIN — facts 存在即答 |
+| 2wiki | 87% | **74%** | ❌ LOSS — gold 连续仍在 74% wrong 里出错 |
+| drop | 6% | 2% | ❌ LOSS — gold 是计算值，几乎永不连续 |
+| hotpotqa | 94% | 86% | TIE — 正确性大致=gold 可读性 |
+
+- **drop = 架构级不可能**（gold 是计算值，仅 6% 在原文连续）——非生成器问题
+- **2wiki = 真生成失败**（74% gold 连续却仍错）——musique 同样情况却能对
+- **musique/hotpotqa/strategyqa = 架构+检索领先**，生成器能读 gold 就答对
 - [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
 ### Phase 4: 冻结验证 ⏳ 待启动
