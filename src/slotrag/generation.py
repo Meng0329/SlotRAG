@@ -56,6 +56,7 @@ def generate_answer_response(
     answer_kind: str = "short",
     structured_output: bool = False,
     generation_thinking: bool = False,
+    generation_fidelity: bool = False,
 ) -> tuple[str, ChatResult]:
     """Generate an answer from selected evidence and retain provider metadata."""
     evidence = [
@@ -67,6 +68,16 @@ def generate_answer_response(
         }
         for item in result.evidence
     ]
+    # H-018: evidence-fidelity instruction for short/number answers — prefer the
+    # fuller form present in evidence (full name, qualifiers, complete phrase)
+    # instead of the shortest form. Soft guidance, not a hard contract (unlike
+    # H-005 entity contract, which over-truncated multi-entity answers).
+    fidelity_instruction = (
+        "Return the answer as a contiguous span taken from the supplied evidence. "
+        "If the evidence contains a fuller form that answers the question (a full name, "
+        "disambiguating qualifiers, or a complete phrase), return that fuller form rather "
+        "than a shortened version. Do not shorten names or drop qualifiers."
+    )
     if structured_output:
         format_instruction = {
             "boolean": "The answer must be exactly True or False.",
@@ -78,6 +89,8 @@ def generate_answer_response(
                 "If the evidence gives a full name, return the full name."
             ),
         }.get(answer_kind, "The answer must contain only a concise answer span.")
+        if generation_fidelity and answer_kind in {"short", "number"}:
+            format_instruction = fidelity_instruction
         system_instruction = (
             "Answer the question based on the supplied evidence. "
             f"{format_instruction} Call emit_final_answer exactly once."
@@ -91,6 +104,8 @@ def generate_answer_response(
                 "evidence, with no extra qualifiers, articles, or descriptive text."
             ),
         }.get(answer_kind, "Return only a concise answer span.")
+        if generation_fidelity and answer_kind in {"short", "number"}:
+            format_instruction = fidelity_instruction
         system_instruction = (
             "Answer the question based on the supplied evidence. "
             f"{format_instruction} Do not invent citations."
