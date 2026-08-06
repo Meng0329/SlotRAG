@@ -495,6 +495,11 @@ class RunMetrics(StrictModel):
     per_path_extraction_paths: int = Field(default=0, ge=0)
     extracted_rows_before_dedup: int = Field(default=0, ge=0)
     extracted_rows_after_dedup: int = Field(default=0, ge=0)
+    # H-014: bridge-entity re-retrieval fallback telemetry
+    bridge_fallbacks: int = Field(default=0, ge=0)
+    bridge_successes: int = Field(default=0, ge=0)
+    bridge_llm_calls: int = Field(default=0, ge=0)
+    bridge_candidates: int = Field(default=0, ge=0)
 
 
 class ExecutionResult(StrictModel):

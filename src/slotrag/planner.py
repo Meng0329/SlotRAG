@@ -226,6 +226,8 @@ class ExecutionOptions(BaseModel):
     eager_materialization: bool = False
     typed_operators: bool = True
     frontier_safe_selection: bool = False
+    # H-014: on empty slot extraction, infer bridge entity via LLM and re-materialize
+    bridge_entity_fallback: bool = False
 
 
 def fold_grounded_entity_anchor(plan: SlotPlan, question: str) -> tuple[SlotPlan, int]:
@@ -2592,6 +2594,125 @@ class AdaptiveExecutor:
             chosen = max(candidates, key=score)
         return chosen, guard_checked, guard_intervened, candidates_pruned
 
+    # --- H-014: bridge-entity re-retrieval fallback ---
+    def _should_bridge_fallback(
+        self,
+        slot: Slot,
+        binding_contexts: list[dict[str, str]],
+    ) -> bool:
+        """Return True when an empty extraction warrants one LLM bridge-entity retry.
+
+        Fires on any empty slot extraction: the intermediate entity (or the root
+        anchor) was not extractable from any single passage, so we ask the LLM to
+        reason across the already-retrieved evidence for the missing bridge value
+        and re-materialize the slot with it.
+        """
+        if not self.options.bridge_entity_fallback:
+            return False
+        if not self.materializer.question_context:
+            return False
+        return True
+
+    def _bridge_entity_fallback(
+        self,
+        slot: Slot,
+        binding_contexts: list[dict[str, str]],
+        metrics: RunMetrics,
+    ) -> tuple[list[BindingRow], RunMetrics]:
+        """Infer candidate bridge entities via LLM and re-materialize the slot.
+
+        Prompt: question + slot query + known bound values + the evidence passages
+        retrieved for this slot. The LLM must return candidate values for the
+        slot's *unbound* variable (the intermediate entity linking the known
+        binding to the target). Each candidate becomes a new binding context;
+        materialize_many then re-retrieves with that value as an anchor.
+        """
+        metrics = metrics.model_copy(update={"bridge_fallbacks": metrics.bridge_fallbacks + 1})
+        unbound = sorted(slot.variables - set(binding_contexts[0].keys()))
+        if not unbound:
+            return [], metrics
+        target_var = unbound[0]
+        evidence_texts = []
+        for record in getattr(self.materializer, "last_evidence", []):
+            if record.slot_id == slot.id:
+                evidence_texts.append(record.source_span[:1200])
+        passages_payload = "\n\n".join(f"PASSAGE:\n{t}" for t in evidence_texts[:8])
+        question = self.materializer.question_context or ""
+        known = json.dumps(binding_contexts[0], ensure_ascii=False)
+        messages = [
+            {"role": "system", "content": (
+                "You are solving a multi-hop question. A slot-based extractor failed to "
+                "fill an intermediate variable from any single passage. Identify the "
+                "BRIDGE entity: the value of ?{var} that connects the known binding(s) "
+                "to the target answer. Reason across ALL passages together — the entity "
+                "may be mentioned in one passage and related to the known value in another."
+                " Return your top candidates as a list, most likely first, max 3."
+            ).format(var=target_var)},
+            {"role": "user", "content": (
+                f"Question: {question}\n"
+                f"Relation: {slot.predicate}\n"
+                f"Slot query: {slot.query_text(binding_contexts[0])}\n"
+                f"Known bindings: {known}\n"
+                f"Missing variable: ?{target_var}\n\n"
+                f"{passages_payload}"
+            )},
+        ]
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "emit_bridge_entities",
+                "description": f"Emit candidate values for ?{target_var}.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "bridge_entities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 3,
+                        }
+                    },
+                    "required": ["bridge_entities"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        try:
+            response = self.materializer.client.complete(
+                messages, tools=[tool],
+                tool_choice={"type": "function", "function": {"name": "emit_bridge_entities"}},
+                temperature=0.0,
+            )
+            metrics = SlotCompiler._record_response(metrics, response, phase="reasoning")
+            metrics = metrics.model_copy(update={
+                "bridge_llm_calls": metrics.bridge_llm_calls + response.logical_calls,
+            })
+            args = self.materializer.client.require_tool(response, "emit_bridge_entities")
+        except (SchemaError, ValueError, ValidationError) as exc:
+            metrics = metrics.model_copy(update={
+                "structured_output_failures": metrics.structured_output_failures + 1,
+            })
+            return [], metrics
+        candidates = args.get("bridge_entities") or []
+        candidates = [c.strip() for c in candidates if c and c.strip()][:3]
+        metrics = metrics.model_copy(update={
+            "bridge_candidates": metrics.bridge_candidates + len(candidates),
+        })
+        if not candidates:
+            return [], metrics
+        new_contexts: list[dict[str, str]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for candidate in candidates:
+            context = dict(binding_contexts[0])
+            context[target_var] = candidate
+            key = tuple(sorted(context.items()))
+            if key not in seen:
+                seen.add(key)
+                new_contexts.append(context)
+        rows, slot_metrics = self.materializer.materialize_many(slot, new_contexts)
+        if rows:
+            metrics = metrics.model_copy(update={"bridge_successes": metrics.bridge_successes + 1})
+        return rows, metrics
+
     def execute(
         self,
         plan: SlotPlan,
@@ -3174,10 +3295,13 @@ class AdaptiveExecutor:
                     error="physical action policy abstained because evidence was insufficient",
                 )
             if not rows:
-                return ExecutionResult(
-                    rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
-                    slot_traces=slot_traces, status="empty",
-                )
+                if self._should_bridge_fallback(slot, binding_contexts):
+                    rows, metrics = self._bridge_entity_fallback(slot, binding_contexts, metrics)
+                if not rows:
+                    return ExecutionResult(
+                        rows=[], evidence=retrieved_evidence, order=order, metrics=metrics,
+                        slot_traces=slot_traces, status="empty",
+                    )
             if current is None:
                 current = rows
             elif self.options.incremental_join:
