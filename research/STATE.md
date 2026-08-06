@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-06T18:00:00Z  
+> **最后更新**: 2026-08-06T20:00:00Z  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 3（假设循环）— H-017 rejected，Coverage 维持 40%
+> **当前阶段**: Phase 3（假设循环）— H-017/H-018 rejected，生成瓶颈模型级不可解，Coverage 维持 40%
 
 ---
 
@@ -89,7 +89,12 @@
   - 2wiki 20/20 答案一字不差 (F1 0.7262→0.7262, Δ=0)；drop 19/20 不变、1 样本因 provider SchemaError 变差 (0.6305→0.5805)
   - thinking 机制**已生效** (enable_thinking=True 首次尝试走通) 但 qwen3.6-27b 的 thinking 不改变任何生成决策
   - 与 H-005/H-009 同模式：提示级/模式级干预在生成阶段已穷尽，零效果
-- [ ] **结论**: 2wiki/drop 的生成瓶颈无法通过 prompt/模式开关修复。剩余选项：接受 2wiki+drop LOSS 保 Coverage 3/5=60%，或模型级替换（超出 slot 架构干预范围）
+- [x] **H-018 已拒绝** (生成证据保真 prompt, Tier 2 n=100, hotpotqa)
+  - guard 0.8131 → fidelity 0.8242 (**+1.1pt, p=0.60**), wins=7 losses=6
+  - 修复截断 (`east`→`the east of Ireland` +0.5)、错实体 (`English`→`Scottish` 0→1.0) 但**回归 4 个 previously-correct** (Dallas→Dallas Texas, McLaren Vale 过度扩展)
+  - 软保真指令无法区分"该完整"与"该简短"（无 gold 信号）→ +1.1pt 不显著，违反零回归门禁
+- [x] **系统性结论**: hotpotqa 29/100 剩余错误中 25 个 gold 在 evidence，生成瓶颈经 7 个提示级干预全失败，确认模型级不可解
+- [ ] **下一步**: 生成瓶颈模型级 (换更强生成模型) 或接受 Coverage 2/5。剩余无提示级假设可试
 - [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
 ### Phase 4: 冻结验证 ⏳ 待启动
