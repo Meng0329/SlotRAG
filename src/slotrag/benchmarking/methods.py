@@ -81,6 +81,7 @@ class MethodSpec:
     query_rewriting: bool = False
     evidence_curation: bool = False
     drop_short_answer: bool = False
+    generation_thinking: bool = False
     description: str = ""
 
 
@@ -483,6 +484,22 @@ METHODS: dict[str, MethodSpec] = {
         structured_answer_contract=True,
         drop_short_answer=True,
         description="H-016: H-012 stacked + drop free-text short answer (multi-token gold)",
+    ),
+    "slotrag-grounded-frontier-perpath-think": MethodSpec(
+        "slotrag-grounded-frontier-perpath-think",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        generation_thinking=True,
+        description="H-017: H-012 stacked + explicit generation reasoning chain (multi-hop/arithmetic) with over-caution retry recovery",
     ),
     "slotrag-question-grounded-retrieval": MethodSpec(
         "slotrag-question-grounded-retrieval",
@@ -1022,6 +1039,7 @@ def _finalize(
     entity_answer_contract: bool = False,
     evidence_curation: bool = False,
     drop_short: bool = False,
+    generation_thinking: bool = False,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
         return result
@@ -1042,6 +1060,7 @@ def _finalize(
         result,
         answer_kind=answer_kind,
         structured_output=structured_answer_contract,
+        generation_thinking=generation_thinking,
     )
     metrics = merge_metrics(
         result.metrics,
@@ -1487,6 +1506,7 @@ def _run_slotrag(
             entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
             evidence_curation=spec.evidence_curation,
             drop_short=spec.drop_short_answer,
+            generation_thinking=spec.generation_thinking,
         )
     return _finalize(
         client,
@@ -1496,6 +1516,7 @@ def _run_slotrag(
         entity_answer_contract=getattr(config.execution, "entity_answer_contract", False),
         evidence_curation=spec.evidence_curation,
         drop_short=spec.drop_short_answer,
+        generation_thinking=spec.generation_thinking,
     )
 
 

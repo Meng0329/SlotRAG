@@ -88,6 +88,7 @@ def test_answer_generation_keeps_hidden_thinking_for_joined_answers():
         ),
         answer_kind="short",
         structured_output=True,
+        generation_thinking=True,
     )
 
     assert answer == "True"

@@ -37,9 +37,15 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
     return (response.content or "").strip()
 
 
-def _structured_thinking_enabled(result: ExecutionResult) -> bool:
-    """Disable thinking during generation — thinking causes over-caution, refusing to answer when evidence is present but not perfectly aligned with the question."""
-    return False
+def _structured_thinking_enabled(result: ExecutionResult, *, enabled: bool = False) -> bool:
+    """Generation thinking is off by default (V5c fix: thinking caused over-caution).
+
+    H-017: when ``enabled`` (a per-method flag), turn thinking ON so the
+    generator can reason step-by-step (multi-hop for 2wiki, arithmetic for
+    drop) before emitting the final span. The empty-answer retry in
+    generate_answer_response guards against the old over-caution refusal mode.
+    """
+    return enabled
 
 
 def generate_answer_response(
@@ -49,6 +55,7 @@ def generate_answer_response(
     *,
     answer_kind: str = "short",
     structured_output: bool = False,
+    generation_thinking: bool = False,
 ) -> tuple[str, ChatResult]:
     """Generate an answer from selected evidence and retain provider metadata."""
     evidence = [
@@ -103,16 +110,23 @@ def generate_answer_response(
     ]
     responses: list[ChatResult] = []
     for attempt in range(2):
+        # H-017: thinking on first attempt (multi-hop/arithmetic reasoning),
+        # disabled on the retry to recover from over-caution refusal.
+        use_thinking = generation_thinking and attempt == 0
         if structured_output:
             response = client.complete(
                 messages,
                 tools=[_answer_tool(answer_kind)],
                 tool_choice={"type": "function", "function": {"name": "emit_final_answer"}},
                 temperature=0.0,
-                enable_thinking=_structured_thinking_enabled(result),
+                enable_thinking=_structured_thinking_enabled(result, enabled=use_thinking),
             )
         else:
-            response = client.complete(messages, temperature=0.0)
+            response = client.complete(
+                messages,
+                temperature=0.0,
+                enable_thinking=_structured_thinking_enabled(result, enabled=use_thinking),
+            )
         responses.append(response)
         answer = _tool_answer(client, response) if structured_output else (response.content or "").strip()
         if answer:
