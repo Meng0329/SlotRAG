@@ -93,8 +93,12 @@
   - guard 0.8131 → fidelity 0.8242 (**+1.1pt, p=0.60**), wins=7 losses=6
   - 修复截断 (`east`→`the east of Ireland` +0.5)、错实体 (`English`→`Scottish` 0→1.0) 但**回归 4 个 previously-correct** (Dallas→Dallas Texas, McLaren Vale 过度扩展)
   - 软保真指令无法区分"该完整"与"该简短"（无 gold 信号）→ +1.1pt 不显著，违反零回归门禁
-- [x] **系统性结论**: hotpotqa 29/100 剩余错误中 25 个 gold 在 evidence，生成瓶颈经 7 个提示级干预全失败，确认模型级不可解
-- [ ] **下一步**: 生成瓶颈模型级 (换更强生成模型) 或接受 Coverage 2/5。剩余无提示级假设可试
+- [x] **H-019 已拒绝** (生成前证据相关性重排序, Tier 1 n=20, 2wiki)
+  - guard 0.7262 → rerank 0.7262 (**Δ=0.0000**), 20/20 一字不差
+  - 机制生效 (reranker_calls=2)；**10/20 样本 evidence>8 被重排+截断到 8，0/10 答案变化**
+  - 决定性证据: 生成器**完全无视 evidence 呈现**（重排 12+→8 无影响），有内部答案先验
+- [x] **系统性结论（8 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约——全部不影响 qwen3.6-27b 生成。瓶颈是模型自身答案先验，架构侧无解
+- [ ] **下一步**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型），或接受 Coverage 2/5 收尾
 - [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
 ### Phase 4: 冻结验证 ⏳ 待启动

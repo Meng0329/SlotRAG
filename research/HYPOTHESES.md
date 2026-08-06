@@ -1,9 +1,9 @@
 # HYPOTHESES.md — 研究假设池
 
 > **维护者**: hypothesis-generator agent  
-> **最后更新**: 2026-08-06T20:00:00Z  
-> **活跃假设数**: 0/5（H-012 部分支持；H-013~H-018 全部拒绝）  
-> **当前轮次**: Phase 3R — 生成阶段 7 个提示级干预全部失败，确认生成瓶颈模型级不可解，剩余路径：模型升级或接受 2/5
+> **最后更新**: 2026-08-06T21:00:00Z  
+> **活跃假设数**: 0/5（H-012 部分支持；H-013~H-019 全部拒绝）  
+> **当前轮次**: Phase 3R — 8 个生成侧干预全失败，生成器有内部答案先验，架构侧无解
 
 ---
 
@@ -15,7 +15,7 @@
 | supported | 1 (H-008) | PerPath 提取修复 S2，Tier 1 验证支持 |
 | stratum_specific_signal | 1 (H-001) | 仅 musique +0.108 是信号,非全局 |
 | rejected_exact_budget_configuration | 1 (H-002) | 仅拒绝该预算配置 |
-| rejected_exact_intervention | 7 (H-005, H-009, H-014, H-015, H-016, H-017, H-018) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真 |
+| rejected_exact_intervention | 8 (H-005, H-009, H-014, H-015, H-016, H-017, H-018, H-019) | H-005 entity契约; H-009 score-guided; H-014 桥接回退; H-015a 证据去重; H-016 drop short答案; H-017 生成thinking; H-018 证据保真; H-019 证据重排 |
 | rejected_after_feasibility | 1 (H-010) | 跨来源投票+compact-value 均不可行 |
 | deferred | 2 (H-003, H-011) | H-003 evidence quality; H-011 检索/选入修复 |
 
@@ -413,6 +413,23 @@
   a) **接受 2wiki+drop LOSS**，保 Coverage 3/5=60%——两个 LOSS 数据集 gold 均难以从 evidence 直接生成
   b) 生成器模型升级（qwen3.6-27b → 更强推理模型），但改模型超出 slot 架构干预范围
   c) drop 的算术问题：需要专门的数值计算模块（symbolic execution），非 LLM 生成可解
+
+---
+
+### H-019: 生成前证据相关性重排序（question-aware evidence re-ranking）可修复 2wiki
+
+- **状态**: rejected_exact_intervention（Tier 1 验证完成, 2026-08-06）
+- **根因证据**:
+  1. 2wiki 46/100 wrong，其中 **34/46 gold 在 evidence 但仅 3/46 在 rows** —— slot-join 不物化 gold，生成器拿到无序 passage 堆
+  2. graphrag 优势 = 给生成器排序的干净 passage；SlotRAG 倾倒无排序物化
+  3. 与 H-015a 区别: H-015a 是**删减**（dedupe+cap），H-019 是**排序**（不删，只按问题相关性排前）
+- **干预**: MethodSpec.evidence_rerank → `_finalize` 生成前用 bge-reranker 对 evidence source_span vs question 重排，取 top-8（排序为主，截断次要）。`reranker_calls` 遥测确认机制触发。
+- **Tier 1 (n=20, 2wiki)**: guard 0.7262 → rerank 0.7262 (**Δ=0.0000**), 20/20 答案一字不差
+  - 机制**已生效**: reranker_calls=2（排序确实执行）
+  - **10/20 样本 evidence>8（rerank 截断到 8 确实改变了生成器看到的证据），0/10 答案变化**
+- **结论: 拒绝**。生成器**完全无视 evidence 呈现**——即使把 12+ 无序 passage 重排为相关性 top-8，答案一字不差。生成器有内部答案先验，不因证据排序改变决策。
+- **第 8 个连续零效果生成侧干预**: H-005/009/014/015a/016/017/018/019。
+- **决定性洞察**: 检索、证据量、证据排序、提示措辞、thinking、契约——全部不影响 qwen3.6-27b 的生成。**瓶颈是模型自身的答案先验，架构侧无解。**
 
 ---
 
