@@ -556,6 +556,21 @@
 - **结论**: **通过（有保留）**。决定性证实了 H-025 核心假设：**typed 契约的正确形态是 validate-only 保留表面形式**（e084 从 H-024 的 0.0 恢复到 1.0，parse rate 100% 不降，算子零退化）。但 n=20 下 typed 契约仅激活 5 次、aggregate 中性——**治疗相对"无契约"的真实增益未测出**（guard 侧 e084 本就 1.0）。需要 Tier 2（n=100）判断 surface-form 契约是否有净收益，或作为 H-026/H-027 算子层 typed 执行的正确基底。
 - **价值定位**: 修正 H-024 的错误设计（内部值 vs 呈现值分离），不是独立收益假设。为 H-026/H-027 的算子层 typed 执行铺路。
 
+### H-026: 确定性子类型-关系编译器回退（close 编译→算子激活缺口）
+
+- **状态**: **closed（未构建）**（2026-08-07, 方向重估决定）
+- **动机（激活缺口）**: H-023 离线审计证明确定性编译器能把 operator_family 覆盖从模板 11% 提到 **92%**（2wiki 36/100 需运算、drop 82/100），但**运行时从未激活**：
+  - `slot_plan_tool` schema 已允许 LLM 输出 `variable_types` + `operators`（planner.py:72/108），但 LLM 在普通题上几乎不产出 typed 算子
+  - 仅 2 个硬编码模板标注 typed：`_field_extremum_template`（只匹配 `born` 极值）覆盖 4/100 2wiki；`_polar_comparison_template`（`same/both`）覆盖 5-7%
+  - H-024/H-025 运行时确认: 2wiki typed 契约仅激活 5 次，drop **0 激活**（0 number/date typed slots 被编译）
+- **拟议干预**（用户已否决构建）: 把 H-023 的确定性检测器（`_COMPAR_SUPER`/`_NUMERIC`/`_GENERIC_EXTREMUM`）接成 compile fallback——当问题需要 typed op 且 LLM 产出退化 plan 时，用 `OperatorClassifier.alloc_plan`（typed operators + variable_types）替代
+- **为何停止（诚实重估）**:
+  1. **算子执行层不是瓶颈**（H-025 已证: `apply_operators` 已能从表面形式解析，join_output_rows 双侧一致）
+  2. **瓶颈在编译→算子激活**，而激活只能靠把 H-023 的**审计分类器**引入运行时——那是把"离线 oracle"移植成"运行时编译器"，超出当前假设范围（H-023 是审计、非执行）
+  3. **2wiki/drop LOSS 的最终判定**已由 H-022（选型天花板）+ H-024/H-025（typed 物化在运行时几乎不激活）双重确认: typed relational execution 在 dev 集上**无可用基底**
+- **结论**: **typed relational execution 方向在 DEVELOPMENT_SET 上暂停**。H-026/H-027/H-028 无构建价值——编译→算子激活缺口只能由"把审计分类器升级为运行时编译器"闭合，那是架构级新方向（超出 Phase 3X 的干预假设框架），且不保证换模型前能改变 qwen3.6-27b 的生成决策
+- **Coverage 影响**: 维持 **40%**（2/5: musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。typed relational 不构成覆盖提升路径
+
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
 - **状态**: rejected_exact_intervention（Tier 2 验证完成, 2026-08-06）

@@ -129,7 +129,12 @@
   - 唯一 F1 回归 `6ebdbede` (-0.333) typed_contracts=0 → plan 不稳定噪声（`BuriedIn` vs `BurialPlace`），非 H-025 因果
   - **保留原因**: n=20 typed 契约仅激活 5 次、aggregate 中性；治疗相对"无契约"的真实增益未测出（guard 侧 e084 本就 1.0）
   - drop 维持未激活（0 number/date typed slots 编译，与 H-024 同根因）
-- [ ] **下一步**: H-026 — 算子层 typed 执行（用 H-025 的 surface-form validate-only 契约作为基底，在算子层做 typed 消费而非提取层预规范化）。若 H-026 也因 2wiki/drop typed 契约激活太少而无收益，则 typed relational execution 方向在 dev 集上需重新评估覆盖贡献
+- [x] **Phase 3X: H-026 停止（未构建, 方向重估, 2026-08-07）**
+  - **typed relational execution 在 DEVELOPMENT_SET 上暂停**。关闭的是：把 H-023 的审计分类器升级为运行时编译器的方向（超出 Phase 3X 干预假设框架）
+  - 根因: 编译→算子激活缺口——`slot_plan_tool` schema 允许 typed operators 但 LLM 几乎不产出；仅 2 个硬编码模板激活（2wiki typed 契约 5 次, drop 0）
+  - 算子执行层不是瓶颈（H-025 证表面形式解析无退化）；瓶颈是被审计分类器证明存在、但运行时无路可达的激活缺口
+  - **Coverage 维持 40%**（musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。typed relational 不构成覆盖提升路径
+- [ ] **架构级下一步（超出 Phase 3X 干预假设）**: 若要覆盖 2wiki/drop, 需把"审计分类器→运行时编译器"做成架构级新方向（非单假设干预）。或接受 qwen3.6-27b 选型天花板（H-022）→ Coverage 顶在 40%, 除非模型级生成器升级
 
 ---
 
