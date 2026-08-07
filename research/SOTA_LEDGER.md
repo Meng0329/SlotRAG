@@ -131,6 +131,55 @@
 
 ---
 
+## 2026 SOTA 审计（Phase 3X §0.3, 2026-08-07）
+
+> **依据**: 联网检索至 2026-08-07。重点审计用户点名的 2025-2026 强方法 + 检索发现的真实新增量方法。
+> **禁用语**: 在 exact/faithful baseline 建立前，**禁止**使用 "beat SOTA"。只能说 "beat strongest adapted baseline under matched protocol"。
+
+### 指定方法精确检索结果
+
+下表记录用户点名的 2025-2026 方法，检索到 2026-08-07：
+
+| 方法 | paper | date | venue/status | 检索结果 |
+|------|-------|------|--------------|----------|
+| PAR²-RAG | — | — | — | ⚠️ 公开检索未命中同名论文/官方仓库（可能未公开/更名/未投稿） |
+| RT-RAG (Reasoning Tree) | — | — | — | ⚠️ 公开检索未命中 "RT-RAG" 同名论文；返回相邻多智能体 RAG（MA-RAG 2505.20096） |
+| PlanRAG | arXiv 2404.18032 | 2024 | NeurIPS 2024 | ✅ 已收录为 baseline (adapted) |
+| KGEIR | — | — | — | ⚠️ 公开检索未命中同名方法 |
+| BELLE | — | — | — | ⚠️ 公开检索未命中同名方法 |
+| AnchorCoT | — | — | — | ⚠️ 未命中；返回 AnchorOPT（CV，无关） |
+| Graph-RAG structured | arXiv 2404.16130+ | 2024-2026 | 已收录 | ✅ GraphRAG (adapted) 已收录 |
+
+> **诚实说明**: 表中 "未命中" 是指公开 arxiv/正式索引未检索到同名论文或官方仓库，**不排除**是 2026 年新方法尚在投稿/更名/未公开。这些条目需在后续对作者处确认。
+
+### 检索到的新增 2025-2026 方法（可参考）
+
+这些是检索命中的真实工作，但**不构成本基线**（多数无官方 repo 或未复现）：
+
+| 方法 | paper | date | 相关度 | exact? |
+|------|-------|------|--------|--------|
+| MultiCube-RAG | arXiv 2602.15898 | 2026-02 | 多跳 QA，逻辑结构化 | unknown |
+| DualRAG | arXiv 2504.18243 | 2025-10 | 双过程推理+检索 | unknown |
+| GraphSearch | arXiv 2509.22009 | 2025-09 | Graph-RAG agentic 搜索 | unknown |
+| Think Parallax | arXiv 2510.15552 | 2025-12 | 多视图 KG-RAG | unknown |
+| Credible Plan-Driven RAG | arXiv 2504.16787 | 2026-01(v3) | 多跳计划式 RAG | unknown |
+| ArchRAG | arXiv 2502.09891 | 2025-08 | 社区层级 RAG | unknown |
+| MA-RAG | arXiv 2505.20096 | 2025-10 | 多智能体 RAG | unknown |
+
+### 可复现性分级结论
+
+- **当前所有可比 baseline 均为 adapted**（`exact_upstream_execution: false`）
+- 因此：**正式报告禁止 "beat SOTA" 措辞**，统一改用 "beat strongest adapted baseline under matched protocol"
+- exact/faithful baseline 建立条件：官方 repo 可运行 + exact_upstream_execution_verified + 同数据/模型/预算/语料/评分
+
+### 对 Phase 3X 的意义
+
+- 这些 2025-2026 方法的时间线提示：**typed relational / structured-reasoning 是 2026 高度活跃方向**（MultiCube、GraphSearch、Think Parallax 均涉结构化推理）
+- SlotRAG-X 的 typed relational execution 定位恰与新趋势相符，这是**论文价值支撑**而非威胁
+- 任何更强的可运行官方实现都应进入 exact/faithful baseline candidate（不得因更强而排除）
+
+---
+
 ## 里程碑
 
 - [x] Phase 2: SOTA 账本建立（诚实基线 0/10）

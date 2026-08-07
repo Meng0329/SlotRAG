@@ -102,11 +102,11 @@
   - 机制生效 (generation_llm_calls=2 两段式)；**3/20 答案被改变，全部变差**；2 个 previously-correct 被破坏（'Broken Laws'→导演 'Roy William Neill'、'Beji Caid Essebsi'→'Baker Brownell'），8 个 guard-wrong 0 恢复
   - gold 在两个 previously-correct 里都连续在 evidence，但**候选抽取把中间实体（导演名）抽成候选，选择器选了导演而非电影名**——比较类问题选型超出 qwen3.6-27b 能力
   - 决定性证据: 生成器在 grounded 候选中也**选不准**——瓶颈从"输出契约"收敛到"模型选型能力"
-- [x] **系统性结论（9 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约（含输出契约）——全部不影响 qwen3.6-27b 生成。瓶颈是模型自身答案先验 + 选型能力，架构侧无解
+- [x] **系统性结论（9 个生成侧干预全失败）**: 检索/证据量/证据排序/提示措辞/thinking/契约（含输出契约）——全部不影响 qwen3.6-27b 生成。**在 current scalar-slot execution architecture 下，局部干预已基本穷尽**（Phase 3X §0.4 修正：不推导"架构空间穷尽"，typed relational execution 是新的未验证方向）
 - [x] **H-021 已拒绝** (比较类确定性算子, feasibility 分析, 2026-08-06)
   - 2wiki 25/100 比较类问题, 9 个比较类错误; 离线 regex 模拟仅 **1/9 恢复** (Marius Mitu vs Bea Palya 同 passage)
   - rows 无年份列; 其余 8 个年份无法归属到实体/需跨 passage join 到导演再找导演生日 (H-014 已证失败)
-  - **闭环**: 输入侧 (H-005~H-019) + 输出侧 (H-020) + 确定性算子 (H-021) 全部穷尽; 2wiki/drop LOSS 是模型级能力天花板
+  - **闭环（修正）**: 输入侧 (H-005~H-019) + 输出侧 (H-020) + scalar-rows 确定性算子 (H-021) 在 current scalar-slot architecture 下已局部穷尽; 但 **typed relational execution（物化比较所需属性）未验证**，见 Phase 3X H-023~H-026
 - [x] **H-022 诊断完成** (2wiki 错误最终聚类, 2026-08-06)
   - 2wiki n=100: 54 exact / 18 partial / 28 zero
   - **粒度错配 14** (pred⊃gold, evidence 里两种粒度都连续, 如 Konstfack vs Konstfack department of graphic design) → 信息论不可修复
