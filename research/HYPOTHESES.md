@@ -505,30 +505,31 @@
 
 ### H-024: Demand-Driven Attribute Materialization（typed 契约 date/number 扩展）
 
-- **状态**: **pass_with_caveats**（Tier 1, 2026-08-07, n=20, 2wiki+drop）
+- **状态**: **rejected**（Tier 1, 2026-08-07, n=20, 2wiki+drop）— 从 pass_with_caveats 修正
 - **假设**: H-023 只证明结构编译器能判对 operator_family，但 compare/arithmetic/field_argmin 需要的 typed 属性列（date/number）没被可靠物化——`extraction_tool` 只对 boolean 走 typed 契约，date/number 以 string 强转失败。把 typed 契约推广到 date/number（→ 规范化 ISO date / bare float），`_ordered_scalar`/`_as_number` 即可可靠消费。
 - **方法**: `_normalize_typed_value` 规范化 + inline/bundle 双路径 abstention + `_field_extremum_template` BirthDate 标注 `variable_types=date`。新方法 `slotrag-grounded-frontier-perpath-typed`（=perpath-guard + typed on）。Tier 1 n=20 2wiki+drop，guard vs typed。
 - **实现**: 已完成（commits `6db3f47` + `7767412`）。376 测试全过（2 个回归单测：bundle join-anchor 重附 + bundle typed metric 计数）。
 - **诊断中修复的 pre-existing bugs**（独立于 H-024）:
-  1. **bundle 路径 join 锚丢失** (`_extract_via_bundle`, planner.py:2082): role-projected extraction 丢弃 bound join key → `_join_rows` 0 匹配 → 2wiki 全部 join_out=0。修复: bundle 路径镜像 inline 路径的 `effective_bindings` 重附（commit `8a40309`）。
+  1. **bundle 路径 join 锚丢失** (`_extract_via_bundle`, planner.py:2082): role-projected extraction 丢弃 bound join key → `_join_rows` 0 匹配 → 2wiki 全部 join_out=0。修复: bundle 路径镜像 inline 路径的 `effective_bindings` 重挂（commit `8a40309`）。
   2. **bundle 路径 typed_extraction_answers 未计数** (planner.py:2101): inline 路径计数 typed_extraction_answers 但 bundle 路径只计 abstentions → H-024 gate metric 不可测量。修复: bundle 路径加对称计数（commit `7767412`）。
-- **Tier 1 门禁结果**:
+- **Tier 1 门禁结果（aggregate）**:
 
 | 维度 | 2wiki | drop | 门禁？ |
 |---|---|---|---|
 | `typed_parse_success_rate` | 5/5 = **100%** | N/A (0 contracts) | ✅ |
-| 比较/算术 F1 (Δ≥-2pt) | +0.48pt | 0.00pt | ✅ |
-| 全量 F1 无回归 | +0.48pt | 0.00pt | ✅ |
+| 比较/算术 F1 (Δ≥-2pt) | +0.48pt | 0.00pt | ✅(aggregate) |
+| 全量 F1 无回归 | +0.48pt | 0.00pt | ✅(aggregate) |
 
-- **诊断发现**:
-  - **typed 契约只在 2wiki 命中**（BirthDate/Birthday/DeathDate slots 共 5 slot-contracts），**drop 无任何 number/date-typed slots**（arithmetic 算子未编译 number-typed variable_types）→ drop 的 H-024 干预完全未激活
-  - **typed-attributable 回归**: qid `e084363c0bda`，F1 1.0→0.0。原因: typed 日期规范化为 ISO `1955-01-26`，answer generator 直接 echo ISO 而非格式化为 gold 的 `"January 26, 1955"` → **格式层回归**，非数据层错误
-  - 该回归被聚合 F1 掩盖（+0.48pt 平均，因另 2 题改善 +1.0 和 +0.43）
-  - **无 abstention**: 5/5 typed 解析全部成功（100% parse rate），无确定性规范化失败
-- **结论**: **有条件通过**。typed extraction 在 2wiki date slots 上可行（100% 解析率，聚合 F1 不降），但有两个未解决问题：
-  1. **格式层**: ISO 日期在 answer generator 中被直接 echo，导致 gold 格式不匹配。修复方向: answer prompt 中加 "render dates in the format found in the passage" 指令（H-026/H-027 scope）
-  2. **drop 未激活**: arithmetic 算子不编译 number-typed variable_types → H-024 的 number 扩展无法评估
-- **判决**: pass_with_caveats → H-026/H-027 需要同时解决 (1) 格式层回注 and (2) number-typed 编译覆盖
+- **⚠️ 判决修正：aggregate 门禁通过是假象**（by typed-attribution）
+  - 3 个 aggregate "win"（6ebdbede0b/+0.17, fa3e9b640b/+1.0, 89a3abec0b/+0.43）**全部 typed_contracts=0** → 是 run 间噪声，非 typed 效果
+  - **typed 契约净效应 = 帮助 0 题 + 破坏 1 题**：
+    - 5 个 typed contracts → 3 题（b081, 1b36, e084）
+    - b081/1b36: guard F1 也 0 → typed 未纠正任何错误
+    - **e084: guard 1.0 → typed 0.0**（ISO 日期 `1955-01-26` echo，gold 表面形式 `"January 26, 1955"`）
+  - **由机制决定、非随机**: typed 契约 `extraction_tool` 指示 LLM "Output as ISO YYYY-MM-DD"（planner.py:176）→ rows 变 ISO → 答案生成器 echo ISO。**typed date 契约与 2wiki 答案格式天然冲突**。
+  - drop: 20 样本全 `EvidenceAnsweringQuestion` 单 slot 计划，0 operators/0 joins → number-typed 架构性不可用
+- **结论**: **拒绝**。typed date 契约把内部消费值（ISO）与外部呈现值（表面形式）混淆——`extraction 契约` 强制 ISO 输出，破坏 2wiki 答案格式，且 0 题被 typed 挽回。typed 契约要成立需**区分内部值 vs 呈现值**（算子层消费 ISO、答案层回注表面形式），但 H-024 无此区分，且 `_ordered_scalar`/`_as_number` 本就能从表面形式解析（预规范化是个冗余破坏）。
+- **判决**: rejected（H-024 所需的方向保持开放，需 H-025 用"答案层回注表面形式"而非"提取层强制 ISO"实现）
 
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 

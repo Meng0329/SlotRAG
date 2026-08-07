@@ -145,6 +145,7 @@ def extraction_tool(
     source_ids: list[str] | None = None,
     *,
     typed_extraction_contracts: bool = False,
+    typed_surface_form: bool = False,
     requested_fields: set[str] | None = None,
     role_projected: bool = False,
     known_bindings: dict[str, str] | None = None,
@@ -168,17 +169,33 @@ def extraction_tool(
         if typed_extraction_contracts and value_type == "boolean":
             schema: dict[str, Any] = {"type": "string", "enum": ["yes", "no", "unknown"]}
         elif typed_extraction_contracts and value_type == "number":
-            schema = {
-                "type": "string",
-                "description": "A numeric value as a plain decimal string (no commas, no units). "
-                               "Use only digits with an optional leading '-' and a single decimal point.",
-            }
+            if typed_surface_form:
+                # H-025: keep the value verbatim so the answer layer gets the
+                # surface form; operators parse it via _as_number anyway.
+                schema = {
+                    "type": "string",
+                    "description": "The numeric value exactly as it appears in the passage "
+                                   "(may include commas or units; do not reformat).",
+                }
+            else:
+                schema = {
+                    "type": "string",
+                    "description": "A numeric value as a plain decimal string (no commas, no units). "
+                                   "Use only digits with an optional leading '-' and a single decimal point.",
+                }
         elif typed_extraction_contracts and value_type == "date":
-            schema = {
-                "type": "string",
-                "description": "A calendar date as ISO 'YYYY-MM-DD'. For year-only values pad missing "
-                               "month/day with 01 (e.g. '1999' -> '1999-01-01').",
-            }
+            if typed_surface_form:
+                schema = {
+                    "type": "string",
+                    "description": "The date exactly as it appears in the passage "
+                                   "(e.g. 'January 26, 1955'; do not reformat to ISO).",
+                }
+            else:
+                schema = {
+                    "type": "string",
+                    "description": "A calendar date as ISO 'YYYY-MM-DD'. For year-only values pad missing "
+                                   "month/day with 01 (e.g. '1999' -> '1999-01-01').",
+                }
         else:
             schema = {"type": "string"}
         if role_projected:
@@ -1157,6 +1174,7 @@ class SlotMaterializer:
         *,
         max_passages: int = 5,
         typed_extraction_contracts: bool = False,
+        typed_surface_form: bool = False,
         role_projected_extraction: bool = False,
         protected_anchor_values: set[str] | None = None,
         protect_known_binding_values: bool = False,
@@ -1182,6 +1200,7 @@ class SlotMaterializer:
         self.evidence_bundle_extractor = evidence_bundle_extractor
         self.max_passages = max_passages
         self.typed_extraction_contracts = typed_extraction_contracts
+        self.typed_surface_form = typed_surface_form
         self.role_projected_extraction = role_projected_extraction
         self.protected_anchor_values = set(protected_anchor_values or ())
         self.protect_known_binding_values = protect_known_binding_values
@@ -1728,6 +1747,7 @@ class SlotMaterializer:
                         slot,
                         list(by_source),
                         typed_extraction_contracts=bool(boolean_fields | date_fields | number_fields),
+                        typed_surface_form=self.typed_surface_form,
                         requested_fields=set(requested_fields),
                         role_projected=self.role_projected_extraction,
                         known_bindings=(effective_bindings if self.bound_role_signatures else None),
@@ -1787,7 +1807,9 @@ class SlotMaterializer:
                     for typed_field in date_fields | number_fields:
                         if typed_field in normalized:
                             normalized_value = _normalize_typed_value(
-                                normalized[typed_field], slot.variable_types.get(typed_field, "string")
+                                normalized[typed_field],
+                                slot.variable_types.get(typed_field, "string"),
+                                preserve_surface=self.typed_surface_form,
                             )
                             if normalized_value is None:
                                 typed_invalid = True
@@ -2000,6 +2022,7 @@ class SlotMaterializer:
             # contract in the shared extraction_tool schema.
             boolean_fields=boolean_fields | date_fields | number_fields,
             role_projected=self.role_projected_extraction,
+            typed_surface_form=self.typed_surface_form,
             protected_output_values=protected_output_values,
             effective_bindings=effective_bindings,
             extraction_tool_fn=extraction_tool,
@@ -2067,7 +2090,9 @@ class SlotMaterializer:
             for typed_field in date_fields | number_fields:
                 if typed_field in raw_bindings:
                     normalized_value = _normalize_typed_value(
-                        raw_bindings[typed_field], slot.variable_types.get(typed_field, "string")
+                        raw_bindings[typed_field],
+                        slot.variable_types.get(typed_field, "string"),
+                        preserve_surface=self.typed_surface_form,
                     )
                     if normalized_value is None:
                         typed_invalid = True
@@ -2282,12 +2307,18 @@ def _ordered_scalar(value: object) -> tuple[str, datetime | float] | None:
     return None
 
 
-def _normalize_typed_value(value: object, value_type: str) -> str | None:
-    """Normalize a raw typed cell to a canonical string the operator layer can consume.
+def _normalize_typed_value(value: object, value_type: str, *, preserve_surface: bool = False) -> str | None:
+    """Normalize a raw typed cell to a string the operator layer can consume.
 
     - ``number`` → canonical decimal string (via ``_as_number``), or ``None`` to abstain.
     - ``date``   → ISO ``YYYY-MM-DD`` (via ``_as_date``), or ``None`` to abstain.
     - ``boolean``/``string`` → passthrough unchanged.
+
+    When ``preserve_surface`` is set (H-025), validate parseability but return
+    the *original* string instead of rewriting to a canonical form. The operator
+    layer (`_ordered_scalar`/`_as_number`) already parses surface forms like
+    ``"January 26, 1955"``/``"1,234.5"``, so rewriting bindings to ISO/float is
+    unnecessary and destroys the answer's surface format.
 
     Returns ``None`` when the cell cannot be reliably normalized so the caller
     can abstain the row instead of emitting a string the typed operators would
@@ -2300,10 +2331,14 @@ def _normalize_typed_value(value: object, value_type: str) -> str | None:
         number = _as_number(raw)
         if number is None or math.isnan(number) or math.isinf(number):
             return None
+        if preserve_surface:
+            return raw
         return str(int(number)) if number.is_integer() else f"{number:.10g}"
     if value_type == "date":
         parsed = _as_date(raw)
         if parsed is not None:
+            if preserve_surface:
+                return raw
             return parsed.strftime("%Y-%m-%d")
         # 年份近似/范围（"about 400 years"/"Feb 1999"）不猜测 → abstain
         return None

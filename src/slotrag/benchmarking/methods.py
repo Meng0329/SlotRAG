@@ -47,6 +47,7 @@ class MethodSpec:
     polar_comparison_templates: bool = True
     polar_row_consensus: bool = True
     typed_extraction_contracts: bool = False
+    typed_surface_form: bool = False
     grounded_entity_anchor_folding: bool = False
     grounded_entity_anchor_substitution: bool = False
     role_projected_extraction: bool = False
@@ -442,6 +443,23 @@ METHODS: dict[str, MethodSpec] = {
         structured_answer_contract=True,
         typed_extraction_contracts=True,
         description="H-024: H-012 stacked + typed date/number extraction contracts",
+    ),
+    "slotrag-grounded-frontier-perpath-typed-surface": MethodSpec(
+        "slotrag-grounded-frontier-perpath-typed-surface",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+        description="H-025: H-012 stacked + typed contracts preserving surface form (no ISO rewrite)",
     ),
     "slotrag-grounded-frontier-union": MethodSpec(
         "slotrag-grounded-frontier-union",
@@ -1501,6 +1519,7 @@ def _run_slotrag(
     materializer_options: dict[str, Any] = {
         "max_passages": config.execution.materialization_top_k,
         "typed_extraction_contracts": spec.typed_extraction_contracts,
+        "typed_surface_form": spec.typed_surface_form,
     }
     if spec.question_grounded_retrieval or spec.complementary_retrieval or spec.dual_access_bundle:
         materializer_options["question_context"] = question.question

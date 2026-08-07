@@ -1,7 +1,7 @@
 # H-024 Pre-Registration: Demand-Driven Attribute Materialization（typed 契约 date/number 扩展）
 
 **假设编号**: H-024
-**状态**: Tier 1 完成 → **pass_with_caveats**（2026-08-07）
+**状态**: Tier 1 完成 → **rejected**（从 pass_with_caveats 修正, 2026-08-07）
 **日期**: 2026-08-07
 
 ## 背景（诊断证据）
@@ -79,7 +79,7 @@ Tier 1 冒烟：2wikimultihop + drop（typed 密集：field_argmin 日期、arit
 2. **typed-attributable 回归**: qid `e084363c0bda`（typed, BirthDate×2）F1 1.0→0.0。typed 日期规范化为 ISO `1955-01-26`，answer generator 直接 echo ISO，不格式化为 gold 的 `"January 26, 1955"` → **格式层回归**，非数据层错误
 3. 该回归被聚合 F1 掩盖（另 2 题改善 +1.0/+0.43）：`a344d7460` 的 -0.5 是 run-to-run 噪声（typed_contracts=0，非 H-024 效果）；`fa3e9b640` 改善 +1.0
 
-**判决**: **pass_with_caveats**（有待修复项，非全绿）
+**判决**: **rejected**（从 pass_with_caveats 修正）— typed date 契约在 Tier 1 净负（帮助 0 题 + 破坏 1 题 e084），aggregate +0.48pt 是 typed_contracts=0 的 run 噪声。根因: 提取层强制 ISO 与 2wiki 答案表面格式冲突。typed 契约若要做需**答案层回注表面形式**，见 H-025。
 
 ## 预期效果与风险
 

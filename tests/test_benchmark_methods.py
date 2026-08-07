@@ -436,6 +436,7 @@ def test_role_projected_substitution_routes_anchor_metadata_to_materializer(monk
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
     }]
@@ -500,6 +501,7 @@ def test_role_projected_substitution_is_inert_without_a_safe_anchor(monkeypatch)
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
     }]
     assert result.metrics.grounded_entity_anchor_substitutions == 0
 
@@ -572,6 +574,7 @@ def test_grounded_role_projection_routes_direct_anchor_without_changing_plan(mon
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
     }]
@@ -636,6 +639,7 @@ def test_grounded_binding_guard_routes_known_binding_protection(monkeypatch):
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Johar Town"},
         "protect_known_binding_values": True,
@@ -705,6 +709,7 @@ def test_lean_grounded_role_projection_routes_phase_controls_only_when_triggered
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
         "extraction_enable_thinking": False,
@@ -790,6 +795,7 @@ def test_grounded_role_type_filter_routes_only_inside_direct_anchor_scope(monkey
         {
             "max_passages": 5,
             "typed_extraction_contracts": False,
+            "typed_surface_form": False,
             "role_projected_extraction": True,
             "protected_anchor_values": {"Baldwin De Redvers, 7Th Earl Of Devon"},
             "semantic_role_type_filter": True,
@@ -797,6 +803,7 @@ def test_grounded_role_type_filter_routes_only_inside_direct_anchor_scope(monkey
         {
             "max_passages": 5,
             "typed_extraction_contracts": False,
+            "typed_surface_form": False,
         },
     ]
     assert triggered.metrics.direct_grounded_anchor_projections == 1
@@ -854,6 +861,7 @@ def test_anchor_window_projection_routes_only_inside_direct_anchor_scope(monkeyp
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Her Wild Oat"},
         "anchor_centered_extraction": True,
@@ -915,6 +923,7 @@ def test_normalized_anchor_window_projection_enables_predicate_family_mapping(mo
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Lift Him Up That's All"},
         "anchor_centered_extraction": True,
@@ -974,6 +983,7 @@ def test_context_normalized_anchor_window_projection_protects_query_title(monkey
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Claire (1924 Film)"},
         "anchor_centered_extraction": True,
@@ -1035,6 +1045,7 @@ def test_repaired_context_anchor_window_routes_plan_and_surface_repairs(monkeypa
     assert materializer_options == [{
         "max_passages": 5,
         "typed_extraction_contracts": False,
+        "typed_surface_form": False,
         "role_projected_extraction": True,
         "protected_anchor_values": {"Claire (1924 Film)"},
         "anchor_centered_extraction": True,

@@ -2463,6 +2463,82 @@ def test_bundle_typed_contract_counts_answers_on_success():
     assert metrics.typed_extraction_abstentions == 0
 
 
+def test_typed_date_surface_preserves_surface_form_inline():
+    """H-025: typed_surface_form keeps surface date, no ISO rewrite (inline)."""
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"born": "Feb 5, 1999", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="They were born on Feb 5 1999.")),
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="BirthDate",
+            arguments=["?born"],
+            variable_types={"born": "date"},
+        ),
+        {},
+    )
+
+    # Surface form preserved (validated parseable), NOT rewritten to ISO.
+    assert [row.bindings for row in rows] == [{"born": "Feb 5, 1999"}]
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_typed_date_surface_still_abstains_on_unparseable():
+    """H-025: surface mode still validates parseability and abstains garbage."""
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"born": "about 400 years", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="The event happened about 400 years ago.")),
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="EventDate", arguments=["?born"], variable_types={"born": "date"}),
+        {},
+    )
+
+    assert rows == []
+    assert metrics.typed_extraction_abstentions == 1
+
+
+def test_typed_number_surface_preserves_commas():
+    """H-025: surface mode keeps number verbatim (commas/units), validated as parseable."""
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"num": "1,234.5", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="It measured 1,234.5 units.")),
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="Measure", arguments=["?num"], variable_types={"num": "number"}),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"num": "1,234.5"}]
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_typed_date_surface_extraction_tool_schema_hints_verbatim():
+    """H-025: extraction_tool date schema tells the LLM to keep the surface form."""
+    from slotrag.planner import extraction_tool
+    tool = extraction_tool(
+        Slot(id="S1", predicate="BirthDate", arguments=["?born"], variable_types={"born": "date"}),
+        None,
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+        requested_fields={"born"},
+    )
+    desc = tool["function"]["parameters"]["properties"]["rows"]["items"]["properties"]["born"]["description"]
+    assert "exactly as it appears in the passage" in desc
+    # Surface form: instructs to keep verbatim, not to output as ISO.
+    assert "keep" in desc or "do not reformat" in desc
+
+
 def test_materializer_counts_and_skips_repeated_invalid_extractions():
     materializer = SlotMaterializer(FakeExtractionClient(), FakeRetriever())
     rows, metrics = materializer.materialize(

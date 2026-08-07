@@ -55,6 +55,7 @@ class FakeExtractionClient:
 
 def _fake_extraction_tool(
     slot, source_ids=None, *, typed_extraction_contracts=False,
+    typed_surface_form=False,
     requested_fields=None, role_projected=False, known_bindings=None,
 ):
     return {"type": "function", "function": {"name": "emit_evidence_rows"}}
@@ -121,6 +122,7 @@ class TestUnionExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert outcome.rows == []
         assert len(outcome.traces) == 1
@@ -149,6 +151,7 @@ class TestUnionExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert len(outcome.rows) == 1
         bindings, source_id = outcome.rows[0]
@@ -178,6 +181,7 @@ class TestUnionExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert outcome.rows == []
 
@@ -199,6 +203,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert outcome.rows == []
 
@@ -233,6 +238,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert len(client.calls) == 2  # two LLM calls
         assert len(outcome.rows) == 2
@@ -278,6 +284,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
 
         # PerPath extracts each path independently
@@ -299,6 +306,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
 
         # Union loses Beta Inc (only 1 row, only Ada)
@@ -339,6 +347,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert len(outcome.rows) == 1  # dedup to 1
 
@@ -372,6 +381,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         # Same bindings but different source_id → kept (not exact duplicate)
         assert len(outcome.rows) == 2
@@ -402,6 +412,7 @@ class TestPerPathExtractor:
             effective_bindings={},
             extraction_tool_fn=_fake_extraction_tool,
             messages_template=_MESSAGES,
+            typed_surface_form=False,
         )
         assert len(outcome.traces) == 2
         for trace in outcome.traces:

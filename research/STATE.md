@@ -117,11 +117,13 @@
   - 句型-结构确定性编译器 operator_family 覆盖 11%→**92%**, plan_valid 100%, answer_schema 91%
   - 只证明"编译器能判对算子族"，未解决物化端（见 H-024）
 - [x] **Phase 3X: H-024 完成** (Demand-Driven Materialization, typed 契约 date/number, Tier 1, 2026-08-07)
-  - **判决: pass_with_caveats**
+  - **判决: rejected**（从 pass_with_caveats 修正，by typed-attribution）
   - 修复 2 个 pre-existing bugs（独立于 H-024）: (1) bundle 路径 join 锚丢失 → 2wiki join_out 0 修复 (commit 8a40309); (2) bundle 路径 typed_extraction_answers 未计数 → gate metric 不可测量修复 (commit 7767412)
-  - 门禁: 2wiki typed_parse_success_rate **100%** (5/5), F1 +0.48pt (guard 0.5786 → typed 0.5833), drop 0 激活 (0 contracts) F1 0.4722 平
-  - **caveat**: qid e084363c0bda 格式层回归 (F1 1.0→0.0) — typed ISO date 被 answer generator 直接 echo，gold 是 `"January 26, 1955"` → 需 H-026/H-027 修"回注 natural-language 格式"；drop 无 number-typed arithmetic slots → number 扩展未激活
-- [ ] **下一步**: H-025 (caveat 修复方向: 格式层回注 + number-typed 编译覆盖)
+  - aggregate: 2wiki typed_parse_success_rate **100%** (5/5), F1 +0.48pt (guard 0.5786 → typed 0.5833), drop 0 激活 F1 0.4722 平
+  - **⚠️ 修正: aggregate +0.48pt 是假象**。3 个 win（6ebdbede0b/fa3e9b640b/89a3abec0b）全 typed_contracts=0 → run 噪声。**typed 净效应 = 帮助 0 题 + 破坏 1 题**（e084 guard 1.0→typed 0.0, ISO 日期 echo）
+  - **机制性失败**: typed date 契约指示 LLM "Output as ISO YYYY-MM-DD" → rows 变 ISO → 答案生成器 echo ISO，gold 是表面形式 `"January 26, 1955"`。**提取层强制 ISO 与 2wiki 答案格式天然冲突**
+  - drop: 20 样本全 `EvidenceAnsweringQuestion` 单 slot 计划（0 operators/0 joins）→ number-typed 架构性不可用
+- [ ] **下一步**: H-025 — 方向修正: typed 值需**答案层回注表面形式**（算子层消费 ISO、答案层用证据表面形式），而非提取层强制 ISO。drop 维持架构性不可解（单 slot 抽取 + 生成器算术）
 
 ---
 
