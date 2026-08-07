@@ -505,13 +505,30 @@
 
 ### H-024: Demand-Driven Attribute Materialization（typed 契约 date/number 扩展）
 
-- **状态**: proposed（Phase 3X §22 step 8, 2026-08-07）
+- **状态**: **pass_with_caveats**（Tier 1, 2026-08-07, n=20, 2wiki+drop）
 - **假设**: H-023 只证明结构编译器能判对 operator_family，但 compare/arithmetic/field_argmin 需要的 typed 属性列（date/number）没被可靠物化——`extraction_tool` 只对 boolean 走 typed 契约，date/number 以 string 强转失败。把 typed 契约推广到 date/number（→ 规范化 ISO date / bare float），`_ordered_scalar`/`_as_number` 即可可靠消费。
 - **方法**: `_normalize_typed_value` 规范化 + inline/bundle 双路径 abstention + `_field_extremum_template` BirthDate 标注 `variable_types=date`。新方法 `slotrag-grounded-frontier-perpath-typed`（=perpath-guard + typed on）。Tier 1 n=20 2wiki+drop，guard vs typed。
-- **实现**: 已完成（commit `6db3f47`）。374 测试全过。抽出机制：soft typed-invalid abstain（不 retry，因确定性规范化会重复失败）；hard field-mismatch 仍 retry。
-- **门禁**（待 Tier 1）: `typed_parse_success_rate` ≥70%（编译标注 date/number 的 slot 上）+ 比较/算术题 F1 不降（ΔF1 ≥ -2pt）+ 全量无回归。
-- **关键文件**: `research/H024_PRE_REGISTRATION.md` / `configs/experiments/slotrag-phase3x-h024.yaml` / `tests/test_execution.py`（7 个新单测）
-- **判决**: 待验证
+- **实现**: 已完成（commits `6db3f47` + `7767412`）。376 测试全过（2 个回归单测：bundle join-anchor 重附 + bundle typed metric 计数）。
+- **诊断中修复的 pre-existing bugs**（独立于 H-024）:
+  1. **bundle 路径 join 锚丢失** (`_extract_via_bundle`, planner.py:2082): role-projected extraction 丢弃 bound join key → `_join_rows` 0 匹配 → 2wiki 全部 join_out=0。修复: bundle 路径镜像 inline 路径的 `effective_bindings` 重附（commit `8a40309`）。
+  2. **bundle 路径 typed_extraction_answers 未计数** (planner.py:2101): inline 路径计数 typed_extraction_answers 但 bundle 路径只计 abstentions → H-024 gate metric 不可测量。修复: bundle 路径加对称计数（commit `7767412`）。
+- **Tier 1 门禁结果**:
+
+| 维度 | 2wiki | drop | 门禁？ |
+|---|---|---|---|
+| `typed_parse_success_rate` | 5/5 = **100%** | N/A (0 contracts) | ✅ |
+| 比较/算术 F1 (Δ≥-2pt) | +0.48pt | 0.00pt | ✅ |
+| 全量 F1 无回归 | +0.48pt | 0.00pt | ✅ |
+
+- **诊断发现**:
+  - **typed 契约只在 2wiki 命中**（BirthDate/Birthday/DeathDate slots 共 5 slot-contracts），**drop 无任何 number/date-typed slots**（arithmetic 算子未编译 number-typed variable_types）→ drop 的 H-024 干预完全未激活
+  - **typed-attributable 回归**: qid `e084363c0bda`，F1 1.0→0.0。原因: typed 日期规范化为 ISO `1955-01-26`，answer generator 直接 echo ISO 而非格式化为 gold 的 `"January 26, 1955"` → **格式层回归**，非数据层错误
+  - 该回归被聚合 F1 掩盖（+0.48pt 平均，因另 2 题改善 +1.0 和 +0.43）
+  - **无 abstention**: 5/5 typed 解析全部成功（100% parse rate），无确定性规范化失败
+- **结论**: **有条件通过**。typed extraction 在 2wiki date slots 上可行（100% 解析率，聚合 F1 不降），但有两个未解决问题：
+  1. **格式层**: ISO 日期在 answer generator 中被直接 echo，导致 gold 格式不匹配。修复方向: answer prompt 中加 "render dates in the format found in the passage" 指令（H-026/H-027 scope）
+  2. **drop 未激活**: arithmetic 算子不编译 number-typed variable_types → H-024 的 number 扩展无法评估
+- **判决**: pass_with_caveats → H-026/H-027 需要同时解决 (1) 格式层回注 and (2) number-typed 编译覆盖
 
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 

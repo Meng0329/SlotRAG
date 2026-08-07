@@ -113,7 +113,15 @@
   - **选型失败 20** (gold 连续在 evidence 但生成器选错候选, 27/28 F1=0 全 status='ok') → 纯模型选型天花板
   - 后处理验证: 前缀收窄 +32 回归, 循证收窄 0 改进 → 无架构侧杠杆剩余
   - **结论**: 2wiki LOSS 是"选型能力"模型级天花板, Coverage 维持 40%, 除非模型级生成器升级
-- [ ] **下一步**: 唯一剩余杠杆 = 模型级生成器升级（换更强推理模型），或接受 Coverage 2/5 收尾
+- [x] **Phase 3X: H-023 完成** (typed relational 离线编译审计, 2026-08-07)
+  - 句型-结构确定性编译器 operator_family 覆盖 11%→**92%**, plan_valid 100%, answer_schema 91%
+  - 只证明"编译器能判对算子族"，未解决物化端（见 H-024）
+- [x] **Phase 3X: H-024 完成** (Demand-Driven Materialization, typed 契约 date/number, Tier 1, 2026-08-07)
+  - **判决: pass_with_caveats**
+  - 修复 2 个 pre-existing bugs（独立于 H-024）: (1) bundle 路径 join 锚丢失 → 2wiki join_out 0 修复 (commit 8a40309); (2) bundle 路径 typed_extraction_answers 未计数 → gate metric 不可测量修复 (commit 7767412)
+  - 门禁: 2wiki typed_parse_success_rate **100%** (5/5), F1 +0.48pt (guard 0.5786 → typed 0.5833), drop 0 激活 (0 contracts) F1 0.4722 平
+  - **caveat**: qid e084363c0bda 格式层回归 (F1 1.0→0.0) — typed ISO date 被 answer generator 直接 echo，gold 是 `"January 26, 1955"` → 需 H-026/H-027 修"回注 natural-language 格式"；drop 无 number-typed arithmetic slots → number 扩展未激活
+- [ ] **下一步**: H-025 (caveat 修复方向: 格式层回注 + number-typed 编译覆盖)
 
 ---
 

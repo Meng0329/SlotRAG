@@ -1,7 +1,7 @@
 # H-024 Pre-Registration: Demand-Driven Attribute Materialization（typed 契约 date/number 扩展）
 
 **假设编号**: H-024
-**状态**: proposed → 待 Tier 1 验证
+**状态**: Tier 1 完成 → **pass_with_caveats**（2026-08-07）
 **日期**: 2026-08-07
 
 ## 背景（诊断证据）
@@ -63,6 +63,23 @@ Tier 1 冒烟：2wikimultihop + drop（typed 密集：field_argmin 日期、arit
   - 比较/算术题 F1：typed vs guard 不降（ΔF1 ≥ -2pt）
   - 无回归：全量 F1 不降
 - **Tier 2**（n=100, 2wiki+drop）：若 Tier 1 有效，配对 wilcoxon + bootstrap CI，判断对 react/graphrag baseline 的 F1 缺口
+
+## Tier 1 结果（2026-08-07, n=20, 2wiki+drop, seed=2027）
+
+**run**: `runs/slotrag-phase3x-h024-dev2`（80/80 items, guard=typed off, typed=typed on）
+
+| 维度 | 2wiki | drop | 门禁 |
+|---|---|---|---|
+| `typed_parse_success_rate` | 5/5 = **100%** | N/A（0 contracts） | ✅ (2wiki) |
+| 比较/算术 F1（Δ≥-2pt） | 2wiki guard 0.5786 → typed 0.5833（**+0.48pt**） | drop 0.4722 → 0.4722（0） | ✅ |
+| 全量无回归 | +0.48pt | 0.00pt | ✅ |
+
+**诊断发现**:
+1. **drop 未激活**: 0 个 number/date-typed slots 被编译 → H-024 的 number 扩展无法评估（arithmetic 算子不编译 number-typed variable_types）
+2. **typed-attributable 回归**: qid `e084363c0bda`（typed, BirthDate×2）F1 1.0→0.0。typed 日期规范化为 ISO `1955-01-26`，answer generator 直接 echo ISO，不格式化为 gold 的 `"January 26, 1955"` → **格式层回归**，非数据层错误
+3. 该回归被聚合 F1 掩盖（另 2 题改善 +1.0/+0.43）：`a344d7460` 的 -0.5 是 run-to-run 噪声（typed_contracts=0，非 H-024 效果）；`fa3e9b640` 改善 +1.0
+
+**判决**: **pass_with_caveats**（有待修复项，非全绿）
 
 ## 预期效果与风险
 
