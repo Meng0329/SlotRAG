@@ -499,9 +499,19 @@
   3. **answer_schema 91% 是单类别表达力上限**：drop 的 `JaMarcus Russell 29`、`33.7% were of germans` 是实体+数字复合，单类别无法表达 → 需 AnswerSchema 复合类别（COMPOSITE_ENTITY_NUMERIC / MULTI_SPAN / DATE_RANGE）
 - **审计脚本**: `research/phase3x/run_h023_audit.py`（确定性、LLM-free、可复现）
 - **判决**: **部分支持**。operator_family 92.4% 证明结构编译器是可行且必要的闭合法基础（覆盖 11%→92%）。answer_schema gate 未过（91% vs 95%），但瓶颈是**设计（单类别表达力）**非执行——升级 AnswerSchema 复合类别后复测。
-- **下一步**: (1) AnswerSchema 复合类别升级复测； (2) 通过后进入 H-024 (Demand-Driven Materialization)
+- **下一步**: (1) AnswerSchema 复合类别升级复测； (2) 已进入 H-024 (Demand-Driven Materialization) 验证物化端（编译器已判对算子族 92.4%，但 date/number 属性列未可靠物化）
 
 ---
+
+### H-024: Demand-Driven Attribute Materialization（typed 契约 date/number 扩展）
+
+- **状态**: proposed（Phase 3X §22 step 8, 2026-08-07）
+- **假设**: H-023 只证明结构编译器能判对 operator_family，但 compare/arithmetic/field_argmin 需要的 typed 属性列（date/number）没被可靠物化——`extraction_tool` 只对 boolean 走 typed 契约，date/number 以 string 强转失败。把 typed 契约推广到 date/number（→ 规范化 ISO date / bare float），`_ordered_scalar`/`_as_number` 即可可靠消费。
+- **方法**: `_normalize_typed_value` 规范化 + inline/bundle 双路径 abstention + `_field_extremum_template` BirthDate 标注 `variable_types=date`。新方法 `slotrag-grounded-frontier-perpath-typed`（=perpath-guard + typed on）。Tier 1 n=20 2wiki+drop，guard vs typed。
+- **实现**: 已完成（commit `6db3f47`）。374 测试全过。抽出机制：soft typed-invalid abstain（不 retry，因确定性规范化会重复失败）；hard field-mismatch 仍 retry。
+- **门禁**（待 Tier 1）: `typed_parse_success_rate` ≥70%（编译标注 date/number 的 slot 上）+ 比较/算术题 F1 不降（ΔF1 ≥ -2pt）+ 全量无回归。
+- **关键文件**: `research/H024_PRE_REGISTRATION.md` / `configs/experiments/slotrag-phase3x-h024.yaml` / `tests/test_execution.py`（7 个新单测）
+- **判决**: 待验证
 
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
