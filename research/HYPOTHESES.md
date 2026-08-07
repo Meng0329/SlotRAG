@@ -482,6 +482,27 @@
 
 ---
 
+### H-023: Typed Relational Query-IR 离线编译审计（structure compiler, 非执行）
+
+- **状态**: 部分支持（Phase 3X §22 step 7, 2026-08-07）
+- **假设**: 复杂查询被压缩为标量绑定是根因；句型-结构驱动的确定性 Query-IR 编译器（→AnswerSchema + operator family + 逻辑 plan）能在不换模型下覆盖现有启发式模板之外的复杂问题。
+- **方法**: 离线审计 DEVELOPMENT_SET 5×100（=H-012 同批），LLM-free 规则编译器测 plan_valid / answer_schema / operator_family 三个 gate。
+- **结果**:
+  | gate | 阈值 | 结果 |
+  |------|------|------|
+  | plan_valid | ≥95% | **100%** ✅ |
+  | operator_family | ≥90% | **92.4%** ✅（分母=196 需运算题） |
+  | answer_schema | ≥95% | **91.0%** ❌ |
+- **关键发现**:
+  1. **现有启发式模板覆盖仅 0-11%**（2wiki field_extremum 4/100）；句型-结构编译器把 operator_family 提到 92.4% —— 证明确定性编译器能覆盖模板之外的结构
+  2. 2wiki 有 ~30 个未命中比较题，全是同一逻辑结构的不同措辞（`died earlier`/`who is older`/`released earlier`）→ 泛化 `_GENERIC_EXTREMUM` 可覆盖
+  3. **answer_schema 91% 是单类别表达力上限**：drop 的 `JaMarcus Russell 29`、`33.7% were of germans` 是实体+数字复合，单类别无法表达 → 需 AnswerSchema 复合类别（COMPOSITE_ENTITY_NUMERIC / MULTI_SPAN / DATE_RANGE）
+- **审计脚本**: `research/phase3x/run_h023_audit.py`（确定性、LLM-free、可复现）
+- **判决**: **部分支持**。operator_family 92.4% 证明结构编译器是可行且必要的闭合法基础（覆盖 11%→92%）。answer_schema gate 未过（91% vs 95%），但瓶颈是**设计（单类别表达力）**非执行——升级 AnswerSchema 复合类别后复测。
+- **下一步**: (1) AnswerSchema 复合类别升级复测； (2) 通过后进入 H-024 (Demand-Driven Materialization)
+
+---
+
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
 - **状态**: rejected_exact_intervention（Tier 2 验证完成, 2026-08-06）

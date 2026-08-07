@@ -1,0 +1,59 @@
+{
+  "rows": 500,
+  "total": {
+    "n": 500,
+    "plan_valid": 500,
+    "schema_ok": 455,
+    "needs_op": 196,
+    "op_scored": 196,
+    "family_ok": 181
+  },
+  "rates": {
+    "plan_valid_rate": 1.0,
+    "answer_schema_accuracy": 0.91,
+    "operator_family_rate": 0.9235,
+    "typed_op_questions": 196
+  },
+  "per_dataset": {
+    "hotpotqa": {
+      "n": 100,
+      "plan_valid": 100,
+      "schema_ok": 91,
+      "needs_op": 28,
+      "op_scored": 28,
+      "family_ok": 24
+    },
+    "2wikimultihop": {
+      "n": 100,
+      "plan_valid": 100,
+      "schema_ok": 96,
+      "needs_op": 36,
+      "op_scored": 36,
+      "family_ok": 33
+    },
+    "musique": {
+      "n": 100,
+      "plan_valid": 100,
+      "schema_ok": 86,
+      "needs_op": 32,
+      "op_scored": 32,
+      "family_ok": 24
+    },
+    "strategyqa": {
+      "n": 100,
+      "plan_valid": 100,
+      "schema_ok": 93,
+      "needs_op": 18,
+      "op_scored": 18,
+      "family_ok": 18
+    },
+    "drop": {
+      "n": 100,
+      "plan_valid": 100,
+      "schema_ok": 89,
+      "needs_op": 82,
+      "op_scored": 82,
+      "family_ok": 82
+    }
+  }
+}
