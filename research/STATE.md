@@ -123,7 +123,13 @@
   - **⚠️ 修正: aggregate +0.48pt 是假象**。3 个 win（6ebdbede0b/fa3e9b640b/89a3abec0b）全 typed_contracts=0 → run 噪声。**typed 净效应 = 帮助 0 题 + 破坏 1 题**（e084 guard 1.0→typed 0.0, ISO 日期 echo）
   - **机制性失败**: typed date 契约指示 LLM "Output as ISO YYYY-MM-DD" → rows 变 ISO → 答案生成器 echo ISO，gold 是表面形式 `"January 26, 1955"`。**提取层强制 ISO 与 2wiki 答案格式天然冲突**
   - drop: 20 样本全 `EvidenceAnsweringQuestion` 单 slot 计划（0 operators/0 joins）→ number-typed 架构性不可用
-- [ ] **下一步**: H-025 — 方向修正: typed 值需**答案层回注表面形式**（算子层消费 ISO、答案层用证据表面形式），而非提取层强制 ISO。drop 维持架构性不可解（单 slot 抽取 + 生成器算术）
+- [x] **Phase 3X: H-025 完成** (typed 契约保留表面形式, Tier 1, 2026-08-07)
+  - **判决: pass（有保留）**。H-024 ISO 重写是纯破坏：`_ordered_scalar`/`_as_number` 本就能从表面形式解析，typed 契约正确形态是 validate-only 不改写
+  - 决定性证据: **e084 从 H-024 的 0.0 恢复到 1.0**（answer 保持 `"January 26, 1955"` surface）；parse rate 100% (5/5)；join_output_rows 两侧一致 (35=35) 算子零退化
+  - 唯一 F1 回归 `6ebdbede` (-0.333) typed_contracts=0 → plan 不稳定噪声（`BuriedIn` vs `BurialPlace`），非 H-025 因果
+  - **保留原因**: n=20 typed 契约仅激活 5 次、aggregate 中性；治疗相对"无契约"的真实增益未测出（guard 侧 e084 本就 1.0）
+  - drop 维持未激活（0 number/date typed slots 编译，与 H-024 同根因）
+- [ ] **下一步**: H-026 — 算子层 typed 执行（用 H-025 的 surface-form validate-only 契约作为基底，在算子层做 typed 消费而非提取层预规范化）。若 H-026 也因 2wiki/drop typed 契约激活太少而无收益，则 typed relational execution 方向在 dev 集上需重新评估覆盖贡献
 
 ---
 

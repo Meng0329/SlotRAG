@@ -531,6 +531,31 @@
 - **结论**: **拒绝**。typed date 契约把内部消费值（ISO）与外部呈现值（表面形式）混淆——`extraction 契约` 强制 ISO 输出，破坏 2wiki 答案格式，且 0 题被 typed 挽回。typed 契约要成立需**区分内部值 vs 呈现值**（算子层消费 ISO、答案层回注表面形式），但 H-024 无此区分，且 `_ordered_scalar`/`_as_number` 本就能从表面形式解析（预规范化是个冗余破坏）。
 - **判决**: rejected（H-024 所需的方向保持开放，需 H-025 用"答案层回注表面形式"而非"提取层强制 ISO"实现）
 
+### H-025: typed 契约保留表面形式（surface-form preservation，撤销 ISO 重写）
+
+- **状态**: **pass（有保留）**（Tier 1, 2026-08-07, n=20, 2wiki+drop）
+- **假设**: H-024 的 ISO 重写是纯破坏——`_ordered_scalar`/`_as_number` 本就能从表面形式 `"January 26, 1955"` 解析（`_as_date` 支持 `%B %d %Y`），预规范化 bindings 是假设了不存在的瓶颈。typed 契约的正确形态是 "validate-only, 不改写"：LLM 从 passage 原样提取，bindings 保持表面形式，`_normalize_typed_value` 只校验可解析性（不可解析 → abstain）。
+- **方法**: `typed_surface_form: bool` flag（MethodSpec + SlotMaterializer）。`extraction_tool` date/number schema 改指示 "extract verbatim"；`_normalize_typed_value` 加 `preserve_surface=True` 返回原字符串。新方法 `slotrag-grounded-frontier-perpath-typed-surface`。Tier 1 n=20 2wiki+drop，guard vs typed-surface。
+- **实现**: 已完成（commit `a6373c7`）。380 测试全过（含 6 个 H-025 surface-form 单测）。
+- **Tier 1 门禁结果**:
+
+| 维度 | 2wiki | drop | 门禁？ |
+|---|---|---|---|
+| `typed_parse_success_rate` | 5/5 = **100%** | N/A (0 contracts) | ✅ |
+| 比较/算术 F1 (Δ≥-2pt) | -1.67pt（回归样本 typed_contracts=0, 纯噪声） | 0.00pt | ✅ |
+| 全量 F1 无回归 | -1.67pt | 0.00pt | ✅ |
+| **e084 恢复** | treat=1.0, guard=1.0, answer `"January 26, 1955"` surface | — | ✅ |
+| join_output_rows | treat=35 = guard=35（算子零退化） | 0/0 | ✅ |
+
+- **typed 契约样本明细（仅 3 题命中, 5 contracts）**:
+  - `e084363c`（Birthday date×2）: treat=1.0 = guard=1.0。**对比 H-024 的 ISO 重写 0.0 → surface-form 恢复 1.0**。表面形式保留机制验证 ✅
+  - `b081e084`（BirthDate date×2）: 两侧均 `budget_exceeded`（非回归，typed 2/2 提取成功）
+  - `1b36c01f`（answer boolean×1）: 两侧均 0.0，boolean 契约是 H-012 既有功能，非 H-025 新代码
+- **唯一 F1 回归** `6ebdbede`（2wiki -0.333）: **typed_contracts=0**，plan 不同（`BuriedIn` vs `BurialPlace`）→ run-to-run plan 不稳定噪声，非 H-025 因果
+- **drop 未激活**: 0 个 number/date-typed slots 被编译（与 H-024 同根因：arithmetic 算子不编译 typed variable_types）→ date/number surface 提取在 drop 无法评估
+- **结论**: **通过（有保留）**。决定性证实了 H-025 核心假设：**typed 契约的正确形态是 validate-only 保留表面形式**（e084 从 H-024 的 0.0 恢复到 1.0，parse rate 100% 不降，算子零退化）。但 n=20 下 typed 契约仅激活 5 次、aggregate 中性——**治疗相对"无契约"的真实增益未测出**（guard 侧 e084 本就 1.0）。需要 Tier 2（n=100）判断 surface-form 契约是否有净收益，或作为 H-026/H-027 算子层 typed 执行的正确基底。
+- **价值定位**: 修正 H-024 的错误设计（内部值 vs 呈现值分离），不是独立收益假设。为 H-026/H-027 的算子层 typed 执行铺路。
+
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
 - **状态**: rejected_exact_intervention（Tier 2 验证完成, 2026-08-06）

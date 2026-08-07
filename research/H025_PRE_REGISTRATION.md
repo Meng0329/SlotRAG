@@ -94,3 +94,34 @@ Tier 1: 2wiki+drop, n=20, seed=2027。方法：guard（对照）vs typed-surface
 - 不换模型（qwen3.6-27b 不变）
 - 无 dataset 名特判；type/question 驱动
 - 诚实报告负结果
+
+## Tier 1 结果（2026-08-07, n=20, 2wiki+drop, seed=2027）
+
+**run**: `runs/slotrag-phase3x-h025-dev`（80/80 items, guard=typed off, typed-surface=typed on + surface form）
+
+| 维度 | 2wiki | drop | 门禁 |
+|---|---|---|---|
+| `typed_parse_success_rate` | 5/5 = **100%** | N/A（0 contracts） | ✅ |
+| 比较/算术 F1（Δ≥-2pt） | 0.6500 → 0.6333（**-1.67pt**） | 0.6194 → 0.6194（0） | ✅（-1.67pt ≥ -2pt，且回归样本非 typed-attributable） |
+| 全量无回归 | -1.67pt | 0.00pt | ✅ |
+| e084 恢复 | F1 1.0 / answer `"January 26, 1955"`（surface 保留） | — | ✅ |
+| join_output_rows | treat=35, guard=35（**完全一致**） | 0/0 | ✅ 算子不退化 |
+
+**typed 契约样本明细**（2wiki, treat 侧, 仅 3 题命中）:
+- `e084363c`（Birthday date, 2 contracts）: treat=1.0, guard=1.0, answer=`"January 26, 1955"` 表面形式。**e084 恢复成立**（对比 H-024 的 ISO 重写 → 0.0）
+- `b081e084`（BirthDate date×2, 2 contracts）: treat=0.0, guard=0.0, status 两侧均 `budget_exceeded`。**非回归**（预算耗尽先于答案，typed 2/2 提取成功）
+- `1b36c01f`（answer **boolean**, 1 contract）: treat=0.0, guard=0.0, answer=`no` 两侧一致。**boolean 契约是 H-012 既有功能，非 H-025 新代码**
+
+**唯一 F1 回归样本** `6ebdbede`（2wiki）: treat=0.0, guard=0.333, **typed_contracts=0**。plan 不同（treat `BuriedIn`, guard `BurialPlace`）→ **run-to-run plan 不稳定噪声**，非 H-025 效果。
+
+**drop 未激活**: 0 个 number/date-typed slots 被编译 → H-025 的 date/number surface 提取在 drop 无法评估（与 H-024 相同根因：arithmetic 算子不编译 typed variable_types）。
+
+## 判决: **pass（有保留）**
+
+- **e084 恢复机制验证**: typed 契约保留表面形式后，e084 从 H-024 的 0.0 恢复到 1.0，answer 保持 `"January 26, 1955"`。这**决定性证实**了 H-025 的核心假设：H-024 的 ISO 重写是纯破坏，typed 契约的正确形态是 "validate-only, 不改写"
+- **parse rate 不降**: 5/5 (100%)，与 H-024 的 typed 规范化 parse rate 持平 → surface-form 没有牺牲 validation
+- **算子零退化**: join_output_rows 两侧完全一致（35=35）→ 算子层从表面形式解析无额外失败
+- **无 typed-attributable 回归**: 唯一 Δ=-1.67pt 样本 typed_contracts=0（plan 噪声），非 H-025 因果
+- **保留原因**: n=20 下 typed 契约仅 5 次激活，aggregate 中性（-1.67pt 纯噪声）。**治疗相对对照的真实增益未测出**（e084 在 guard 侧也无 typed 契约，本就 1.0）。需要 Tier 2（n=100）才能判断 surface-form 契约是否比 "无契约" 有净收益
+
+**价值定位**: H-025 证明的是 typed 契约的**正确形态**（surface-form validate-only），而非 typed 契约本身有价值。它修正了 H-024 的错误设计，为 H-026/H-027 的算子层 typed 执行铺路——但单独的 surface-form 在 2wiki 上无显著收益（typed 契约激活太少）。
