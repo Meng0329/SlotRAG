@@ -86,6 +86,8 @@ class MethodSpec:
     generation_fidelity: bool = False
     evidence_rerank: bool = False
     extract_then_select: bool = False
+    sample_majority_vote: bool = False
+    sample_n: int = 5
     description: str = ""
 
 
@@ -125,6 +127,8 @@ ABLATION_METHODS = [
     "slotrag-grounded-frontier-answer-contract",
     "slotrag-grounded-frontier-perpath-guard",
     "slotrag-grounded-frontier-perpath-typed",
+    "slotrag-grounded-frontier-perpath-typed-surface",
+    "slotrag-grounded-frontier-perpath-guard-samplevote",
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
     "slotrag-dual-query-retrieval",
@@ -460,6 +464,23 @@ METHODS: dict[str, MethodSpec] = {
         typed_extraction_contracts=True,
         typed_surface_form=True,
         description="H-025: H-012 stacked + typed contracts preserving surface form (no ISO rewrite)",
+    ),
+    "slotrag-grounded-frontier-perpath-guard-samplevote": MethodSpec(
+        "slotrag-grounded-frontier-perpath-guard-samplevote",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        sample_majority_vote=True,
+        sample_n=5,
+        description="H-027: H-012 stacked + sampled majority-vote answer aggregation (N=5, temperature>0)",
     ),
     "slotrag-grounded-frontier-union": MethodSpec(
         "slotrag-grounded-frontier-union",
@@ -1160,6 +1181,8 @@ def _finalize(
     generation_fidelity: bool = False,
     evidence_rerank: bool = False,
     extract_then_select: bool = False,
+    sample_majority_vote: bool = False,
+    sample_n: int = 5,
     reranker_client=None,
 ) -> ExecutionResult:
     if result.status not in {"ok", "empty"} or not result.evidence:
@@ -1186,6 +1209,8 @@ def _finalize(
         generation_thinking=generation_thinking,
         generation_fidelity=generation_fidelity,
         extract_then_select=extract_then_select,
+        sample_majority_vote=sample_majority_vote,
+        sample_n=sample_n,
     )
     metrics = merge_metrics(
         result.metrics,
@@ -1636,6 +1661,8 @@ def _run_slotrag(
             generation_fidelity=spec.generation_fidelity,
             evidence_rerank=spec.evidence_rerank,
             extract_then_select=spec.extract_then_select,
+            sample_majority_vote=spec.sample_majority_vote,
+            sample_n=spec.sample_n,
             reranker_client=getattr(retriever, "reranker_client", None),
         )
     return _finalize(
@@ -1650,6 +1677,8 @@ def _run_slotrag(
         generation_fidelity=spec.generation_fidelity,
         evidence_rerank=spec.evidence_rerank,
         extract_then_select=spec.extract_then_select,
+        sample_majority_vote=spec.sample_majority_vote,
+        sample_n=spec.sample_n,
         reranker_client=getattr(retriever, "reranker_client", None),
     )
 

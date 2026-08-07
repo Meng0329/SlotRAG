@@ -1,4 +1,4 @@
-from slotrag.generation import generate_answer_response
+from slotrag.generation import _majority_vote, generate_answer_response
 from slotrag.models import EvidenceRecord, ExecutionResult, RunMetrics
 from slotrag.providers import ChatResult, ToolCall
 
@@ -181,3 +181,93 @@ def test_answer_generation_keeps_hidden_thinking_for_joined_answers():
 
     assert answer == "True"
     assert client.kwargs["enable_thinking"] is True
+
+
+class MajorityVoteClient(CapturingClient):
+    """H-027 client that returns a rotation of candidate answers across N samples."""
+
+    def __init__(self, answers, *, structured=False):
+        self.calls = 0
+        self.kwargs_by_call = []
+        self.answers = answers
+        self.structured = structured
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        self.kwargs_by_call.append(kwargs)
+        answer = self.answers[(self.calls - 1) % len(self.answers)]
+        if self.structured:
+            return ChatResult(
+                tool_calls=[ToolCall(name="emit_final_answer", arguments={"answer": answer})],
+                finish_reason="tool_calls",
+            )
+        return ChatResult(content=answer)
+
+    def require_tool(self, result, name):
+        return next(call.arguments for call in result.tool_calls if call.name == name)
+
+
+def test_majority_vote_normalizes_and_returns_most_common_answer():
+    # 3 votes for "George B. Seitz" (two case/punct variants), 2 for "Hollywood" —
+    # normalization must collapse case/punctuation so the 2 real variants count as 3.
+    candidates = ["George B. Seitz", "george b. seitz", "George B. Seitz", "Hollywood", "Hollywood"]
+    assert _majority_vote(candidates) == "George B. Seitz"
+
+
+def test_majority_vote_returns_none_when_all_empty():
+    assert _majority_vote([]) is None
+    assert _majority_vote(["", "  ", ""]) is None
+
+
+def test_sample_majority_vote_collects_n_candidates_at_positive_temperature():
+    client = MajorityVoteClient(
+        ["George B. Seitz", "George B. Seitz", "Hollywood", "George B. Seitz", "Hollywood"],
+        structured=True,
+    )
+    answer, response = generate_answer_response(
+        client,
+        "Where was the director of the film born?",
+        ExecutionResult(
+            rows=[{"director": "George B. Seitz"}],
+            evidence=[
+                EvidenceRecord(source_id="film", source_span="Directed by George B. Seitz", slot_id="S1", bindings={"director": "George B. Seitz"}),
+            ],
+        ),
+        structured_output=True,
+        sample_majority_vote=True,
+        sample_n=5,
+    )
+
+    assert answer == "George B. Seitz"
+    assert client.calls == 5
+    # Every sample must run at temperature > 0 (the intervention) with the same
+    # structured tool so candidates stay grounded.
+    assert all(call["temperature"] == 0.7 for call in client.kwargs_by_call)
+    assert all(call["tools"][0]["function"]["name"] == "emit_final_answer" for call in client.kwargs_by_call)
+    # N samples share one combined response.
+    assert response.logical_calls == 5
+    assert response.usage.completion_tokens >= 0
+
+
+def test_sample_majority_vote_falls_back_to_greedy_when_all_samples_empty():
+    class AllEmptyClient(CapturingClient):
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, **kwargs):
+            self.calls += 1
+            # First 5 samples empty, then the greedy retry returns a real answer.
+            return ChatResult(content="" if self.calls <= 5 else "Tacoma, Washington")
+
+    client = AllEmptyClient()
+    answer, _ = generate_answer_response(
+        client,
+        "Where was the director born?",
+        ExecutionResult(rows=[{"place": "Tacoma, Washington"}]),
+        sample_majority_vote=True,
+        sample_n=5,
+    )
+
+    # H-027 must never lose an answer it could already produce (fallback to greedy).
+    assert answer == "Tacoma, Washington"
+    assert client.calls == 6  # 5 samples + first greedy attempt returns the real answer

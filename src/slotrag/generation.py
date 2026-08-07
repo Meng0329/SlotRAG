@@ -92,6 +92,43 @@ def _tool_answer(client: AgnesClient, response: ChatResult) -> str:
     return (response.content or "").strip()
 
 
+def _normalize_for_vote(answer: str) -> str:
+    """Normalize a candidate answer for majority-vote comparison.
+
+    Mirrors the evaluation normalizer (lowercase, strip punctuation/articles,
+    collapse whitespace) so that ``"The Man with the Glass Eye"`` and
+    ``"man with glass eye"`` vote as the same answer. Empty stays empty.
+    """
+    text = " ".join(answer.casefold().split())
+    text = "".join(ch for ch in text if ch.isalnum() or ch.isspace())
+    text = " ".join(text.split())
+    for article in ("a ", "an ", "the "):
+        if text.startswith(article):
+            text = text[len(article):]
+            break
+    return text
+
+
+def _majority_vote(candidates: list[str]) -> str | None:
+    """Return the majority-vote answer, or ``None`` when no candidate voted.
+
+    Ties resolve to the first-seen candidate (deterministic). Empty candidates
+    are excluded from the vote; if all are empty, return ``None``.
+    """
+    counts: dict[str, int] = {}
+    for raw in candidates:
+        normalized = _normalize_for_vote(raw)
+        if normalized:
+            counts[normalized] = counts.get(normalized, 0) + 1
+    if not counts:
+        return None
+    best = max(counts.items(), key=lambda entry: entry[1])[0]
+    for raw in candidates:
+        if _normalize_for_vote(raw) == best and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _extract_then_select_answer(
     client: AgnesClient,
     question: str,
@@ -176,6 +213,8 @@ def generate_answer_response(
     generation_thinking: bool = False,
     generation_fidelity: bool = False,
     extract_then_select: bool = False,
+    sample_majority_vote: bool = False,
+    sample_n: int = 5,
 ) -> tuple[str, ChatResult]:
     """Generate an answer from selected evidence and retain provider metadata.
 
@@ -184,6 +223,13 @@ def generate_answer_response(
     fails (no candidates / empty selection / tool error), fall back to the
     normal free-generation path so H-020 can only add grounded answers, never
     remove an answer.
+
+    H-027: when ``sample_majority_vote`` is set, sample ``sample_n`` candidate
+    answers at ``temperature > 0`` over the SAME fixed evidence and return the
+    majority vote. This targets the generator's answer-selection failures when
+    evidence presents multiple valid candidates (2wiki H-022: 20 selection
+    failures). Uses the structured emit_final_answer tool when available so
+    each candidate stays grounded.
     """
     evidence = [
         {
@@ -265,6 +311,41 @@ def generate_answer_response(
             })
             return answer, combined
         # fall through to free generation below
+    if sample_majority_vote:
+        # H-027: sample N candidate answers over the SAME fixed evidence at
+        # temperature > 0, then majority-vote. Targets the generator's
+        # answer-selection failures when evidence offers multiple valid
+        # candidates (2wiki H-022: 20 selection failures). Temperature 0
+        # makes each decode a deterministic single selection with no
+        # diversity to aggregate; >0 gives the vote something to work with.
+        sampled_responses: list[ChatResult] = []
+        candidates: list[str] = []
+        thinking_for_sample = (generation_thinking and sample_n == 1)  # keep thinking off for N>1 to save budget
+        for _ in range(sample_n):
+            response = client.complete(
+                messages,
+                tools=[_answer_tool(answer_kind)] if structured_output else None,
+                tool_choice={"type": "function", "function": {"name": "emit_final_answer"}}
+                if structured_output else None,
+                temperature=0.7,
+                enable_thinking=_structured_thinking_enabled(result, enabled=thinking_for_sample),
+            )
+            sampled_responses.append(response)
+            cand = _tool_answer(client, response) if structured_output else (response.content or "").strip()
+            if cand:
+                candidates.append(cand)
+        winner = _majority_vote(candidates)
+        if winner is not None:
+            combined = sampled_responses[-1].model_copy(update={
+                "logical_calls": len(sampled_responses),
+                "usage": Usage(
+                    prompt_tokens=sum(item.usage.prompt_tokens for item in sampled_responses),
+                    completion_tokens=sum(item.usage.completion_tokens for item in sampled_responses),
+                ),
+                "latency_ms": sum(item.latency_ms for item in sampled_responses),
+            })
+            return winner, combined
+        # no non-empty candidates → fall through to greedy (never lose an answer)
     responses: list[ChatResult] = []
     for attempt in range(2):
         # H-017: thinking on first attempt (multi-hop/arithmetic reasoning),
