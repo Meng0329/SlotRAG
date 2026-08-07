@@ -2403,6 +2403,35 @@ def test_typed_boolean_materializer_emits_canonical_supported_rows_bundle_path()
     assert metrics.typed_extraction_abstentions == 0
 
 
+def test_bundle_role_projected_extraction_reattaches_bound_join_key():
+    """bundle path keeps the bound projection anchor in output rows.
+
+    Regression: role-projected extraction with evidence bundle dropped the
+    bound join key (e.g. S2 BornIn(?mother,?place) under binding
+    {mother:...} emitted only {place:...}), so _join_rows on ?mother found
+    0 matches and every 2wiki join plan collapsed to join_out=0.
+    """
+    from slotrag.evidence_bundle import PerPathExtractor
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"place": "Copenhagen", "source_id": "p"}],
+            [{"place": "Copenhagen", "source_id": "p"}],
+        ]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Christiana was born in Copenhagen.")),
+        role_projected_extraction=True,
+        dual_access_bundle=True,
+        evidence_bundle_extractor=PerPathExtractor(),
+        question_context="Where was Christiana born?",
+    )
+    rows, metrics = materializer.materialize(
+        Slot(id="S2", predicate="BornIn", arguments=["?mother", "?place"]),
+        {"mother": "Christiana"},
+    )
+
+    assert [row.bindings for row in rows] == [{"mother": "Christiana", "place": "Copenhagen"}]
+    assert metrics.role_projected_extraction_contracts == 1
+
+
 def test_materializer_counts_and_skips_repeated_invalid_extractions():
     materializer = SlotMaterializer(FakeExtractionClient(), FakeRetriever())
     rows, metrics = materializer.materialize(

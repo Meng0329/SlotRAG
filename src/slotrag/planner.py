@@ -1727,7 +1727,7 @@ class SlotMaterializer:
                     "tools": [extraction_tool(
                         slot,
                         list(by_source),
-                        typed_extraction_contracts=bool(boolean_fields),
+                        typed_extraction_contracts=bool(boolean_fields | date_fields | number_fields),
                         requested_fields=set(requested_fields),
                         role_projected=self.role_projected_extraction,
                         known_bindings=(effective_bindings if self.bound_role_signatures else None),
@@ -2078,6 +2078,17 @@ class SlotMaterializer:
                     raw_bindings[typed_field] = normalized_value
             if typed_invalid:
                 continue
+            # Role-projected mode: re-attach the bound projection anchors (join
+            # keys) to the output row so downstream joins can link it to its
+            # parent. Mirrors the inline path's effective_bindings merge
+            # (planner.py:1870); without this the free-variable extraction
+            # emits an orphan row with no join key (_join_rows => 0).
+            if self.role_projected_extraction:
+                raw_bindings.update({
+                    key: value
+                    for key, value in effective_bindings.items()
+                    if key in expected
+                })
             rows.append(BindingRow(
                 slot_id=slot.id,
                 bindings=raw_bindings,
