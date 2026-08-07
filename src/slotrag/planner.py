@@ -43,6 +43,9 @@ from .retrieval import HybridRetriever, SparseAccessMode
 from .sufficiency import EvidenceContext, EvidenceSufficiencyCalibrator, SufficiencyPrediction
 
 
+_TYPED_VALUE_TYPES = frozenset({"string", "boolean", "number", "date"})
+
+
 def slot_plan_tool() -> dict[str, Any]:
     return {
         "type": "function",
@@ -161,11 +164,23 @@ def extraction_tool(
     signature = f"{slot.predicate}({', '.join(rendered_arguments)})"
     properties: dict[str, dict[str, Any]] = {}
     for field in fields:
-        schema: dict[str, Any] = (
-            {"type": "string", "enum": ["yes", "no", "unknown"]}
-            if typed_extraction_contracts and slot.variable_types.get(field) == "boolean"
-            else {"type": "string"}
-        )
+        value_type = slot.variable_types.get(field)
+        if typed_extraction_contracts and value_type == "boolean":
+            schema: dict[str, Any] = {"type": "string", "enum": ["yes", "no", "unknown"]}
+        elif typed_extraction_contracts and value_type == "number":
+            schema = {
+                "type": "string",
+                "description": "A numeric value as a plain decimal string (no commas, no units). "
+                               "Use only digits with an optional leading '-' and a single decimal point.",
+            }
+        elif typed_extraction_contracts and value_type == "date":
+            schema = {
+                "type": "string",
+                "description": "A calendar date as ISO 'YYYY-MM-DD'. For year-only values pad missing "
+                               "month/day with 01 (e.g. '1999' -> '1999-01-01').",
+            }
+        else:
+            schema = {"type": "string"}
         if role_projected:
             position = next(
                 index
@@ -917,9 +932,9 @@ class SlotCompiler:
         return SlotPlan(
             slots=[
                 Slot(id="S1", predicate="DirectorOf", arguments=[left_label, "?director1"], estimated_cardinality=1),
-                Slot(id="S2", predicate="BirthDate", arguments=["?director1", "?birthDate1"], estimated_cardinality=1),
+                Slot(id="S2", predicate="BirthDate", arguments=["?director1", "?birthDate1"], variable_types={"birthDate1": "date"}, estimated_cardinality=1),
                 Slot(id="S3", predicate="DirectorOf", arguments=[right_label, "?director2"], estimated_cardinality=1),
-                Slot(id="S4", predicate="BirthDate", arguments=["?director2", "?birthDate2"], estimated_cardinality=1),
+                Slot(id="S4", predicate="BirthDate", arguments=["?director2", "?birthDate2"], variable_types={"birthDate2": "date"}, estimated_cardinality=1),
             ],
             joins=[
                 JoinSpec(left_slot="S1", left_field="director1", right_slot="S2", right_field="director1"),
@@ -1588,10 +1603,19 @@ class SlotMaterializer:
             field for field in requested_fields
             if self._semantic_role_gender(field) is not None
         }
-        boolean_fields = {
+        typed_fields = {
             field
             for field, value_type in slot.variable_types.items()
-            if self.typed_extraction_contracts and value_type == "boolean" and field in requested_fields
+            if self.typed_extraction_contracts and value_type in _TYPED_VALUE_TYPES and field in requested_fields
+        }
+        boolean_fields = {
+            field for field in typed_fields if slot.variable_types.get(field) == "boolean"
+        }
+        date_fields = {
+            field for field in typed_fields if slot.variable_types.get(field) == "date"
+        }
+        number_fields = {
+            field for field in typed_fields if slot.variable_types.get(field) == "number"
         }
         metrics = RunMetrics(
             retrieval_calls=retrieval_calls,
@@ -1608,7 +1632,7 @@ class SlotMaterializer:
             dual_access_candidate_overlap=dual_access_candidate_overlap,
             documents_accessed=len({p.passage.doc_id or p.passage.id for p in passages}),
             passages_processed=len(passages),
-            typed_extraction_contracts=int(bool(boolean_fields and passages)),
+            typed_extraction_contracts=int(bool((boolean_fields | date_fields | number_fields) and passages)),
             role_projected_extraction_contracts=int(self.role_projected_extraction and bool(passages)),
             known_binding_fields_projected=(
                 len(slot.variables & effective_bindings.keys())
@@ -1654,7 +1678,8 @@ class SlotMaterializer:
         if self.evidence_bundle_extractor is not None:
             return self._extract_via_bundle(
                 slot, bindings, query, passages, requested_fields,
-                boolean_fields, effective_bindings, protected_output_values,
+                boolean_fields, date_fields, number_fields,
+                effective_bindings, protected_output_values,
                 base_trace, dual_access_candidate_overlap, metrics,
             )
 
@@ -1746,6 +1771,7 @@ class SlotMaterializer:
                     raise SchemaError(f"empty extraction for {slot.id}; review the retrieved passages once")
                 rejection_reasons: list[str] = []
                 semantic_rejections = 0
+                typed_invalid_rows = 0
                 accepted_before = len(extracted_rows)
                 for row in extracted.rows:
                     source_id = row.get("source_id", "")
@@ -1755,6 +1781,21 @@ class SlotMaterializer:
                         if key.lstrip("?") in requested_fields
                     }
                     source = by_source.get(source_id)
+                    # Typed date/number cells: normalize to a canonical string the
+                    # operator layer can parse; skip row when unparseable.
+                    typed_invalid = False
+                    for typed_field in date_fields | number_fields:
+                        if typed_field in normalized:
+                            normalized_value = _normalize_typed_value(
+                                normalized[typed_field], slot.variable_types.get(typed_field, "string")
+                            )
+                            if normalized_value is None:
+                                typed_invalid = True
+                                typed_invalid_rows += 1
+                                break
+                            normalized[typed_field] = normalized_value
+                    if typed_invalid:
+                        continue
                     propagated = {key: value for key, value in bindings.items() if key in expected}
                     invalid_bindings = []
                     for key, value in propagated.items():
@@ -1829,21 +1870,32 @@ class SlotMaterializer:
                     normalized.update({key: value for key, value in effective_bindings.items() if key in expected})
                     if source_id in by_source and set(normalized) == expected and all(normalized.values()):
                         extracted_rows.append((normalized, source_id))
-                if (
-                    extracted.rows
-                    and len(extracted_rows) == accepted_before
-                    and semantic_rejections == len(extracted.rows)
-                ):
-                    metrics = metrics.model_copy(update={
-                        "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + 1,
-                    })
-                    break
-                if extracted.rows and not extracted_rows:
-                    detail = f"; {'; '.join(rejection_reasons)}" if rejection_reasons else ""
+                if extracted.rows and len(extracted_rows) == accepted_before:
+                    if typed_invalid_rows == len(extracted.rows):
+                        # Unparseable typed date/number cells: abstain. Re-extraction
+                        # won't change the deterministic normalization result.
+                        metrics = metrics.model_copy(update={
+                            "typed_extraction_abstentions": metrics.typed_extraction_abstentions + 1,
+                        })
+                        break
+                    if semantic_rejections == len(extracted.rows):
+                        # Every row dropped by the semantic role filter: abstain
+                        # without repair (LLM couldn't produce a compatible role).
+                        metrics = metrics.model_copy(update={
+                            "semantic_role_type_abstentions": metrics.semantic_role_type_abstentions + 1,
+                        })
+                        break
+                    if rejection_reasons:
+                        raise SchemaError(
+                            f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs"
+                            f"{'; ' + '; '.join(rejection_reasons) if rejection_reasons else ''}"
+                        )
+                    # Rows were dropped for no soft reason (e.g. field mismatch): a
+                    # hard SchemaError so the retry loop repairs the extraction.
                     raise SchemaError(
-                        f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs{detail}"
+                        f"extracted rows for {slot.id} do not match fields {sorted(expected)} and source IDs"
                     )
-                if boolean_fields:
+                if boolean_fields or date_fields or number_fields:
                     metrics = metrics.model_copy(update={
                         "typed_extraction_answers": metrics.typed_extraction_answers + 1,
                     })
@@ -1901,6 +1953,8 @@ class SlotMaterializer:
         passages: list[RetrievalResult],
         requested_fields: set[str],
         boolean_fields: set[str],
+        date_fields: set[str],
+        number_fields: set[str],
         effective_bindings: dict[str, str],
         protected_output_values: set[str],
         base_trace: MaterializationTrace,
@@ -1942,7 +1996,9 @@ class SlotMaterializer:
         outcome = self.evidence_bundle_extractor.extract(
             self.client, bundle, slot,
             requested_fields=requested_fields,
-            boolean_fields=boolean_fields,
+            # Any typed field (boolean/date/number) enables the typed extraction
+            # contract in the shared extraction_tool schema.
+            boolean_fields=boolean_fields | date_fields | number_fields,
             role_projected=self.role_projected_extraction,
             protected_output_values=protected_output_values,
             effective_bindings=effective_bindings,
@@ -2005,6 +2061,23 @@ class SlotMaterializer:
                         metrics = metrics.model_copy(update={"protected_anchor_rejections": metrics.protected_anchor_rejections + 1})
                 if skip_anchor:
                     continue
+            # Typed date/number cells: normalize to a canonical string the
+            # operator layer can parse; skip row when unparseable.
+            typed_invalid = False
+            for typed_field in date_fields | number_fields:
+                if typed_field in raw_bindings:
+                    normalized_value = _normalize_typed_value(
+                        raw_bindings[typed_field], slot.variable_types.get(typed_field, "string")
+                    )
+                    if normalized_value is None:
+                        typed_invalid = True
+                        metrics = metrics.model_copy(update={
+                            "typed_extraction_abstentions": metrics.typed_extraction_abstentions + 1,
+                        })
+                        break
+                    raw_bindings[typed_field] = normalized_value
+            if typed_invalid:
+                continue
             rows.append(BindingRow(
                 slot_id=slot.id,
                 bindings=raw_bindings,
@@ -2177,6 +2250,7 @@ def _as_date(value: object) -> datetime | None:
         "%d %b %Y",
         "%B %d %Y",
         "%b %d %Y",
+        "%Y",  # bare year → Jan 1
     ):
         try:
             return datetime.strptime(text, date_format)
@@ -2191,6 +2265,34 @@ def _ordered_scalar(value: object) -> tuple[str, datetime | float] | None:
     if (parsed_number := _as_number(value)) is not None:
         return "number", parsed_number
     return None
+
+
+def _normalize_typed_value(value: object, value_type: str) -> str | None:
+    """Normalize a raw typed cell to a canonical string the operator layer can consume.
+
+    - ``number`` → canonical decimal string (via ``_as_number``), or ``None`` to abstain.
+    - ``date``   → ISO ``YYYY-MM-DD`` (via ``_as_date``), or ``None`` to abstain.
+    - ``boolean``/``string`` → passthrough unchanged.
+
+    Returns ``None`` when the cell cannot be reliably normalized so the caller
+    can abstain the row instead of emitting a string the typed operators would
+    later fail to parse.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if value_type == "number":
+        number = _as_number(raw)
+        if number is None or math.isnan(number) or math.isinf(number):
+            return None
+        return str(int(number)) if number.is_integer() else f"{number:.10g}"
+    if value_type == "date":
+        parsed = _as_date(raw)
+        if parsed is not None:
+            return parsed.strftime("%Y-%m-%d")
+        # 年份近似/范围（"about 400 years"/"Feb 1999"）不猜测 → abstain
+        return None
+    return raw
 
 
 def _compare(left: object, right: object, comparator: str) -> bool:

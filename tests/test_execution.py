@@ -570,6 +570,9 @@ class StaticRetriever:
     def search(self, _query):
         return [RetrievalResult(passage=self.passage, score=1.0)]
 
+    def search_batch(self, _queries, top_k=5, sparse_access_modes=None):
+        return [[RetrievalResult(passage=self.passage, score=1.0)] for _ in _queries]
+
 
 def test_slot_variable_types_must_reference_exposed_variables():
     with pytest.raises(ValidationError, match="variable_types keys must be slot variables"):
@@ -2247,6 +2250,156 @@ def test_typed_extraction_is_disabled_by_default_and_keeps_free_text_rows():
     assert [row.bindings for row in rows] == [{"answer": "No, Alpha differs from Beta."}]
     assert metrics.typed_extraction_contracts == 0
     assert metrics.typed_extraction_answers == 0
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_typed_number_materializer_normalizes_and_emits_canonical_float():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"num": "1,234.5", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="The count was 1234.5 units.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="NumericValue",
+            arguments=["?num"],
+            variable_types={"num": "number"},
+        ),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"num": "1234.5"}]
+    assert metrics.typed_extraction_contracts == 1
+    assert metrics.typed_extraction_answers == 1
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_typed_number_materializer_abstains_on_unparseable_value():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"num": "about 100", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="It lasted about 100 years.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="NumericValue",
+            arguments=["?num"],
+            variable_types={"num": "number"},
+        ),
+        {},
+    )
+
+    assert rows == []
+    assert metrics.typed_extraction_contracts == 1
+    assert metrics.typed_extraction_answers == 0
+    assert metrics.typed_extraction_abstentions == 1
+    assert metrics.structured_output_failures == 0
+
+
+def test_typed_date_materializer_normalizes_to_iso():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"born": "Feb 5, 1999", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="They were born on Feb 5 1999.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="BirthDate",
+            arguments=["?born"],
+            variable_types={"born": "date"},
+        ),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"born": "1999-02-05"}]
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_typed_date_materializer_abstains_on_year_only_range_word():
+    # A bare year "1999" parses (year-only) → normalizes to 1999-01-01.
+    # "about 400 years" (duration word) is unparseable → abstain.
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"born": "about 400 years", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="The event happened about 400 years ago.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="BirthDate",
+            arguments=["?born"],
+            variable_types={"born": "date"},
+        ),
+        {},
+    )
+
+    assert rows == []
+    assert metrics.typed_extraction_abstentions == 1
+
+
+def test_typed_date_materializer_normalizes_year_only_to_jan_first():
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([[{"born": "1999", "source_id": "p"}]]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="They were born in 1999.")),
+        typed_extraction_contracts=True,
+    )
+
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="BirthDate",
+            arguments=["?born"],
+            variable_types={"born": "date"},
+        ),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"born": "1999-01-01"}]
+    assert metrics.typed_extraction_abstentions == 0
+
+
+def test_field_extremum_template_marks_birthdate_as_typed_date():
+    plan = SlotCompiler(FakeStructuredClient([]))._field_extremum_template(
+        "Which film has the director who was born first, MovieA or MovieB?"
+    )
+    assert plan is not None
+    by_id = {slot.id: slot for slot in plan.slots}
+    assert by_id["S2"].variable_types == {"birthDate1": "date"}
+    assert by_id["S4"].variable_types == {"birthDate2": "date"}
+
+
+def test_typed_boolean_materializer_emits_canonical_supported_rows_bundle_path():
+    """bundle path (_extract_via_bundle) applies typed normalization too."""
+    from slotrag.evidence_bundle import PerPathExtractor
+    # PerPathExtractor issues one extraction per retrieval path (dense + sparse).
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"born": "Feb 5 1999", "source_id": "p"}],
+            [{"born": "Feb 5 1999", "source_id": "p"}],
+        ]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Born Feb 5 1999.")),
+        typed_extraction_contracts=True,
+        dual_access_bundle=True,
+        question_context="When was the film director born?",
+        evidence_bundle_extractor=PerPathExtractor(),
+    )
+    rows, metrics = materializer.materialize(
+        Slot(
+            id="S1",
+            predicate="BirthDate",
+            arguments=["?born"],
+            variable_types={"born": "date"},
+        ),
+        {},
+    )
+    assert [row.bindings for row in rows] == [{"born": "1999-02-05"}]
     assert metrics.typed_extraction_abstentions == 0
 
 
