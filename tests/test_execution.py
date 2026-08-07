@@ -2432,6 +2432,37 @@ def test_bundle_role_projected_extraction_reattaches_bound_join_key():
     assert metrics.role_projected_extraction_contracts == 1
 
 
+def test_bundle_typed_contract_counts_answers_on_success():
+    """bundle path increments typed_extraction_answers on a successful typed slot.
+
+    Regression: the bundle path (_extract_via_bundle) incremented
+    typed_extraction_abstentions but never typed_extraction_answers, so H-024's
+    gate metric (typed_parse_success_rate) was 0/unmeasurable on the actual
+    treatment path (all H-012 stacked methods use evidence_bundle=True).
+    """
+    from slotrag.evidence_bundle import PerPathExtractor
+    materializer = SlotMaterializer(
+        SequenceExtractionClient([
+            [{"born": "Feb 5 1999", "source_id": "p"}],
+            [{"born": "Feb 5 1999", "source_id": "p"}],
+        ]),
+        StaticRetriever(Passage(id="p", doc_id="d", text="Born Feb 5 1999.")),
+        typed_extraction_contracts=True,
+        dual_access_bundle=True,
+        evidence_bundle_extractor=PerPathExtractor(),
+        question_context="When was the film director born?",
+    )
+    rows, metrics = materializer.materialize(
+        Slot(id="S1", predicate="BirthDate", arguments=["?born"], variable_types={"born": "date"}),
+        {},
+    )
+
+    assert [row.bindings for row in rows] == [{"born": "1999-02-05"}]
+    assert metrics.typed_extraction_contracts == 1
+    assert metrics.typed_extraction_answers == 1
+    assert metrics.typed_extraction_abstentions == 0
+
+
 def test_materializer_counts_and_skips_repeated_invalid_extractions():
     materializer = SlotMaterializer(FakeExtractionClient(), FakeRetriever())
     rows, metrics = materializer.materialize(

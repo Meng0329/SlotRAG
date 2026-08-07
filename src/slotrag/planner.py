@@ -2099,6 +2099,10 @@ class SlotMaterializer:
             ))
 
         self.last_materialization_traces = outcome.traces
+        if boolean_fields or date_fields or number_fields:
+            metrics = metrics.model_copy(update={
+                "typed_extraction_answers": metrics.typed_extraction_answers + 1,
+            })
         return rows, metrics
 
     def materialize_many(
