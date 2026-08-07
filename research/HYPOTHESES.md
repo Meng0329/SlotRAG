@@ -571,6 +571,20 @@
 - **结论**: **typed relational execution 方向在 DEVELOPMENT_SET 上暂停**。H-026/H-027/H-028 无构建价值——编译→算子激活缺口只能由"把审计分类器升级为运行时编译器"闭合，那是架构级新方向（超出 Phase 3X 的干预假设框架），且不保证换模型前能改变 qwen3.6-27b 的生成决策
 - **Coverage 影响**: 维持 **40%**（2/5: musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。typed relational 不构成覆盖提升路径
 
+### H-027: 采样多数票生成（固定 evidence 上 N=5 temperature>0 采样 + 多数票聚合）
+
+- **状态**: **rejected**（Tier 1, 2026-08-07）
+- **动机**: H-022 决定性证据——2wiki 20 选型失败（gold 在 evidence 但贪心选错候选）+ H-026 方向暂停后，唯一未试且直接攻击"选型天花板"的杠杆: 贪心 temp=0 是单次确定性选型，无多样性可聚合。Self-consistency（Wang 2022）提示采样多数票能纠正犹豫性选错。
+- **干预**: `generate_answer_response` 加 `sample_majority_vote=True`（N=5 temp=0.7），`_majority_vote`+`_normalize_for_vote`（case/punct-insensitive）。结构化 `emit_final_answer` 保持候选 grounded。新方法 `slotrag-grounded-frontier-perpath-guard-samplevote`（commit `eb13479`）。分析: `tools/h027_paired_analyze.py`。
+- **Tier 1 (n=20, 2wiki+drop, dev)**: 2wiki **Δ=-6.07pt**（0.6869→0.6262, p=0.46, wins=2 losses=2 ties=16）；drop 0.00pt（0/20 一字不差）。
+- **关键证据（2wiki moved 4/20, 16 一字不差）**:
+  - **真回收 1**（`89a3abec`: `Oliba I of Carcassonne`→`Bello of Carcassonne` 0.571→1.0，gold 在 evidence，贪心选错多数票矫正）→ 证明机制可行
+  - **once-correct 翻转 2**（`f02e0a34` 1.0→0.0, `Domangart Réti`→`Fergus Mór`；`fa3e9b64` 1.0→budget_exceeded→None）
+  - `4c77c5a2` 0.5→0.857 部分改善（list 3 项→单 `Australian National Film Board`）
+- **成本**: generation_llm_calls 2wiki **5.45×**（guard 11→treat 60）、drop 5.00×（5→25）
+- **结论: 拒绝**。多数票在 qwen3.6-27b "稳定地错"时（模型多数时候也选错候选）**加剧而非矫正**——1 例回收以 2 例 once-correct 回归为代价，aggregate -6.07pt 远超 -2pt 门禁。**H-022 选型天花板确认，majority-vote 不构成回收杠杆。** drop 上采样聚合对算术完全无作用（gold=计算值，无候选多样性）。
+- **Coverage 影响**: 维持 **40%**。采样聚合方向关闭；2wiki/drop LOSS 确认模型级（除非 upgrade 或运行时编译器）。
+
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
 - **状态**: rejected_exact_intervention（Tier 2 验证完成, 2026-08-06）

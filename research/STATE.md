@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-06T22:00:00Z  
+> **最后更新**: 2026-08-07T00:00:00Z  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 3（假设循环）— H-017~H-020 rejected，生成瓶颈模型级不可解（输入+输出契约均穷尽），Coverage 维持 40%
+> **当前阶段**: Phase 3（假设循环）— H-017~H-020 rejected + H-024/025/026/027 均未提升 Coverage，生成瓶颈模型级不可解，Coverage 维持 40%
 
 ---
 
@@ -134,6 +134,13 @@
   - 根因: 编译→算子激活缺口——`slot_plan_tool` schema 允许 typed operators 但 LLM 几乎不产出；仅 2 个硬编码模板激活（2wiki typed 契约 5 次, drop 0）
   - 算子执行层不是瓶颈（H-025 证表面形式解析无退化）；瓶颈是被审计分类器证明存在、但运行时无路可达的激活缺口
   - **Coverage 维持 40%**（musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。typed relational 不构成覆盖提升路径
+- [x] **Phase 3X: H-027 已拒绝** (sampled majority-vote answer aggregation, Tier 1 n=20, 2wiki+drop, 2026-08-07)
+  - 干预: N=5 temp=0.7 采样 + `_majority_vote`（case/punct-insensitive），`sample_majority_vote=True`，新方法 `slotrag-grounded-frontier-perpath-guard-samplevote`
+  - **2wiki Δ=-6.07pt**（0.6869→0.6262, p=0.46），wins=2 losses=2 ties=16；drop 0.00pt（0/20 不变）
+  - 关键证据: **真回收 1/20**（`89a3abec` 0.571→1.0, gold `Bello of Carcassonne`，贪心选错，多数票矫正）；**once-correct 翻转 2/20**（`f02e0a34` 1.0→0.0 `Domangart Réti`→`Fergus Mór`；`fa3e9b64` 1.0→budget_exceeded→None）
+  - 成本: generation_llm_calls 2wiki **5.45×**（guard 11→treat 60），drop 5.00×（5→25）
+  - **结论**: qwen3.6-27b "稳定地错"时多数票**加剧而非矫正**（1 例回收以 2 例回归为代价，aggregate -6.07pt 远超 -2pt 红线）。**H-022 选型天花板确认，majority-vote 不构成回收杠杆**。drop gold=计算值，采样无候选多样性。
+  - Coverage 维持 **40%**，采样聚合方向关闭；剩余方向: (a) 接受 Coverage 40% 转论文；或 (b) 架构级"审计分类器→运行时编译器"新方向（超出 Phase 3X 干预假设）
 - [ ] **架构级下一步（超出 Phase 3X 干预假设）**: 若要覆盖 2wiki/drop, 需把"审计分类器→运行时编译器"做成架构级新方向（非单假设干预）。或接受 qwen3.6-27b 选型天花板（H-022）→ Coverage 顶在 40%, 除非模型级生成器升级
 
 ---
