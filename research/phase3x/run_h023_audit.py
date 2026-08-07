@@ -70,10 +70,11 @@ class AnswerSpec:
         self.value_type = value_type
         self.numeric = numeric
         self.multi = multi
-        # category: ENTITY / DATE / NUMBER / BOOLEAN / MULTI — 用于 schema 判分
+        # category: ENTITY / DATE / NUMBER / BOOLEAN / MULTI / COMPOSITE — 用于 schema 判分
         self.category = category or (
             "NUMBER" if numeric else "BOOLEAN" if value_type == "BOOLEAN" else
-            "DATE" if value_type == "DATE" else "MULTI" if multi else "ENTITY")
+            "DATE" if value_type == "DATE" else "COMPOSITE" if value_type == "COMPOSITE" else
+            "MULTI" if multi else "ENTITY")
 
     def __repr__(self) -> str:
         return f"{self.cardinality}:{self.value_type}"
@@ -102,7 +103,7 @@ def infer_answer_spec(question: str) -> AnswerSpec:
         return AnswerSpec("ONE", "DATE")
     if _BOOL_LEAD.match(q) and not _WH_LEAD.match(q):
         return AnswerSpec("ONE", "BOOLEAN")
-    if _COMPAR_SUPER.search(q):
+    if _COMPAR_SUPER.search(q) or _GENERIC_EXTREMUM.search(q):
         return AnswerSpec("ONE", "SCALAR_ENTITY")
     if _MULTI.search(q):
         return AnswerSpec("MANY_SET", "MULTI_SPAN", multi=True)
