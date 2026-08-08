@@ -585,6 +585,18 @@
 - **结论: 拒绝**。多数票在 qwen3.6-27b "稳定地错"时（模型多数时候也选错候选）**加剧而非矫正**——1 例回收以 2 例 once-correct 回归为代价，aggregate -6.07pt 远超 -2pt 门禁。**H-022 选型天花板确认，majority-vote 不构成回收杠杆。** drop 上采样聚合对算术完全无作用（gold=计算值，无候选多样性）。
 - **Coverage 影响**: 维持 **40%**。采样聚合方向关闭；2wiki/drop LOSS 确认模型级（除非 upgrade 或运行时编译器）。
 
+### H-028: 确定性运行时算子修复（审计分类器升级为运行时编译器, deterministic runtime operator-plan repair）
+
+- **状态**: **rejected**（Tier 1, 2026-08-08）
+- **预注册文档**: `research/H028_PRE_REGISTRATION.md`
+- **动机**: H-026 激活缺口 + H-027 采样多数票否决后，唯一未试且直接绕过 H-022 选型天花板的杠杆——**改决策机制而非改生成分布**：把 H-023 离线审计证明能到 92% 的确定性分类器接入运行时，让 `apply_operators` 确定性算出答案，不经过 LLM 生成。
+- **干预**: `_repair_plan_operators`（planner.py:2411）在 LLM compile 后确定性注入/替换 operator（field_argmin/argmax/count），labels 从 "X or Y" 子句提取（`_rc_or_clause_labels`），注入后 `payload["outputs"]=["?answer"]` 对齐 `_deterministic_output`（methods.py:1114）短路生成。修 2 个 pre-existing repair bug（labels 来源 + outputs 对齐）。`runtime_compiler=True`，新方法 `slotrag-grounded-frontier-perpath-runtime-compiler`（commit `39012dd`）。分析: `runs/slotrag-phase3x-h028-dev1/summaries/h028_tier1/`（paired bootstrap + per-question）。
+- **Tier 1 (n=20, 2wiki+drop, dev1)**: 2wiki **Δ=-2.50pt**（0.6286→0.6036, 95% CI [-0.075, 0.000], wins=0 losses=1 ties=19）；drop 0.00pt（0/20 一字不差）。
+- **关键证据（修复零激活）**: 全部 **40 个 rc item `runtime_operator_repairs=0`**——`_repair_plan_operators` 从未触发。n=20 样本无任何 plan 同时具备 "≥2 typed date/number 字段"+"缺 operator"。唯一比较模板题 `b081` 已带正确 field_argmin（labels=Bat*21/The Lunatic At Large），不 double-repair 且两侧都 budget_exceeded。
+- **唯一回归 `a344d746`**（"Where was the performer of song ¿Y Cómo Es Él? born?"）: guard 0.5→rc 0.0。**plan 参数顺序不稳定**→retrieval 稀疏→`BornIn` 折叠成 single `{Madrid}`→**pre-existing `_deterministic_output` 单唯一行短路**返回 `Madrid`（错）。非 H-028 修复因果（repairs=0, 无 operator），但暴露确定性短路对不完整 evidence 的危险。
+- **结论: 拒绝**。确定性执行器机制正确（单测证明 field_argmin 确定性算出 `Bat*21`）但**运行时无物化目标**——LLM plan 不产 λ≥2 typed 字段，算子无输入可算。**H-026 激活缺口第二次确认；H-022 选型天花板第三次确认（H-025/H-026/H-028）。** 零激活 = 门禁 fail，无论 aggregate 是否在 -2pt 内。
+- **Coverage 影响**: 维持 **40%**。**Phase 3X 全部 6 个假设（H-023~H-028）收束到同一根因**——运行时编译 plan 不物化 typed 字段（一端离线审计 92% 可达 H-023、运行时无路可达 H-026；一端确定性执行器正确但无输入 H-028）。2wiki/drop LOSS 确认模型级，局部干预（提示/契约/采样/确定性算子）全部无效。
+
 ### H-018: 生成证据保真（evidence-fidelity prompt）可修复 hotpotqa 截断/超集错误
 
 - **状态**: rejected_exact_intervention（Tier 2 验证完成, 2026-08-06）

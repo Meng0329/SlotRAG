@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-07T00:00:00Z  
+> **最后更新**: 2026-08-08  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 3（假设循环）— H-017~H-020 rejected + H-024/025/026/027 均未提升 Coverage，生成瓶颈模型级不可解，Coverage 维持 40%
+> **当前阶段**: Phase 3（假设循环）已完成 — H-017~H-020 + H-024~H-028 全部 rejected/收束，生成瓶颈模型级不可解（H-022 选型天花板 + H-026 激活缺口，三次确认），Coverage 维持 40%
 
 ---
 
@@ -260,18 +260,17 @@
 
 ## 下一步行动
 
-### 立即 (Phase 3)
-1. 从 0/10 基线开始假设循环 (每轮 ≤3 假设)
-2. P0: strategyqa 近乎失效 — 诊断 root cause
-3. P1: 2wikimultihop/hotpotqa EM 落后 — 检索/生成瓶颈
-4. 预注册 → 实现 → 测试 → 统计 → 评审 → 晋级/回滚
+### 决策点（Phase 3 收束，需用户裁定）
+**Coverage 维持 40%（musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。** Phase 3X 六个假设（H-023~H-028）全部收束到同一根因：**运行时编译 plan 不物化 typed 字段** + **qwen3.6-27b 选型天花板（H-022）**。局部干预（提示 H-005~H-019 / 契约 H-020 / 采样 H-027 / 确定性算子 H-028）全部无效。两条路径二选一：
+1. **接受 Coverage 40%**，转 Phase 4 冻结验证（VALIDATION/TEST_SEALED 一次性运行）+ Phase 5 论文（以 musique/strategyqa 双 WIN + honest baseline 为主论点）
+2. **模型级生成器升级**（换更强 LLM / 微调 qwen3.6-27b 选型），超出当前研究约束（"不换模型"不变量），需先撤销约束
 
 ### 短期 (Phase 4)
-1. 冻结验证
-2. 一次性运行 SEALED_FINAL_SET
+1. 冻结验证：一次性运行 SEALED_FINAL_SET（仅当接受 40% 时启动）
+2. 三集合一致性 + FROZEN_PROTOCOL 复核
 
 ### 中期 (Phase 5)
-1. 论文 + Artifact
+1. 论文 + Artifact（诚实叙事：Clean DEVELOPMENT_SET 严格重测，40% = 真实 Coverage）
 2. 投稿 PVLDB 2027
 
 ---
