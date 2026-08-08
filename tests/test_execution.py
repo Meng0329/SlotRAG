@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from slotrag.models import BindingRow, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
+from slotrag.models import BindingRow, JoinSpec, Passage, RelationalOperator, RetrievalResult, RunMetrics, Slot, SlotPlan
 from slotrag.action_policy import PhysicalActionPolicy
 from slotrag.planner import (
     AdaptiveExecutor,
@@ -9,6 +9,7 @@ from slotrag.planner import (
     SlotCompiler,
     SlotMaterializer,
     apply_operators,
+    _repair_plan_operators,
     direct_grounded_relation_anchor_values,
     extraction_tool,
     inject_query_grounded_anchor,
@@ -1899,6 +1900,141 @@ def test_plan_still_rejects_disconnected_slots_without_a_connecting_operator():
             "operators": [],
             "outputs": ["?left"],
         })
+
+
+def _two_birthdate_comparison_plan():
+    """Connected two-branch comparison plan: shared director root, two typed dates."""
+    return SlotPlan(
+        slots=[
+            Slot(id="S1", predicate="Entity", arguments=["?director"], estimated_cardinality=1),
+            Slot(id="S2", predicate="DirectorOf", arguments=["Bat*21", "?director"]),
+            Slot(id="S3", predicate="BirthDate", arguments=["?director", "?birthDate1"], variable_types={"birthDate1": "date"}),
+            Slot(id="S4", predicate="DirectorOf", arguments=["The Lunatic At Large", "?director"]),
+            Slot(id="S5", predicate="BirthDate", arguments=["?director", "?birthDate2"], variable_types={"birthDate2": "date"}),
+        ],
+        joins=[
+            JoinSpec(left_slot="S1", left_field="director", right_slot="S2", right_field="director"),
+            JoinSpec(left_slot="S1", left_field="director", right_slot="S4", right_field="director"),
+            JoinSpec(left_slot="S2", left_field="director", right_slot="S3", right_field="director"),
+            JoinSpec(left_slot="S4", left_field="director", right_slot="S5", right_field="director"),
+        ],
+        outputs=["?birthDate1"],
+    )
+
+
+def test_repair_plan_operators_injects_field_argmin_with_or_clause_labels():
+    plan = _two_birthdate_comparison_plan()
+
+    repaired, repairs = _repair_plan_operators(
+        "Which film has the director who was born first, Bat*21 or The Lunatic At Large?",
+        plan,
+        answer_kind="short",
+    )
+
+    assert repairs == 1
+    assert len(repaired.operators) == 1
+    op = repaired.operators[0]
+    assert op.kind == "field_argmin"
+    assert op.fields == ["birthDate1", "birthDate2"]
+    assert op.labels == ["Bat*21", "The Lunatic At Large"]
+    assert op.output == "answer"
+    assert repaired.outputs == ["?answer"]
+
+
+def test_repair_plan_operators_rewrites_outputs_so_deterministic_shortcut_fires():
+    plan = _two_birthdate_comparison_plan()
+
+    repaired, repairs = _repair_plan_operators(
+        "Which film has the director who was born first, Bat*21 or The Lunatic At Large?",
+        plan,
+        answer_kind="short",
+    )
+
+    # Operator computes the extremum deterministically; outputs now point at the
+    # operator's emitted column so _deterministic_output in the benchmark runner
+    # short-circuits generation.
+    rows = apply_operators(
+        [{"birthDate1": "1955-01-26", "birthDate2": "1980-07-15", "director": "A"}],
+        repaired.operators,
+    )
+    assert rows == [{"answer": "Bat*21"}]
+
+
+def test_repair_plan_operators_field_argmax_for_later():
+    plan = _two_birthdate_comparison_plan()
+
+    repaired, repairs = _repair_plan_operators(
+        "Which film has the director who was born later, Bat*21 or The Lunatic At Large?",
+        plan,
+        answer_kind="short",
+    )
+
+    assert repairs == 1
+    assert repaired.operators[0].kind == "field_argmax"
+    assert repaired.operators[0].labels == ["Bat*21", "The Lunatic At Large"]
+    rows = apply_operators(
+        [{"birthDate1": "1955-01-26", "birthDate2": "1980-07-15", "director": "A"}],
+        repaired.operators,
+    )
+    assert rows == [{"answer": "The Lunatic At Large"}]
+
+
+def test_repair_plan_operators_falls_back_to_field_names_without_or_clause():
+    plan = _two_birthdate_comparison_plan()
+
+    repaired, repairs = _repair_plan_operators(
+        "Which film has the director who was born first?",
+        plan,
+        answer_kind="short",
+    )
+
+    assert repairs == 1
+    # No or-clause in the question: labels fall back to field names (best-effort;
+    # the operator still computes the extremum over the typed fields).
+    assert repaired.operators[0].labels == ["birthDate1", "birthDate2"]
+    assert repaired.outputs == ["?answer"]
+
+
+def test_repair_plan_operators_skips_when_operator_already_present():
+    plan = _two_birthdate_comparison_plan()
+    plan = plan.model_copy(update={
+        "operators": [
+            RelationalOperator(
+                id="O1",
+                kind="field_argmin",
+                fields=["birthDate1", "birthDate2"],
+                labels=["Bat*21", "The Lunatic At Large"],
+                output="answer",
+            )
+        ],
+        "outputs": ["?answer"],
+    })
+
+    repaired, repairs = _repair_plan_operators(
+        "Which film has the director who was born first, Bat*21 or The Lunatic At Large?",
+        plan,
+        answer_kind="short",
+    )
+
+    assert repairs == 0
+    assert repaired is plan
+
+
+def test_repair_plan_operators_injects_count_for_numeric_question():
+    plan = SlotPlan(
+        slots=[Slot(id="S1", predicate="EvidenceNumeric", arguments=["?_num"], variable_types={"_num": "number"})],
+        outputs=["?_num"],
+    )
+
+    repaired, repairs = _repair_plan_operators(
+        "How many awards did the film win?",
+        plan,
+        answer_kind="number",
+    )
+
+    assert repairs == 1
+    assert repaired.operators[0].kind == "count"
+    assert repaired.operators[0].output == "_num"
 
 
 def test_date_difference_operator_uses_calendar_month_boundaries():

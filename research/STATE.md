@@ -141,6 +141,12 @@
   - 成本: generation_llm_calls 2wiki **5.45×**（guard 11→treat 60），drop 5.00×（5→25）
   - **结论**: qwen3.6-27b "稳定地错"时多数票**加剧而非矫正**（1 例回收以 2 例回归为代价，aggregate -6.07pt 远超 -2pt 红线）。**H-022 选型天花板确认，majority-vote 不构成回收杠杆**。drop gold=计算值，采样无候选多样性。
   - Coverage 维持 **40%**，采样聚合方向关闭；剩余方向: (a) 接受 Coverage 40% 转论文；或 (b) 架构级"审计分类器→运行时编译器"新方向（超出 Phase 3X 干预假设）
+- [x] **Phase 3X: H-028 已拒绝** (deterministic runtime operator-plan repair, Tier 1 n=20, 2wiki+drop, 2026-08-08)
+  - 干预: `_repair_plan_operators`（planner.py）在 compile 后确定性注入 field_argmin/argmax/count + outputs 对齐 `?answer`，`_deterministic_output` 短路生成。`runtime_compiler=True`，新方法 `slotrag-grounded-frontier-perpath-runtime-compiler`
+  - **2wiki Δ=-2.50pt**（0.6286→0.6036, 95% CI [-0.075, 0.000]），wins=0 losses=1 ties=19；drop 0.00pt（0/20 一字不差）
+  - **关键证据: 修复零激活**——全部 40 个 rc item `runtime_operator_repairs=0`。n=20 样本无任何 plan 同时具备 "≥2 typed date/number 字段"+"缺 operator"。唯一比较模板题 `b081` 已带正确 field_argmin（labels=Bat*21/Lunatic），不 double-repair 且两侧都 budget_exceeded。**H-026 激活缺口第二次确认**。
+  - **唯一回归 `a344d746`**: plan 参数顺序不稳定 → retrieval 稀疏 → BornIn 折叠成 single `{Madrid}` → **pre-existing `_deterministic_output` 单唯一行短路** 返回 `Madrid`（错, gold 是 Castejón）。非 H-028 repair 因果（repairs=0）。
+  - **结论**: 确定性执行器本身正确（单测证明 field_argmin 确定性算出 Bat*21），但运行时无物化目标。H-022 选型天花板第三次确认（H-025/H-026/H-028）。Coverage 维持 **40%**，Phase 3X 全部 6 个假设（H-023~H-028）收束到同一根因。
 - [ ] **架构级下一步（超出 Phase 3X 干预假设）**: 若要覆盖 2wiki/drop, 需把"审计分类器→运行时编译器"做成架构级新方向（非单假设干预）。或接受 qwen3.6-27b 选型天花板（H-022）→ Coverage 顶在 40%, 除非模型级生成器升级
 
 ---

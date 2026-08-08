@@ -1002,6 +1002,7 @@ class SlotCompiler:
         document_count: int | None = None,
         field_extremum_templates: bool = True,
         polar_comparison_templates: bool = True,
+        runtime_compiler: bool = False,
     ) -> tuple[SlotPlan, RunMetrics]:
         if not question.strip():
             raise ValueError("question cannot be empty")
@@ -1113,6 +1114,12 @@ class SlotCompiler:
                 self._validate_grounding(plan, question)
                 plan, operator_rewrites = self._rewrite_functional_predicates(plan, question)
                 plan = self._eliminate_anchor_slots(plan)
+                if runtime_compiler:
+                    plan, operator_repairs = _repair_plan_operators(question, plan, answer_kind=answer_kind)
+                    if operator_repairs:
+                        metrics = metrics.model_copy(update={
+                            "runtime_operator_repairs": metrics.runtime_operator_repairs + operator_repairs,
+                        })
                 if operator_rewrites:
                     metrics = metrics.model_copy(update={
                         "operator_rewrites": metrics.operator_rewrites + operator_rewrites,
@@ -1132,6 +1139,10 @@ class SlotCompiler:
                             self._validate_grounding(repaired_plan, question)
                             repaired_plan, operator_rewrites = self._rewrite_functional_predicates(repaired_plan, question)
                             repaired_plan = self._eliminate_anchor_slots(repaired_plan)
+                            if runtime_compiler:
+                                repaired_plan, operator_repairs = _repair_plan_operators(question, repaired_plan, answer_kind=answer_kind)
+                            else:
+                                operator_repairs = 0
                         except (ValidationError, ValueError):
                             pass
                         else:
@@ -2363,6 +2374,182 @@ def _compare(left: object, right: object, comparator: str) -> bool:
     if comparator == "ge":
         return lhs >= rhs  # type: ignore[operator]
     return str(rhs) in str(lhs)
+
+
+# ---------------------------------------------------------------------------
+# H-028: deterministic runtime operator-plan repair
+# ---------------------------------------------------------------------------
+# The LLM compiler (slot_plan_tool) frequently produces plans whose operators
+# are absent, the wrong kind, or missing typed variable_types — the "activation
+# gap" diagnosed in H-026. When the question's structure deterministically
+# implies a typed operator (count / arithmetic / field_argmin|argmax), repair
+# the plan so `apply_operators` can compute the answer without relying on the
+# generator's selection ability (H-022 selection ceiling).
+#
+# These recognizers are question-structure-driven (no dataset-name branches),
+# mirroring the H-023 offline audit classifier but kept self-contained here.
+
+_RC_NUMERIC_QUESTION = re.compile(
+    r"\b(how many|how much|sum|total|difference|product|average|minus|plus|times|"
+    r"multiply|divide|percentage|percent|number of|how long|how far|how tall|"
+    r"how old|how big|how wide|area|distance|amount|length|width|height|weight|"
+    r"size of|rate of|quantity|population)\b",
+    flags=re.IGNORECASE,
+)
+_RC_EXTREMUM_QUESTION = re.compile(
+    r"\b(which|who|what)\b.*?\b(?:born|birth|founded|established|released|"
+    r"earliest|earlier|first|last|latest|later|oldest|older|youngest|younger|"
+    r"highest|lowest|largest|smallest|most|least|closest|shortest|longest)\b",
+    flags=re.IGNORECASE,
+)
+_RC_COUNT_QUESTION = re.compile(
+    r"\b(how many|count|number of)\b",
+    flags=re.IGNORECASE,
+)
+
+# Captures the two candidate labels from a comparison question's "X or Y" clause.
+# Mirrors _field_extremum_template's normalization: labels are the entity names
+# as they appear in the question (case-sensitive surface form), not variable
+# names. If no well-formed "or" clause is present, returns the field names as a
+# best-effort fallback (the operator can still compare; the answer is a field
+# label only when the clause was parseable).
+_RC_OR_CLAUSE = re.compile(
+    r",\s*(?P<left>[^,?]+?)\s+or\s+(?P<right>[^,?]+?)\s*\?",
+    flags=re.IGNORECASE,
+)
+
+
+def _rc_or_clause_labels(question: str, left: str, right: str) -> list[str]:
+    """Extract candidate answer labels from a comparison question's or-clause.
+
+    Returns ``[left_label, right_label]`` matched against the operator's field
+    order. Labels are the surface entity names verbatim from the question.
+    Falls back to the field names when the clause cannot be parsed (no explicit
+    candidates), which is the best the repair can do without knowing the
+    entities — the plan's typed fields still let the operator compute the
+    extremum; only the returned label is a field name rather than an entity.
+    """
+    match = _RC_OR_CLAUSE.search(question)
+    if match is None:
+        return [left, right]
+    l_label = match.group("left").strip()
+    r_label = match.group("right").strip()
+    normalized_l = " ".join(re.findall(r"\w+", l_label.casefold()))
+    normalized_r = " ".join(re.findall(r"\w+", r_label.casefold()))
+    if not normalized_l or not normalized_r or normalized_l == normalized_r:
+        return [left, right]
+    if re.search(r"\bor\b", l_label, flags=re.IGNORECASE) or re.search(r"\bor\b", r_label, flags=re.IGNORECASE):
+        return [left, right]
+    return [l_label, r_label]
+
+
+def _repair_plan_operators(
+    question: str,
+    plan: SlotPlan,
+    *,
+    answer_kind: str = "short",
+) -> tuple[SlotPlan, int]:
+    """Deterministically repair a plan's operators for typed-op questions.
+
+    Returns ``(plan, repairs)`` where ``repairs`` counts injected/replaced
+    operator plans. The repair is purely additive: when the question structure
+    implies an operator family that the plan is missing (or mismatched), inject
+    the deterministic operator and any required ``variable_types``. If the plan
+    already carries the matching operator, it is left untouched so existing
+    (e.g. H-023/H-025) typed plans are not double-repaired.
+
+    No dataset-name branches — question structure drives the decision.
+    """
+    payload = plan.model_dump(mode="python")
+    repairs = 0
+    existing_kinds = {operator["kind"] for operator in payload.get("operators", [])}
+    slots = payload.get("slots", [])
+    output_fields = {output.lstrip("?") for output in payload.get("outputs", [])}
+
+    # --- arithmetic / count: question implies numeric computation ---
+    if answer_kind in {"number", "short"} and _RC_NUMERIC_QUESTION.search(question):
+        if not (existing_kinds & {"arithmetic", "count", "field_argmin", "field_argmax", "compare"}):
+            # Numeric question with no deterministic operator: count rows if the
+            # question asks "how many / count", otherwise leave for generation.
+            if _RC_COUNT_QUESTION.search(question):
+                numeric_slots = [
+                    slot
+                    for slot in slots
+                    if any(
+                        argument.startswith("?")
+                        for argument in slot.get("arguments", [])
+                    )
+                ]
+                numeric_outputs = output_fields or (
+                    {argument.lstrip("?") for slot in numeric_slots for argument in slot.get("arguments", []) if argument.startswith("?")}
+                )
+                output = next(iter(numeric_outputs), "answer")
+                payload.setdefault("operators", []).append({
+                    "id": "rc_count",
+                    "kind": "count",
+                    "output": output,
+                    "fields": [],
+                    "labels": [],
+                    "field": None,
+                    "comparator": None,
+                    "value": None,
+                    "descending": False,
+                    "limit": None,
+                })
+                repairs += 1
+                # make sure the counted variable is declared as a slot variable
+                for slot in numeric_slots:
+                    slot.setdefault("variable_types", {}).setdefault(output, "string")
+
+    # --- field extremum: question implies comparing typed fields ---
+    if answer_kind == "short" and _RC_EXTREMUM_QUESTION.search(question):
+        # Need two typed candidate fields to compare. Gather every variable
+        # declared as date/number across the plan's slots; when at least two
+        # exist and no extremum/compare operator is present, inject a
+        # deterministic field_argmin/argmax over the two smallest. This covers
+        # the H-022 selection-failure cases where the plan already materialized
+        # the two candidate date fields but the generator then picks wrong.
+        #
+        # field_argmin/argmax semantics (mirror _field_extremum_template): the
+        # operator's LABELS carry the candidate answer values (the entity names),
+        # and the plan's outputs must point at the operator output column. When
+        # the question names the two candidates in an "X or Y" clause we reuse
+        # those names as labels; otherwise the label falls back to the variable
+        # name (best effort — a disconnected branch cannot be relabeled here).
+        candidate_fields: list[str] = []
+        for slot in slots:
+            for variable, vtype in (slot.get("variable_types") or {}).items():
+                if vtype in {"date", "number"} and variable not in candidate_fields:
+                    candidate_fields.append(variable)
+        if len(candidate_fields) >= 2 and not (existing_kinds & {"field_argmin", "field_argmax", "compare"}):
+            left, right = candidate_fields[:2]
+            is_min = bool(re.search(r"\b(earlier|first|earliest|oldest|youngest|lowest|smallest|shortest)\b", question, flags=re.IGNORECASE))
+            kind = "field_argmin" if is_min else "field_argmax"
+            labels = _rc_or_clause_labels(question, left, right)
+            payload.setdefault("operators", []).append({
+                "id": "rc_extremum",
+                "kind": kind,
+                "fields": [left, right],
+                "labels": labels,
+                "output": "answer",
+                "field": None,
+                "comparator": None,
+                "value": None,
+                "descending": False,
+                "limit": None,
+            })
+            # Rewrite outputs so the deterministic executor reads the operator's
+            # emitted column (align with _field_extremum_template's ?answer).
+            payload["outputs"] = ["?answer"]
+            repairs += 1
+
+    if repairs == 0:
+        return plan, 0
+    try:
+        repaired = SlotPlan.model_validate(payload)
+    except ValidationError:
+        return plan, 0
+    return repaired, repairs
 
 
 def apply_operators(rows: list[dict[str, str]], operators: list[RelationalOperator]) -> list[dict[str, str]]:

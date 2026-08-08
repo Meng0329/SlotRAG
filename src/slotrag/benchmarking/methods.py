@@ -88,6 +88,7 @@ class MethodSpec:
     extract_then_select: bool = False
     sample_majority_vote: bool = False
     sample_n: int = 5
+    runtime_compiler: bool = False
     description: str = ""
 
 
@@ -129,6 +130,7 @@ ABLATION_METHODS = [
     "slotrag-grounded-frontier-perpath-typed",
     "slotrag-grounded-frontier-perpath-typed-surface",
     "slotrag-grounded-frontier-perpath-guard-samplevote",
+    "slotrag-grounded-frontier-perpath-runtime-compiler",
     "slotrag-question-grounded-retrieval",
     "slotrag-grounded-question-retrieval",
     "slotrag-dual-query-retrieval",
@@ -481,6 +483,24 @@ METHODS: dict[str, MethodSpec] = {
         sample_majority_vote=True,
         sample_n=5,
         description="H-027: H-012 stacked + sampled majority-vote answer aggregation (N=5, temperature>0)",
+    ),
+    "slotrag-grounded-frontier-perpath-runtime-compiler": MethodSpec(
+        "slotrag-grounded-frontier-perpath-runtime-compiler",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        typed_extraction_contracts=True,
+        typed_surface_form=True,
+        runtime_compiler=True,
+        description="H-028: H-012 stacked + deterministic runtime operator-plan repair (bypasses generator selection for typed-op questions)",
     ),
     "slotrag-grounded-frontier-union": MethodSpec(
         "slotrag-grounded-frontier-union",
@@ -1395,6 +1415,7 @@ def slotrag_compile_options(
         "answer_kind": _answer_kind(dataset, drop_short=spec.drop_short_answer),
         "field_extremum_templates": spec.field_extremum_templates,
         "polar_comparison_templates": spec.polar_comparison_templates,
+        "runtime_compiler": spec.runtime_compiler,
     }
     if spec.direct_single_document and question.passages:
         options["document_count"] = len({

@@ -93,7 +93,7 @@ def test_no_operators_reports_unsupported_without_llm_calculation(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates):
+        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates, runtime_compiler=False):
             assert field_extremum_templates is True
             assert polar_comparison_templates is True
             return plan, RunMetrics()
@@ -152,7 +152,7 @@ def test_slotrag_returns_single_unique_output_without_final_llm(monkeypatch):
         def __init__(self, _client):
             pass
 
-        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates):
+        def compile(self, _question, *, answer_kind, field_extremum_templates, polar_comparison_templates, runtime_compiler=False):
             assert field_extremum_templates is True
             assert polar_comparison_templates is True
             return plan, RunMetrics()
@@ -1163,6 +1163,7 @@ def test_slotrag_routes_one_document_topology_and_no_direct_ablation_disables_it
             field_extremum_templates,
             polar_comparison_templates,
             document_count=None,
+            runtime_compiler=False,
         ):
             assert field_extremum_templates is True
             assert polar_comparison_templates is True

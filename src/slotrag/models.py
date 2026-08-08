@@ -455,6 +455,7 @@ class RunMetrics(StrictModel):
     evidence_surface_grounding_repairs: int = 0
     local_plan_repairs: int = 0
     operator_rewrites: int = 0
+    runtime_operator_repairs: int = 0
     plan_fallbacks: int = 0
     heuristic_plans: int = 0
     typed_plan_templates: int = 0
