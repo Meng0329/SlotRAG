@@ -176,7 +176,28 @@
 - **musique/hotpotqa/strategyqa = 架构+检索领先**，生成器能读 gold 就答对
 - [ ] **下一步**: 显式推理链生成（2wiki 多跳 / drop 算术），或接受 2wiki+drop LOSS 保 Coverage 3/5
 
-### Phase 4: 冻结验证 ⏳ 待启动
+### Phase 4: 冻结验证 🔄 进行中（SEALED_FINAL strategyqa 已完成，非确定性噪声暴露）
+- [x] **generate_sealed_samples.py all 模式** 完成（`--size all` 写全量干净 test 样本）
+- [x] **Tier 3 SEALED 样本生成**（hotpotqa 1000 / 2wiki 1000 / musique 867 / strategyqa 180 / drop 1000）
+- [x] **strategyqa SEALED 180 全量评估完成（publication-grade, trace enabled）** (run1=`runs/slotrag-phase4-trace`)
+  - run1: guard=0.8833, ircot=0.8833, graphrag=0.8722, react=0.8444
+  - **SEALED strategyqa = TIE（guard vs ircot Δ=0.00pt, p=1.0）**，非 WIN
+- [x] **⚠️ 服务端非确定性噪声暴露**（Phase 4 关键发现）
+  - 内部 Qwen（10.200.37.71:8801）temperature=0 仍非确定性：同一 question 检索证据逐字节相同，但 LLM 布尔答案在运行间翻转
+  - flip 率：guard 7/180 (3.9%)，ircot/react 3/180 (1.7%)，graphrag 0/180
+  - 影响：guard 0.9→0.8833（pilot→trace，-1.7pt），噪声与 guard-vs-baseline WIN 幅度同量级
+  - **含义：SEALED 单次运行的 WIN/LOSS 判定不可靠，需多次运行或报告 CI**
+- [x] **⚠️ 非确定性根因已诊断**（2026-08-10）
+  - **不是并发/检索/代码**：检索证据逐字节相同；单题 5 次串行 + 6 次并发重跑全错（yes），trace run 却答对（no）
+  - **根因：qwen3.6-27b 在 strategyqa 推理边界题上 flip-flop**（需算术/多跳的布尔题，~50/50）；7 个翻转题全是这类
+  - **决策（用户拍板）**: strategyqa 3 次取均值，报告 mean ± run-to-run range，稳健判定 WIN/TIE/LOSS
+- [x] **strategyqa 3 次取均值完成**（run1=`-trace`, run2=`-r2`, run3=`-r3`，180×4 方法）
+  - **mean**: guard **0.8815** / ircot **0.8833** / graphrag 0.8722 / react 0.8481
+  - **range**: guard 0.0056 (flips 4/180) / ircot 0.0000 (0) / graphrag 0.0000 (0) / react 0.0056 (2)
+  - **稳健判定: guard vs ircot Δmean=-0.19pt, wins 16/ties 149/losses 15 → TIE（guard 略落后）**；guard vs graphrag +0.93pt TIE；guard vs react +3.33pt TIE
+  - **⚠️ strategyqa coverage 单元不再计入 Coverage**（TIE/LOSS，非 WIN）。pilot 0.9 WIN 是幸运抽样（trace 暴露 flip-flop 噪声后不可复现）
+- [ ] 其余数据集（hotpotqa/2wiki/musique/drop）SEALED 评估待运行（同样需多次运行取均值）
+- [x] SEALED_SET_ATTRIBUTION_AUDIT.md 更新完成（3-run 均值表 + 归集纪律 + 非确定性披露）
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 
 ---

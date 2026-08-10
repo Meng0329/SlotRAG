@@ -1,0 +1,28 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - hotpotqa
+  - 2wikimultihop
+  - musique
+  - strategyqa
+  - drop
+seed: 2027
+random_seeds: [2027]
+# Phase 4 Tier 3: 遵守 FROZEN_PROTOCOL §4.3 matched-budget (4/64/4/300)。
+# 与 h012-full 的 8/96/8/600 不同——这是最终评估，必须合规。
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  tier3_sealed:
+    split: evaluation
+    sample_size: 1000  # 占位；实际样本数以预写的 samples/tier3_sealed/{dataset}.jsonl 为准（generate_sealed_samples.py 生成）
+    methods:
+      # SlotRAG 最终方法 (H-012 叠加)
+      - slotrag-grounded-frontier-perpath-guard
+      # 每数据集最强 baseline (SOTA_LEDGER 覆盖表)
+      - graphrag    # hotpotqa / strategyqa / drop 最强
+      - react       # 2wikimultihop 最强
+      - ircot       # musique 最强

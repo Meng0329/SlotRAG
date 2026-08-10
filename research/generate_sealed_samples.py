@@ -16,6 +16,12 @@ _loader_or_create_sample 发现 samples/{stage}/{dataset}.jsonl 存在时会直�
     --datasets hotpotqa 2wikimultihop musique strategyqa drop \
     --output-dir runs/slotrag-phase3-dev
 
+  # all 模式：写入该集合全部干净样本（用于 Tier 4/5 SEALED_FINAL 完整集）
+  python3 research/generate_sealed_samples.py \
+    --stage tier3_sealed --set test --size all \
+    --datasets hotpotqa 2wikimultihop musique strategyqa drop \
+    --output-dir runs/slotrag-phase4
+
 生成的样本文件：{output_dir}/samples/{stage}/{dataset}.jsonl
 """
 import argparse, json, random
@@ -75,9 +81,14 @@ def generate(stage, set_name, size, datasets, output_dir, seed=2027):
             rid for rid, rec in records.items()
             if rid in allowed and rid not in excluded
         ]
-        # 确定性采样（先排序保证可复现）
-        rng.shuffle(candidates)
-        selected = candidates[:size]
+        if size == 'all':
+            # all 模式：写入全部干净候选（确定性排序保证可复现）
+            candidates.sort()
+            selected = candidates
+        else:
+            # 确定性采样（先排序保证可复现）
+            rng.shuffle(candidates)
+            selected = candidates[:int(size)]
 
         # 生成样本文件
         sample_dir = output_dir / 'samples' / stage
@@ -117,7 +128,8 @@ def main():
     parser.add_argument('--stage', required=True, help='stage 名称 (如 tier1_dev)')
     parser.add_argument('--set', required=True, choices=['development', 'validation', 'test'],
                         help='三集合名称')
-    parser.add_argument('--size', type=int, required=True, help='每个数据集的样本数')
+    parser.add_argument('--size', required=True,
+                        help='每个数据集的样本数，或 "all" 表示写入该集合全部干净样本')
     parser.add_argument('--datasets', nargs='+', default=list(DATASETS))
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--seed', type=int, default=2027)
