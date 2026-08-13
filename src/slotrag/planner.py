@@ -2251,15 +2251,26 @@ class SlotMaterializer:
         return self.materialize_many(slot, contexts, query_variant=query_variant)
 
     def estimate_materialization_retrieval_calls(self, contexts: list[dict[str, str]]) -> int:
-        """Return a conservative call estimate for one materialization pass."""
+        """Return a conservative call estimate for one materialization pass.
+
+        H-029: when dual_access_bundle_bound_single is set, a bound context
+        degrades to a single question+lexical-slot query (1 physical call)
+        instead of the 2-query bundle.
+        """
         total = 0
         for bindings in contexts or [{}]:
+            bound = bool(bindings)
+            bundle_single = bool(
+                self.dual_access_bundle
+                and self.dual_access_bundle_bound_single
+                and bound
+            )
             dual = bool(
                 self.question_context
                 and (self.dual_query_retrieval or self.dual_access_bundle)
                 and (not self.dual_query_unbound_only or not bindings)
             )
-            total += 2 if dual else 1
+            total += 1 if bundle_single else (2 if dual else 1)
         return total
 
     def materialize_many_with_top_k(
@@ -3174,6 +3185,15 @@ class AdaptiveExecutor:
             remaining.remove(slot)
             order.append(slot.id)
             remaining_retrieval_calls = self.max_retrieval_calls - metrics.retrieval_calls
+            # Forward-looking budget reservation: reserve 1 call for every slot
+            # still to materialize after this one, so later slots are never
+            # starved. The current slot may use at most the calls left over after
+            # that reservation. Without this, an early slot's bundle (2 calls) +
+            # 2 binding contexts can exhaust the 4-call budget before the final
+            # slot materializes, yielding budget_exceeded on a fit plan.
+            remaining_slots_after_this = max(0, len(remaining))
+            reserved_for_future = max(0, remaining_slots_after_this)
+            slot_call_cap = max(1, remaining_retrieval_calls - reserved_for_future)
             if remaining_retrieval_calls <= 0:
                 return ExecutionResult(
                     rows=[],
@@ -3221,12 +3241,47 @@ class AdaptiveExecutor:
                     if not binding_contexts:
                         binding_contexts = [{}]
             if not self.adaptive_binding_beam:
-                context_limit = min(self.max_binding_contexts, remaining_retrieval_calls)
+                context_limit = min(self.max_binding_contexts, slot_call_cap)
                 if len(binding_contexts) > context_limit:
                     metrics = metrics.model_copy(update={
                         "binding_contexts_pruned": metrics.binding_contexts_pruned + len(binding_contexts) - context_limit,
                     })
                     binding_contexts = binding_contexts[:context_limit]
+            # Estimate-aware budget fit: the materialization may cost more than 1
+            # call per context (unbound bundle = 2, bound single = 1 under H-029).
+            # Prune binding contexts so THIS slot's materialization fits the
+            # reserved budget (slot_call_cap = remaining minus future reservations),
+            # instead of blowing the wall mid-plan or starving later slots.
+            estimate_matz = getattr(self.materializer, "estimate_materialization_retrieval_calls", None)
+            if estimate_matz is not None:
+                estimated_cost = int(estimate_matz(binding_contexts))
+                # Prefer keeping cheap bound contexts (1 call) over expensive
+                # unbound bundles (2 calls) when budget is tight.
+                pruned_this_slot = 0
+                while binding_contexts and estimated_cost > slot_call_cap:
+                    # Drop an unbound context (2 calls) if any, else a bound one.
+                    drop_index = next(
+                        (i for i, c in enumerate(binding_contexts) if not c),
+                        len(binding_contexts) - 1,
+                    )
+                    binding_contexts.pop(drop_index)
+                    pruned_this_slot += 1
+                    estimated_cost = int(estimate_matz(binding_contexts))
+                if pruned_this_slot:
+                    metrics = metrics.model_copy(update={
+                        "binding_contexts_pruned": metrics.binding_contexts_pruned + pruned_this_slot,
+                    })
+                if not binding_contexts:
+                    # Nothing left to materialize within budget.
+                    return ExecutionResult(
+                        rows=[],
+                        evidence=evidence,
+                        order=order,
+                        metrics=metrics,
+                        slot_traces=slot_traces,
+                        status="budget_exceeded",
+                        error=f"retrieval call budget exceeded ({self.max_retrieval_calls})",
+                    )
             materialize_many = getattr(self.materializer, "materialize_many", None)
             materialization_started = time.perf_counter()
             if materialize_many is not None:

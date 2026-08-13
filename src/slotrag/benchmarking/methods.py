@@ -9,12 +9,12 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import AppConfig
 from ..generation import generate_answer_response
 from ..action_policy import PhysicalActionPolicy, TopKExpansionMode
-from ..models import EvidenceRecord, ExecutionResult, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
+from ..models import EvidenceRecord, ExecutionResult, JoinSpec, QuestionRecord, RetrievalResult, RunMetrics, SlotPlan
 from ..planner import (
     AdaptiveExecutor,
     ExecutionOptions,
@@ -1461,6 +1461,165 @@ def _slot_plan_metrics(
     )
 
 
+def _articulation_points(slot_ids: list[str], joins: list[dict[str, Any]]) -> set[str]:
+    """Return slot ids whose removal would disconnect the plan graph."""
+    adjacency: dict[str, set[str]] = {sid: set() for sid in slot_ids}
+    for join in joins:
+        left, right = join["left_slot"], join["right_slot"]
+        if left in adjacency and right in adjacency:
+            adjacency[left].add(right)
+            adjacency[right].add(left)
+    articulation: set[str] = set()
+    visited: set[str] = set()
+    disc: dict[str, int] = {}
+    low: dict[str, int] = {}
+    parent: dict[str, str | None] = {}
+    timer = [0]
+    children_root = [0]
+
+    def dfs(node: str) -> None:
+        visited.add(node)
+        disc[node] = low[node] = timer[0]
+        timer[0] += 1
+        for neighbor in adjacency[node]:
+            if neighbor not in visited:
+                parent[neighbor] = node
+                if node in {sid for sid in slot_ids if parent.get(sid) is None} and parent[node] is None:
+                    children_root[0] += 1
+                dfs(neighbor)
+                low[node] = min(low[node], low[neighbor])
+                if parent[node] is not None and low[neighbor] >= disc[node]:
+                    articulation.add(node)
+            elif neighbor != parent[node]:
+                low[node] = min(low[node], disc[neighbor])
+
+    for sid in slot_ids:
+        if sid not in visited:
+            parent[sid] = None
+            dfs(sid)
+    if children_root[0] > 1:
+        root = next(iter(slot_ids))
+        articulation.add(root)
+    return articulation
+
+
+def _prune_plan_to_max_slots(
+    plan: SlotPlan,
+    max_slots: int,
+) -> SlotPlan | None:
+    """Degrade an over-large plan to at most max_slots slots, preserving connectivity.
+
+    Drops the least-selective (highest estimated_cost) slot that is not an
+    articulation point and does not hold an output variable. Falls back to
+    keeping the first max_slots in plan order if no further non-articulation
+    slots exist. Returns None if the plan cannot be pruned below max_slots.
+    """
+    if len(plan.slots) <= max_slots:
+        return plan
+    if max_slots < 1 or not plan.slots:
+        return None
+
+    output_fields = {output.lstrip("?") for output in plan.outputs}
+    slots = list(plan.slots)
+    joins = [join.model_dump(mode="python") for join in plan.joins]
+    operators = list(plan.operators)
+    # Protect a single best slot that produces the output variable: the one with
+    # the lowest estimated_cardinality (most selective path to the answer). Any
+    # other slot mentioning the output variable is still droppable — in a
+    # connected plan, the output remains reachable via the protected slot.
+    output_slot_ids: set[str] = set()
+    output_holders = [
+        s for s in slots if s.variables & output_fields
+    ]
+    if output_holders:
+        best = min(output_holders, key=lambda s: (s.estimated_cardinality, s.id))
+        output_slot_ids = {best.id}
+    else:
+        output_slot_ids = {slots[0].id}
+
+    while len(slots) > max_slots:
+        slot_ids = [s.id for s in slots]
+        articulation = _articulation_points(slot_ids, joins)
+        # Drop the least selective (highest estimated_cardinality) slot that is
+        # safe to remove. Lower cardinality = more selective = more valuable.
+        droppable = [
+            s for s in slots
+            if s.id not in articulation and s.id not in output_slot_ids
+        ]
+        if not droppable:
+            # Fall back to preserving order: keep first max_slots.
+            break
+        # least selective first: highest cardinality, then highest cost, then id
+        droppable.sort(key=lambda s: (-s.estimated_cardinality, -s.estimated_cost, s.id))
+        to_drop = droppable[0]
+        slots = [s for s in slots if s.id != to_drop.id]
+        joins = [j for j in joins if j["left_slot"] != to_drop.id and j["right_slot"] != to_drop.id]
+        operators = [op for op in operators if not _operator_references_slot(op, to_drop.id, slots)]
+
+    if len(slots) > max_slots:
+        slots = slots[:max_slots]
+        keep_ids = {s.id for s in slots}
+        joins = [j for j in joins if j["left_slot"] in keep_ids and j["right_slot"] in keep_ids]
+        operators = [op for op in operators if _operator_references_only_surviving(op, keep_ids, slots)]
+
+    # Fix outputs: keep those still produced by a surviving slot.
+    surviving_fields = set().union(*(s.variables for s in slots))
+    new_outputs = [o for o in plan.outputs if o.lstrip("?") in surviving_fields]
+    if not new_outputs:
+        new_outputs = ["?" + next(iter(slots[0].variables))]
+
+    try:
+        return SlotPlan(
+            slots=slots,
+            joins=[JoinSpec(left_slot=j["left_slot"], left_field=j["left_field"],
+                            right_slot=j["right_slot"], right_field=j["right_field"])
+                   for j in joins],
+            outputs=new_outputs,
+            operators=operators,
+        )
+    except (ValidationError, ValueError):
+        return None
+
+
+def _operator_fields(operator: Any) -> set[str]:
+    """Return the field names a RelationalOperator reads or writes."""
+    fields = set()
+    data = operator.model_dump(mode="python") if hasattr(operator, "model_dump") else dict(operator)
+    for key in ("fields", "output_fields", "inputs"):
+        value = data.get(key)
+        if isinstance(value, list):
+            fields.update(str(v) for v in value)
+        elif isinstance(value, dict):
+            fields.update(str(v) for v in value.keys())
+            fields.update(str(v) for v in value.values() if isinstance(v, str))
+    return fields
+
+
+def _operator_references_slot(operator: Any, slot_id: str, slots: list[Any]) -> bool:
+    """Whether operator reads/writes a field produced by the given slot."""
+    slot_fields = {s.id: s.variables for s in slots}
+    if slot_id not in slot_fields:
+        return False
+    operator_field_set = _operator_fields(operator)
+    if operator_field_set and operator_field_set & slot_fields[slot_id]:
+        return True
+    # Conservatively treat operators without parseable fields as live.
+    return bool(not operator_field_set)
+
+
+def _operator_references_only_surviving(operator: Any, keep_ids: set[str], slots: list[Any]) -> bool:
+    """Whether operator references only surviving slots."""
+    slot_fields = {s.id: s.variables for s in slots}
+    operator_field_set = _operator_fields(operator)
+    if not operator_field_set:
+        return True
+    referenced_slots = {
+        sid for sid, fields in slot_fields.items()
+        if operator_field_set & fields
+    }
+    return bool(referenced_slots) and referenced_slots <= keep_ids
+
+
 def compile_slotrag_plan(
     spec: MethodSpec,
     dataset: str,
@@ -1554,13 +1713,34 @@ def _run_slotrag(
         compiler_metrics = compiler_metrics.model_copy(update={
             "query_grounded_anchor_contexts": len(query_anchor_values),
         })
-    if len(plan.slots) > max_steps:
-        return ExecutionResult(
-            status="budget_exceeded",
-            error=f"plan contains {len(plan.slots)} slots; budget allows {max_steps}",
-            plan=plan,
-            metrics=compiler_metrics,
-        )
+    # A plan's first slot is materialized unbound (2-call bundle under H-029),
+    # and downstream bound slots cost 1 call each — so the number of slots that
+    # fits under max_retrieval_calls is bounded by max_retrieval_calls - 1, not
+    # by max_steps alone. Degrade any plan that exceeds that bound: a plan that
+    # is structurally infeasible under the retrieval budget must not run (it
+    # would spend the whole budget on early slots and starve the rest).
+    budget_fit = min(max_steps, max(1, max_retrieval_calls - 1))
+    if len(plan.slots) > budget_fit:
+        degraded_plan = _prune_plan_to_max_slots(plan, min(len(plan.slots), budget_fit))
+        if degraded_plan is not None:
+            plan = degraded_plan
+            effective_metrics = _slot_plan_metrics(plan)
+            compiler_metrics = compiler_metrics.model_copy(update={
+                "plan_slot_count": effective_metrics.plan_slot_count,
+                "plan_join_count": effective_metrics.plan_join_count,
+                "plan_variable_count": effective_metrics.plan_variable_count,
+                "plan_output_count": effective_metrics.plan_output_count,
+                "plan_operator_count": effective_metrics.plan_operator_count,
+                "plan_complexity": effective_metrics.plan_complexity,
+                "plan_fallbacks": compiler_metrics.plan_fallbacks + 1,
+            })
+        else:
+            return ExecutionResult(
+                status="budget_exceeded",
+                error=f"plan contains {len(plan.slots)} slots; budget allows {max_steps}",
+                plan=plan,
+                metrics=compiler_metrics,
+            )
     physical_plan = None
     if spec.physical_plan:
         try:
