@@ -2,7 +2,7 @@
 
 > **最后更新**: 2026-08-13  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029 修复 PASS（n120 双数据集 +18~22pt acc_full），全量重跑待执行
+> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029 修复 PASS（n120 双数据集 +18~22pt acc_full），H-030 残留 BE 全回收（11/11 OK，10/11 F1=1.0）commit `494af0c`，全量重跑待执行
 
 ---
 
@@ -205,6 +205,12 @@
   - **n120 双数据集验证**（`runs/slotrag-phase4-h029-n120`）：musique acc_full **0.472→0.655 (+18.3pt)**、hotpotqa **0.474→0.690 (+21.6pt)**；acc_ok 均**略升**（+2.3/+2.8pt）；BE 回收 30/33 项（mean 0.734/0.870）；both-ok 对净中性（musique 8w/7l/69t，hotpotqa 1w/3l/75t——质量零回归）
   - cost：rc 均在预算 4 内（3.06/2.69），llm musique 5.24→4.81（**下降**）。**H-029 严格更便宜且更好**
   - 判定：**PASS**，§4.3 budget_exceeded 结构性损失已解决。n120 是全量 guard-BE 回收的保守下限（n120 musique BE 率 29.2% < 全量 49.4%，全量预计回收更多）
+- [x] **H-030 跨 slot 预算预留（Phase 4 loop 迭代优化第 2 轮，PASS）**（2026-08-13，commit `494af0c`）
+  - 背景：H-029 后 n120 仍 11 项 BE（5 musique + 6 hotpotqa），6 项一致 BE
+  - 根因（live trace）：**跨 slot 预算饥饿**——首 slot unbound bundle（2 calls）+ 第二 slot 2 binding context（2 calls）= 4，后续 slot 在 `remaining_retrieval_calls <= 0` BE 于物化前。4-slot plan 在 4-call 预算下结构不可行（2+3×1=5>4）
+  - 干预：Stage A executor 前视预留 `slot_call_cap = remaining - len(remaining)`；Stage B `_prune_plan_to_max_slots` 按 articulation point 降级 + `budget_fit = max_retrieval_calls - 1` 触发
+  - 验证：**11/11 残留 BE 项恢复 OK，10/11 F1=1.0**（1 F1=0 为 LLM 生成错误非预算）；both-ok 质量中性（变化全为 LLM 非确定性）
+  - 判定：**PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失完整解决
 - [ ] **全量 guard-budget 重跑待执行**（n=1000/集，或直接扩 b2 剩余 + b3 补全）；完成后重算主表 acc_full + Coverage
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 

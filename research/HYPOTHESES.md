@@ -642,3 +642,16 @@
   - acc_ok: 0.724→0.750（**+2.6pt**）——生成脆弱数据集上单 query 降级仍无质量代价（both-ok n=70 中 67 对 tie）。
   - cost: rc 1.90→2.66（预算内 4），llm 4.95→4.98（持平）。
 - **双数据集最终判定: H-029 PASS**。musique +18.9pt / hotpotqa +20.3pt acc_full，两数据集 acc_ok 均正值，both-ok 对全部净中性。**§4.3 budget_exceeded 结构性损失已解决**（Phase 4 主表下 musique 49.4% BE / hotpotqa 32.6% BE 的问题）。机制: bound slot 的 question+lexical-slot 单 query 在已锚定检索上等价于 bundle，回收的 BE 项本就是高完成度项（不是 hard tail）。下一步: commit H-029 + Phase 4 主表 Coverage 重新核算。
+
+### H-030: 跨 slot 预算预留（cross-slot budget reservation）消除残留 budget_exceeded
+
+- **状态**: validated（2026-08-13, Phase 4 loop 迭代优化第 2 轮；11 项残留 BE 全回收）
+- **背景**: H-029 后 n120 仍有 11 项 BE（5 musique + 6 hotpotqa），其中 6 项一致 BE（`2hop__104095_40502`/`2hop__15258_54866`/`2hop__16267_25719` musique、`5a75da23...`/`5a770eb6...`/`5a72f74a...` hotpotqa）。H-029 只解决 per-slot 成本，未解决 **跨 slot 预算饥饿**。
+- **根因（live trace 确认）**: plan 3-4 slots，首个 slot unbound bundle（2 calls）+ 第二个 slot 2 个 binding context（2 calls）= 4，**后续 slot 在 `remaining_retrieval_calls <= 0` 处 BE 于物化前**（planner.py:3188 只查 `<= 0`，不预留未来 slot）。4-slot plan 在 4-call 预算下结构不可行（首 slot unbound=2 + 3×1=5>4）。
+- **干预（两层）**:
+  - **Stage A（executor, planner.py）**: 前视预算预留 `slot_call_cap = remaining_retrieval_calls - len(remaining)`（为每个未来 slot 保留 ≥1 call）。作用于 binding-context `context_limit` 与 H-029-aware estimate-pruning 双处。`estimate_materialization_retrieval_calls` 已 H-029-aware（bound-single=1，unbound bundle=2）。
+  - **Stage B（compile, methods.py）**: `_prune_plan_to_max_slots`（articulation-point-aware 计划降级，保护最选择性 output slot + 连通性）+ 触发条件从 `> max_steps` 改为 `> budget_fit = min(max_steps, max(1, max_retrieval_calls - 1))`。
+- **验证（11 项 1x live, 2026-08-13）**: **11/11 恢复 OK，10/11 F1=1.0**，1/11 F1=0.0（`5a75da23` hotpotqa = LLM 生成错误，非预算问题）。both-ok 质量中性（10 项抽查 6 稳定，4 变化全为 LLM 非确定性/表面形式差异，非预算回归）。cost 均预算内。
+- **判定: H-030 PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失**完整解决**。commit `494af0c`。
+- **注意**: compile 非确定性使单次 run 不可靠（`5a72f74a` batch BE 但 live OK，plan 2-slot 而非 3-slot）；验证需多次 run 取分布。
+
