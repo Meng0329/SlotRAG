@@ -651,7 +651,7 @@
 - **干预（两层）**:
   - **Stage A（executor, planner.py）**: 前视预算预留 `slot_call_cap = remaining_retrieval_calls - len(remaining)`（为每个未来 slot 保留 ≥1 call）。作用于 binding-context `context_limit` 与 H-029-aware estimate-pruning 双处。`estimate_materialization_retrieval_calls` 已 H-029-aware（bound-single=1，unbound bundle=2）。
   - **Stage B（compile, methods.py）**: `_prune_plan_to_max_slots`（articulation-point-aware 计划降级，保护最选择性 output slot + 连通性）+ 触发条件从 `> max_steps` 改为 `> budget_fit = min(max_steps, max(1, max_retrieval_calls - 1))`。
-- **验证（11 项 1x live, 2026-08-13）**: **11/11 恢复 OK，10/11 F1=1.0**，1/11 F1=0.0（`5a75da23` hotpotqa = LLM 生成错误，非预算问题）。both-ok 质量中性（10 项抽查 6 稳定，4 变化全为 LLM 非确定性/表面形式差异，非预算回归）。cost 均预算内。
+- **验证（13 项 1x live, 2026-08-13）**: **13/13 恢复 OK，11/13 F1=1.0，12/13 F1≥0.8**。两个 sub-1.0：`5a75da23` F1=0.0（LLM 生成错误，非预算问题）、`5a73471a` F1=0.8（表面形式差异 "Duane Clarridge" vs gold "Duane Dewy Clarridge"）。both-ok 质量中性（10 项抽查 6 稳定，4 变化全为 LLM 非确定性/表面形式差异，非预算回归）。cost 均预算内。
 - **判定: H-030 PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失**完整解决**。commit `494af0c`。
 - **注意**: compile 非确定性使单次 run 不可靠（`5a72f74a` batch BE 但 live OK，plan 2-slot 而非 3-slot）；验证需多次 run 取分布。
 
