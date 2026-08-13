@@ -128,8 +128,10 @@ Phase 4 用 `research/generate_sealed_samples.py --set test --size all` 预写�
 
 | 数据集 | n paired | acc_full guard→budget | acc_ok guard→budget | BE 回收 | both-ok 质量 |
 |--------|----------|------------------------|---------------------|---------|--------------|
-| musique | 120 | **0.883→1.000 (+11.7pt)** | 0.680→0.690 (+1.0pt) | 14/14 回收 (13 score>0) | ΔF1 -0.0086 噪声级 |
-| hotpotqa | 120 | **0.900→1.000 (+10.0pt)** | 0.717→0.752 (+3.4pt) | 12/12 回收 (10 score>0) | ΔF1 +0.0279 |
+| musique | 120 | **0.600→0.690 (+9.0pt)** | 0.680→0.690 (+1.0pt) | 14/14 回收 (13 score>0) | ΔF1 -0.0086 噪声级 |
+| hotpotqa | 120 | **0.646→0.752 (+10.6pt)** | 0.717→0.752 (+3.4pt) | 12/12 回收 (10 score>0) | ΔF1 +0.0279 |
+
+> **口径注**：本表「acc_full」= 全量项（含 BE）的 primary_score 均值（BE 记 0.0），与 §6.1 audit 一致。早期记录中用 ok_rate（0.883/0.900→1.000）误报 acc_full；真实 acc_full 增益为 **musique +9.0pt / hotpotqa +10.6pt**（BE 全回收下 acc_full≈acc_ok）。
 
 **§4.3 budget_exceeded 在 n120 配对样本上完整归零（guard 26 项 BE → budget 0 项 BE）**。两数据集 both-ok ΔF1 符号相反、幅度 ±0.03 = 生成器非确定性噪声（回归全为 1.0→0.0 硬翻转的 compile 非确定性签名），非系统性预算质量退化。
 
@@ -148,8 +150,8 @@ Phase 4 用 `research/generate_sealed_samples.py --set test --size all` 预写�
 
 ### 6.4 Phase 4 主表口径下的预期（待全量运行确认）
 
-n120 样本的 guard BE 率（musique 29.2% / hotpotqa 33.3%）接近 b1 全量（49.4% / 32.6%），但 n120 的 **guard acc_full 偏低**（musique 0.472 vs 全量 0.531），说明 n120 样本的 ok 项质量略低于全量均值。**H-029 在 n120 的 +18-22pt 是全量 guard-BE 回收的保守下限**：全量 musique BE 率更高（49.4%），预计回收更多项（但每项 mean 需全量验证）。H-030 进一步保证残留 BE 项也能回收。
+n120 样本的 guard BE 率（musique 29.2% / hotpotqa 33.3%）接近 b1 全量（49.4% / 32.6%），但 n120 的 **guard acc_ok 略低于全量**（musique n120 acc_ok 0.680 vs 全量 0.626——实际上 n120 ok 项质量略高；guard acc_full n120 0.600 高于全量 0.317，因 n120 BE 率更低 29.2% vs 49.4%）。**H-029 在 n120 的 +9.0pt / +10.6pt acc_full 增益是全量 guard-BE 回收的保守下限**：全量 musique BE 率更高（49.4%），预计回收更多项（但每项 mean 需全量验证）。H-030 进一步保证残留 BE 项也能回收。
 
-**已确认（n120 配对验证）**：H-029+H-030 合璧后 guard-budget 在 n120 配对样本上 **acc_full 双双达到 1.000**（musique 0.883→1.000、hotpotqa 0.900→1.000），**BE 26/26 完整回收**。两数据集的残留 BE 均为 0。
+**已确认（n120 配对验证）**：H-029+H-030 合璧后 guard-budget 在其配对样本上 **acc_full = acc_ok**（BE 26/26 全回收后无 budget 惩罚），musique **0.600→0.690 (+9.0pt)**、hotpotqa **0.646→0.752 (+10.6pt)**。两数据集残留 BE 均为 0。
 
 **待办**：全量（n=1000/集）guard-budget 运行完成后，重算主表 acc_full + 每数据集 Δ 判定 + Coverage。若 2wiki/drop 不受影响（BE 率低），主表可能从 4/4 LOSS → musique/hotpotqa 显著改善（上限接近 b1 全量 acc_ok：musique 0.626 / hotpotqa 0.788），2wiki/drop 维持 LOSS，Coverage 口径待定。
