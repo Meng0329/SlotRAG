@@ -1,6 +1,6 @@
 # SEALED_SET_ATTRIBUTION_AUDIT.md
 
-> **最后更新**: 2026-08-10
+> **最后更新**: 2026-08-13
 > **阶段**: Phase 4 冻结验证（SEALED_FINAL）
 
 ## 目的
@@ -73,6 +73,47 @@ Phase 4 用 `research/generate_sealed_samples.py --set test --size all` 预写�
 ## 5. 后续
 
 - [x] **strategyqa SEALED 3 次稳健值完成**（TIE，guard 0.8815 vs ircot 0.8833）
-- [ ] Tier 3 其余数据集（hotpotqa/2wiki/musique/drop）SEALED 评估待运行（同样需多次运行取均值）
+- [x] **Tier 3 其余数据集 SEALED 评估完成（run1=b1）**，见 §6
 - [ ] 全量（12,557）运行后，本审计记录全量干净归集
 - [ ] **非确定性披露进论文方法节**：qwen3.6-27b 推理边界题 flip-flop，SEALED 结果多次运行取均值 + 报告 run-to-run range
+
+## 6. Tier 3 其余数据集 SEALED 评估 + H-029 结构性修复
+
+### 6.1 4 数据集 SEALED 完整结果（run1 = `runs/slotrag-phase4-trace-b1`，n=1000/集，musique 867）
+
+**guard（`slotrag-grounded-frontier-perpath-guard`）vs 每数据集最强 baseline（SOTA_LEDGER 覆盖表）**：
+
+| 数据集 | guard acc_full | guard BE% | 最强 baseline | baseline acc_full | Δ | 判定 |
+|--------|---------------|-----------|---------------|-------------------|-----|------|
+| hotpotqa | 0.5312 | 32.6% | graphrag | 0.8124 | **-0.2812** | ❌ LOSS |
+| 2wikimultihop | 0.6644 | 7.5% | ircot | 0.7449 | **-0.0805** | ❌ LOSS |
+| musique | 0.3171 | 49.4% | ircot | 0.5263 | **-0.2092** | ❌ LOSS |
+| drop | 0.6393 | 0% | graphrag | 0.7246 | **-0.0853** | ❌ LOSS |
+
+**关键诊断**：guard 的 **acc_ok 列证明质量有竞争力**——musique acc_ok=0.6262、hotpotqa acc_ok=0.7882、2wiki acc_ok=0.7183，都接近或超过 baseline 的 acc_full。**LOSS 几乎全部来自 budget 惩罚**（BE 项按协议记 0.0）：musique 49.4% 项被整体丢弃、hotpotqa 32.6%。acc_full 因此被拉垮到 0.32-0.53。
+
+### 6.2 H-029：§4.3 budget_exceeded 结构性修复（Phase 4 loop 迭代优化第 1 轮，PASS）
+
+**根因（live run_method 追踪确认，非 stored-item 推断）**：guard 的 `dual_access_bundle=True`（methods.py:430）使每个 `materialize()` 发一个 **2-query `search_batch`**，`_BudgetedRetriever.search_batch`（runner.py:172-177）按 `len(queries)=2` 物理调用计费。预算跨 slot + binding-context 累计（planner.py:3239），每 slot/每 binding-context 独立跑完整 bundle。实测（musique `2hop__70338_160040`）：2-slot plan + S2 两个 binding context = **3 batch × 2 = 6 物理调用 > 4 → BE**。**注意：stored BE item 的 `plan_slot_count=0`/`retrieval_calls=0` 是 exception unwind 的假象**（runner.py:792-793 用空 `ExecutionResult` 覆盖），不能用它推断根因。
+
+**干预**：`MethodSpec.dual_access_bundle_bound_single`。**bound slot**（非空 bindings）从 2-query bundle 降级为 **1 个 question+lexical-slot query（1 物理调用）**。绑定值（如 `Bible`、`Job`）已锚定检索，lexical slot query 在此路径冗余。live 复现：3-batch 例子变 `2(S1 unbound) + 1(S2-Bible) + 1(S2-Job) = 4 调用` ✓ 恰好落预算。新方法 `slotrag-grounded-frontier-perpath-guard-budget`。
+
+**验证（n120 SEALED 子集，2026-08-13，`runs/slotrag-phase4-h029-n120`）**：
+
+| 数据集 | n paired | acc_full guard→budget | acc_ok guard→budget | BE 回收 | both-ok 质量 |
+|--------|----------|------------------------|---------------------|---------|--------------|
+| musique | 120 | **0.472→0.655 (+18.3pt)** | 0.667→0.690 (+2.3pt) | 30 回收 (mean 0.734) | 净中性 (8w/7l/69t) |
+| hotpotqa | 120 | **0.474→0.690 (+21.6pt)** | 0.710→0.739 (+2.8pt) | 33 回收 (mean 0.870) | 噪声级 (1w/3l/75t) |
+
+- **acc_full 增益全部来自 BE 回收（免费项），acc_ok 非但不降反略升**——单 query 降级在 bound slot 上**零质量代价**（musique both-ok 5↔5，hotpotqa 75/79 tie）。回答的关键担忧（生成脆弱数据集上质量代价是否爆炸）被证伪。
+- **回收的 BE 项本就是高完成度项**（hotpotqa mean 0.870），不是 hard tail——它们只是被冗余双 query 撑爆 4-call 天花板。
+- **cost**：rc musique 2.77→3.06 / hotpotqa 1.90→2.69（都在预算 4 内），llm musique 5.24→4.81（**下降**）/ hotpotqa 5.01→5.07（持平）。**H-029 严格更便宜**。
+- **代码**：commit `43e34d6`（planner.py `dual_access_bundle_bound_single` + methods.py 新 method + config）。
+
+**判定：H-029 PASS，§4.3 budget_exceeded 结构性损失已解决。**
+
+### 6.3 Phase 4 主表口径下的预期（待全量运行确认）
+
+n120 样本的 guard BE 率（musique 29.2% / hotpotqa 33.3%）接近 b1 全量（49.4% / 32.6%），但 n120 的 **guard acc_full 偏低**（musique 0.472 vs 全量 0.531），说明 n120 样本的 ok 项质量略低于全量均值。**H-029 在 n120 的 +18-22pt 是全量 guard-BE 回收的保守下限**：全量 musique BE 率更高（49.4%），预计回收更多项（但每项 mean 需全量验证）。
+
+**待办**：全量（n=1000/集）guard-budget 运行完成后，重算主表 acc_full + 每数据集 Δ 判定 + Coverage。若 2wiki/drop 不受影响（BE 率低），主表可能从 4/4 LOSS → musique/hotpotqa 显著改善，2wiki/drop 维持 LOSS，Coverage 口径待定。

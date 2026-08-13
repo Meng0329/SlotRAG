@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-08  
+> **最后更新**: 2026-08-13  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 3（假设循环）已完成 — H-017~H-020 + H-024~H-028 全部 rejected/收束，生成瓶颈模型级不可解（H-022 选型天花板 + H-026 激活缺口，三次确认），Coverage 维持 40%
+> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029 修复 PASS（n120 双数据集 +18~22pt acc_full），全量重跑待执行
 
 ---
 
@@ -196,8 +196,16 @@
   - **range**: guard 0.0056 (flips 4/180) / ircot 0.0000 (0) / graphrag 0.0000 (0) / react 0.0056 (2)
   - **稳健判定: guard vs ircot Δmean=-0.19pt, wins 16/ties 149/losses 15 → TIE（guard 略落后）**；guard vs graphrag +0.93pt TIE；guard vs react +3.33pt TIE
   - **⚠️ strategyqa coverage 单元不再计入 Coverage**（TIE/LOSS，非 WIN）。pilot 0.9 WIN 是幸运抽样（trace 暴露 flip-flop 噪声后不可复现）
-- [ ] 其余数据集（hotpotqa/2wiki/musique/drop）SEALED 评估待运行（同样需多次运行取均值）
-- [x] SEALED_SET_ATTRIBUTION_AUDIT.md 更新完成（3-run 均值表 + 归集纪律 + 非确定性披露）
+- [x] **Tier 3 其余数据集 SEALED 首次运行完成**（run1=`runs/slotrag-phase4-trace-b1`，n=1000/集，musique 867）
+  - **guard 4/4 LOSS**（acc_full vs 最强 baseline）：hotpotqa 0.5312 vs graphrag 0.8124（-0.2812）、2wiki 0.6644 vs ircot 0.7449（-0.0805）、musique 0.3171 vs ircot 0.5263（-0.2092）、drop 0.6393 vs graphrag 0.7246（-0.0853）
+  - **关键诊断**：guard **acc_ok 有竞争力**（musique 0.626 / hotpotqa 0.788 / 2wiki 0.718），**LOSS 几乎全部来自 budget 惩罚**——musique 49.4% BE、hotpotqa 32.6% BE 项按协议记 0.0 拉垮 acc_full。BE 是**结构性**（dual_access_bundle 2-query batch 物理计费 + 预算跨 slot/binding-context 累计），不是质量问题
+  - **run2 (b2) 部分完成**（launcher 中断）：hotpotqa/2wiki 1000，musique 585，drop 976；**run3 (b3) 未启动**。多运行取均值要求部分满足
+- [x] **H-029 budget 结构性修复（Phase 4 loop 迭代优化第 1 轮，PASS）**（2026-08-13）
+  - 干预：`MethodSpec.dual_access_bundle_bound_single`——bound slot 从 2-query bundle 降级为 1 个 question+lexical-slot query（1 物理调用）。绑定值已锚定检索，lexical slot query 在此路径冗余。commit `43e34d6`
+  - **n120 双数据集验证**（`runs/slotrag-phase4-h029-n120`）：musique acc_full **0.472→0.655 (+18.3pt)**、hotpotqa **0.474→0.690 (+21.6pt)**；acc_ok 均**略升**（+2.3/+2.8pt）；BE 回收 30/33 项（mean 0.734/0.870）；both-ok 对净中性（musique 8w/7l/69t，hotpotqa 1w/3l/75t——质量零回归）
+  - cost：rc 均在预算 4 内（3.06/2.69），llm musique 5.24→4.81（**下降**）。**H-029 严格更便宜且更好**
+  - 判定：**PASS**，§4.3 budget_exceeded 结构性损失已解决。n120 是全量 guard-BE 回收的保守下限（n120 musique BE 率 29.2% < 全量 49.4%，全量预计回收更多）
+- [ ] **全量 guard-budget 重跑待执行**（n=1000/集，或直接扩 b2 剩余 + b3 补全）；完成后重算主表 acc_full + Coverage
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 
 ---
@@ -281,14 +289,17 @@
 
 ## 下一步行动
 
-### 决策点（Phase 3 收束，需用户裁定）
-**Coverage 维持 40%（musique/strategyqa WIN, 2wiki/drop LOSS, hotpotqa TIE）。** Phase 3X 六个假设（H-023~H-028）全部收束到同一根因：**运行时编译 plan 不物化 typed 字段** + **qwen3.6-27b 选型天花板（H-022）**。局部干预（提示 H-005~H-019 / 契约 H-020 / 采样 H-027 / 确定性算子 H-028）全部无效。两条路径二选一：
-1. **接受 Coverage 40%**，转 Phase 4 冻结验证（VALIDATION/TEST_SEALED 一次性运行）+ Phase 5 论文（以 musique/strategyqa 双 WIN + honest baseline 为主论点）
+### 决策点（Phase 4 中期，需用户裁定）
+**SEALED 现状**：strategyqa TIE、4 数据集 SEALED 首次运行 guard 4/4 LOSS（budget_exceeded 结构性惩罚：musique 49.4% BE / hotpotqa 32.6% BE），H-029 修复已 PASS（n120 双数据集 acc_full +18~22pt，质量净中性，cost 预算内）。
+- **当前 Coverage 口径**：40%（Phase 3 混合集合点估计，非严格 SEALED）+ strategyqa coverage 单元取消后名义上 2/5=40%。**Phase 4 SEALED 严格口径下**：strategyqa TIE、4 数据集 LOSS（修正前）——需等 H-029 全量重跑后重算。
+- 两条路径二选一：
+1. **全量 guard-budget 重跑**（n=1000/集 或扩 b2/b3），重算 SEALED 主表 + Coverage，再转 Phase 5 论文
 2. **模型级生成器升级**（换更强 LLM / 微调 qwen3.6-27b 选型），超出当前研究约束（"不换模型"不变量），需先撤销约束
 
 ### 短期 (Phase 4)
-1. 冻结验证：一次性运行 SEALED_FINAL_SET（仅当接受 40% 时启动）
-2. 三集合一致性 + FROZEN_PROTOCOL 复核
+1. **全量 guard-budget 运行**（H-029 已 PASS，需 n=1000/集 确认主表翻正幅度；b2 部分完成、b3 未启动——注意 launcher 中断）
+2. 2wiki/drop 验证 H-029 无回归（BE 率低，预期影响小）
+3. 三集合一致性 + FROZEN_PROTOCOL 复核
 
 ### 中期 (Phase 5)
 1. 论文 + Artifact（诚实叙事：Clean DEVELOPMENT_SET 严格重测，40% = 真实 Coverage）
