@@ -76,6 +76,7 @@ class MethodSpec:
     complementary_retrieval: bool = False
     primary_query_variant: QueryVariant | None = None
     dual_access_bundle: bool = False
+    dual_access_bundle_bound_single: bool = False
     evidence_bundle: bool = False
     per_path_extraction: bool = False
     score_guided_extraction: bool = False
@@ -433,6 +434,22 @@ METHODS: dict[str, MethodSpec] = {
         extraction_enable_thinking=True,
         structured_answer_contract=True,
         description="H-012: frontier execution guard + grounded anchor protection + per-path extraction",
+    ),
+    "slotrag-grounded-frontier-perpath-guard-budget": MethodSpec(
+        "slotrag-grounded-frontier-perpath-guard-budget",
+        "slotrag",
+        options=ExecutionOptions(frontier_safe_selection=True),
+        grounded_entity_anchor_substitution=True,
+        role_projected_extraction=True,
+        protect_known_binding_values=True,
+        direct_grounded_anchor_projection=True,
+        dual_access_bundle=True,
+        dual_access_bundle_bound_single=True,
+        evidence_bundle=True,
+        per_path_extraction=True,
+        extraction_enable_thinking=True,
+        structured_answer_contract=True,
+        description="H-029: H-012 + binding-anchored single-query degradation to fit §4.3 4-call retrieval budget",
     ),
     "slotrag-grounded-frontier-perpath-typed": MethodSpec(
         "slotrag-grounded-frontier-perpath-typed",
@@ -1571,6 +1588,8 @@ def _run_slotrag(
         materializer_options["question_context"] = question.question
     if spec.dual_access_bundle:
         materializer_options["dual_access_bundle"] = True
+    if spec.dual_access_bundle_bound_single:
+        materializer_options["dual_access_bundle_bound_single"] = True
     if spec.dual_query_retrieval:
         materializer_options["dual_query_retrieval"] = True
     if spec.dual_query_unbound_only:

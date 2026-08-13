@@ -1203,6 +1203,7 @@ class SlotMaterializer:
         dual_query_evidence_guard: bool = False,
         dual_query_evidence_guard_disjoint_only: bool = True,
         dual_access_bundle: bool = False,
+        dual_access_bundle_bound_single: bool = False,
         evidence_bundle_extractor: EvidenceBundleExtractor | None = None,
         query_rewriter: QueryRewriter | None = None,
     ) -> None:
@@ -1229,6 +1230,7 @@ class SlotMaterializer:
         self.dual_query_evidence_guard = dual_query_evidence_guard
         self.dual_query_evidence_guard_disjoint_only = dual_query_evidence_guard_disjoint_only
         self.dual_access_bundle = dual_access_bundle
+        self.dual_access_bundle_bound_single = dual_access_bundle_bound_single
         self.query_rewriter = query_rewriter
         if self.dual_access_bundle and not self.question_context:
             raise ValueError("dual_access_bundle requires question_context")
@@ -1455,53 +1457,64 @@ class SlotMaterializer:
         dual_access_candidate_overlap = 0
         effective_query_variant = query_variant or self.primary_query_variant
         if self.dual_access_bundle and query_variant is None:
+            bundle_with_bindings = bool(self.dual_access_bundle_bound_single and bindings)
             question_query = formulate_query(
                 self.question_context or "",
                 slot_query,
                 "question_plus_lexical_slot",
             )
-            slot_ranked, question_ranked = search_batch([
-                (slot_query, "slot", "body"),
-                (question_query, "question_plus_lexical_slot", "configured"),
-            ])
-            ranked_lists = [
-                slot_ranked[:self.max_passages],
-                question_ranked[:self.max_passages],
-            ]
-            retrieval_calls = 2
-            dual_access_batches = 1
-            query = f"{slot_query} || {question_query}"
-            rrf_scores: dict[str, float] = defaultdict(float)
-            best_rank: dict[str, int] = {}
-            representatives: dict[str, RetrievalResult] = {}
-            path_membership: dict[str, set[int]] = defaultdict(set)
-            for path_index, ranked in enumerate(ranked_lists):
-                for rank, result in enumerate(ranked, start=1):
-                    evidence_id = str(
-                        result.passage.metadata.get("source_passage_id")
-                        or canonical_evidence_id(result.passage.id)
-                    )
-                    rrf_scores[evidence_id] += 1.0 / (60 + rank)
-                    best_rank[evidence_id] = min(best_rank.get(evidence_id, rank), rank)
-                    path_membership[evidence_id].add(path_index)
-                    current = representatives.get(evidence_id)
-                    if current is None or result.score > current.score:
-                        representatives[evidence_id] = result
-            dual_access_candidate_overlap = sum(
-                len(paths) > 1 for paths in path_membership.values()
-            )
-            retrieved_passages = [
-                representatives[evidence_id]
-                for evidence_id in sorted(
-                    representatives,
-                    key=lambda value: (
-                        -len(path_membership[value]),
-                        -rrf_scores[value],
-                        best_rank[value],
-                        value,
-                    ),
+            if bundle_with_bindings:
+                # Binding-anchored materialization: a single question+lexical-slot
+                # query costs 1 retrieval call instead of the 2-query bundle. The
+                # bound value already anchors retrieval, so the plain lexical slot
+                # query is largely redundant on this path.
+                retrieved_passages = search(question_query, "question_plus_lexical_slot")[:self.max_passages]
+                retrieval_calls = 1
+                query = question_query
+                dual_access_batches = 0
+            else:
+                slot_ranked, question_ranked = search_batch([
+                    (slot_query, "slot", "body"),
+                    (question_query, "question_plus_lexical_slot", "configured"),
+                ])
+                ranked_lists = [
+                    slot_ranked[:self.max_passages],
+                    question_ranked[:self.max_passages],
+                ]
+                retrieval_calls = 2
+                dual_access_batches = 1
+                query = f"{slot_query} || {question_query}"
+                rrf_scores: dict[str, float] = defaultdict(float)
+                best_rank: dict[str, int] = {}
+                representatives: dict[str, RetrievalResult] = {}
+                path_membership: dict[str, set[int]] = defaultdict(set)
+                for path_index, ranked in enumerate(ranked_lists):
+                    for rank, result in enumerate(ranked, start=1):
+                        evidence_id = str(
+                            result.passage.metadata.get("source_passage_id")
+                            or canonical_evidence_id(result.passage.id)
+                        )
+                        rrf_scores[evidence_id] += 1.0 / (60 + rank)
+                        best_rank[evidence_id] = min(best_rank.get(evidence_id, rank), rank)
+                        path_membership[evidence_id].add(path_index)
+                        current = representatives.get(evidence_id)
+                        if current is None or result.score > current.score:
+                            representatives[evidence_id] = result
+                dual_access_candidate_overlap = sum(
+                    len(paths) > 1 for paths in path_membership.values()
                 )
-            ]
+                retrieved_passages = [
+                    representatives[evidence_id]
+                    for evidence_id in sorted(
+                        representatives,
+                        key=lambda value: (
+                            -len(path_membership[value]),
+                            -rrf_scores[value],
+                            best_rank[value],
+                            value,
+                        ),
+                    )
+                ]
         elif effective_query_variant is not None:
             if effective_query_variant != "slot" and not self.question_context:
                 raise ValueError(

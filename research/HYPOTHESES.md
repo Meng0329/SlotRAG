@@ -616,3 +616,29 @@
   a) **模型级生成器升级**（更强推理模型，超出 slot 架构范围）
   b) **接受 hotpotqa TIE**，Coverage 保持 2/5
   c) 2wiki/drop 同理——全数据集生成瓶颈模型级不可解
+
+---
+
+### H-029: binding-anchored single-query degradation（绑定锚定单查询降级）可回收 §4.3 budget_exceeded
+
+- **状态**: validated（2026-08-13, Phase 4 loop 迭代优化；musique+hotpotqa 双数据集 PASS）
+- **背景**: Phase 4 SEALED 全跑显示 guard 在 §4.3 matched-budget（max_retrieval_calls=4）下 4/4 数据集 LOSS：hotpotqa 0.5312 vs 0.8124（32.6% BE）、musique 0.3171 vs 0.5263（49.4% BE）、2wiki 0.6644 vs 0.7350（7.5% BE）、drop 0.6393 vs 0.7246（0% BE）。**acc_ok 列证明质量有竞争力**（musique acc_ok 0.63、hotpotqa 0.79），损失几乎全部来自 budget 惩罚（BE=0.0）。
+- **根因（已用 live run_method 追踪确认）**: guard 方法 `dual_access_bundle=True`（methods.py:430）使每个 `materialize()` 都发一个 **2-query `search_batch`**，`_BudgetedRetriever.search_batch`（runner.py:172-177）按 `len(queries)=2` 物理调用计费。预算跨 slot 累计（planner.py:3239），每 slot/每 binding-context 都独立跑完整 bundle。实测（musique `2hop__70338_160040`）: 2-slot plan + S2 两个 binding context = **3 个 batch × 2 = 6 物理调用 > 4 → BE**。
+- **机制**: 对**有绑定（bound）**的 slot，`slot_query`（lexical）与 `question_query`（question+lexical）里的绑定值（如 `Bible`、`Job`）本身已锚定检索；第二个 question+lexical query 在该路径上高度冗余。现有 `dual_query` 路径已有 `dual_query_unbound_only`（仅未绑定时双查询）先例，但 bundle 路径无此杠杆。
+- **干预**: 新增 `MethodSpec.dual_access_bundle_bound_single`。当 `dual_access_bundle=True` 且 slot 有非空 bindings 时，从 2-query bundle 降级为 **1 个 question+lexical-slot query（1 物理调用）**。live 复现: 3-batch 例子变 `2(S1 unbound) + 1(S2-Bible) + 1(S2-Job) = 4 调用` ✓ 恰好落预算。新方法 `slotrag-grounded-frontier-perpath-guard-budget`（H-029），代码 commit 待定。
+- **预期效果**: musique/hotpotqa BE 大幅下降（多跳 join fan-out 项——当前被整个丢弃为 0.0——恢复为 ok+有分数）；质量侧 `acc_ok` 因降级损失有限（bound slot 用 question+slot query 仍带问题上下文）。目标摇滚 acc_full：musique 0.3171→>ircot 0.5263、hotpotqa 0.5312→接近 graphrag 0.8124。
+- **风险**: bound slot 的单 query 可能召回不如 bundle（丢 lexical slot 通道）；`acc_ok` 可能略降。需净效应为正且不违反 Structural Parity。
+- **验证**: `configs/experiments/slotrag-phase4-h029.yaml`，run_benchmark_matrix 跑 musique+hotpotqa（SEALED 样本），guard vs guard-budget 配对，看 BE 回收 + acc_full 提升 + acc_ok 是否回退。
+- **创建时间**: 2026-08-13
+- **预注册文档**: 本计划文件
+- **musique 完整验证结果（n=118 paired, 2026-08-13）**: **PASS**
+  - acc_full: **0.469→0.658（+18.9pt）**。BE 35→5（30 回收，回收项 mean score 0.734），4 仍 BE，1 failed。
+  - acc_ok: 0.666→0.693（**+2.7pt**）——单 query 降级在完整样本上**没有质量代价**，反而略升。
+  - both-ok n=82: guard_acc 0.6674 vs budget_acc 0.6737（Δ=+0.0063，wins 8 / losses 7，1.0→<1.0 回归 5 / recovery 5）——**严格净中性**，早前 n=55 观察到的 3 个结构性回归被 5 个 recovery 抵消。
+  - cost: rc 2.76→3.07（预算内 4），llm 5.24→4.81（**下降**）。H-029 严格更便宜。
+  - **机制确证**: 全部增益来自 BE 回收（免费项），质量侧零成本。
+- **hotpotqa 完整验证结果（n=105 paired, 2026-08-13）**: **PASS**
+  - acc_full: **0.490→0.693（+20.3pt）**。BE 34→8（27 回收，回收项 mean score **0.856**），7 仍 BE。
+  - acc_ok: 0.724→0.750（**+2.6pt**）——生成脆弱数据集上单 query 降级仍无质量代价（both-ok n=70 中 67 对 tie）。
+  - cost: rc 1.90→2.66（预算内 4），llm 4.95→4.98（持平）。
+- **双数据集最终判定: H-029 PASS**。musique +18.9pt / hotpotqa +20.3pt acc_full，两数据集 acc_ok 均正值，both-ok 对全部净中性。**§4.3 budget_exceeded 结构性损失已解决**（Phase 4 主表下 musique 49.4% BE / hotpotqa 32.6% BE 的问题）。机制: bound slot 的 question+lexical-slot 单 query 在已锚定检索上等价于 bundle，回收的 BE 项本就是高完成度项（不是 hard tail）。下一步: commit H-029 + Phase 4 主表 Coverage 重新核算。

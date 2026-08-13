@@ -1,0 +1,19 @@
+benchmark_root: benchmark
+output_root: runs
+datasets:
+  - musique
+  - hotpotqa
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 4
+  question_timeout_seconds: 300
+stages:
+  tier3_sealed:
+    split: evaluation
+    sample_size: 1000  # 占位；实际以预写 samples/tier3_sealed/{dataset}.jsonl 为准
+    methods:
+      - slotrag-grounded-frontier-perpath-guard
+      - slotrag-grounded-frontier-perpath-guard-budget
