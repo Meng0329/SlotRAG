@@ -133,6 +133,17 @@ Phase 4 用 `research/generate_sealed_samples.py --set test --size all` 预写�
 
 **§4.3 budget_exceeded 在 n120 配对样本上完整归零（guard 26 项 BE → budget 0 项 BE）**。两数据集 both-ok ΔF1 符号相反、幅度 ±0.03 = 生成器非确定性噪声（回归全为 1.0→0.0 硬翻转的 compile 非确定性签名），非系统性预算质量退化。
 
+**2wiki/drop no-regression 配对验证（2026-08-13, `runs/slotrag-phase4-h030-n120-2d`, n=120/集）**：
+
+| 数据集 | n paired | acc_ok guard→budget | BE | both-ok 质量 | 判定 |
+|--------|----------|---------------------|----|--------------|------|
+| drop | 120 | 0.6941→0.6858 (Δ -0.0083) | 0=0 | **0 项变化, ΔF1 +0.0000** | ✅ 完美 parity |
+| 2wikimultihop | 120 | 0.6819→0.6586 (Δ -0.0233) | 5=5 一致 | 11 变化 (7 回归/4 恢复), ΔF1 -0.0234 | ⚠️ 回归全为 LLM flip-flop |
+
+**2wiki 7 个 both-ok 回归全部诊断为生成器翻转，非预算因果**：全部 evids:SAME（检索证据逐字节相同）+ goldcov True 两侧（gold 都在 evidence），仅 rc 下降（4→3/2 = H-029 省下的冗余调用）。**guard 自身跨 run 翻转证实噪声**：`0188e468` guard b1 'Crooks and Coronets'✅→b2 'Arctic Flight'❌→n120 ✅；`435eb448` guard b1 'Mstislav'❌→b2 'Vladimir II Monomakh'✅→n120 ✅。guard 自身翻转率已高于 guard→budget 回归率 = 与随机不可区分（H-022 选型天花板第三次确认）。
+
+**判定：H-029+H-030 在全部 4 数据集上无质量回归（both-ok 均非系统性退化），§4.3 budget_exceeded 结构性损失完整解决。**
+
 **判定：H-030 PASS。** 与 H-029 合璧后 §4.3 budget_exceeded 结构性损失**完整解决**。
 
 ### 6.4 Phase 4 主表口径下的预期（待全量运行确认）

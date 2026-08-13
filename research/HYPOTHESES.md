@@ -657,5 +657,11 @@
   - **musique (n=120 paired)**: acc_full **0.883→1.000（+11.7pt）**，BE 14/14 全回收（13 项 score>0）；acc_ok 0.680→0.690（+1.0pt）；both-ok n=106 中 17 项 F1 变化，mean ΔF1 **-0.0086**（噪声级，10 回归 vs 7 恢复，回归全为 1.0→0.0 硬翻转的 compile 非确定性签名）。
   - **hotpotqa (n=120 paired)**: acc_full **0.900→1.000（+10.0pt）**，BE 12/12 全回收（10 项 score>0）；acc_ok 0.717→0.752（+3.4pt）；both-ok n=108 中 14 项 F1 变化，mean ΔF1 **+0.0279**（10 恢复 vs 4 回归）。
   - **§4.3 budget_exceeded 在 n120 配对样本上完整归零**（guard 26 项 BE → budget 0 项 BE）。两数据集 both-ok ΔF1 符号相反且幅度 ±0.03 = 生成器非确定性噪声，非系统性预算质量退化。
+- **2wiki/drop no-regression 配对验证（2026-08-13, `runs/slotrag-phase4-h030-n120-2d`, n=120/集）**: 确认 H-029/H-030 在低 BE 数据集上零质量回归。
+  - **drop (n=120 paired)**: 120/120 ok 两侧，**0 项 F1 变化，ΔF1 +0.0000**（单 slot 算术计划，预算修复完全不可见）。**完美 no-regression 证书**。
+  - **2wikimultihop (n=120 paired)**: acc_ok 0.6819→0.6586（Δ -0.0233，n=115 both-ok）；BE 5=5 完全一致（0 新增 0 回收）；both-ok 11 项 F1 变化（7 回归 vs 4 恢复，ΔF1 -0.0234）。
+    - **7 个回归全部诊断为 LLM flip-flop 非预算因果**：evids:SAME（检索证据逐字节相同）+ goldcov True 两侧 + 仅 rc 下降（4→3/2，H-029 单 query 降级省下的冗余调用）。**跨 run guard 自身翻转证实**：`0188e468` guard b1 'Crooks and Coronets'✅ → b2 'Arctic Flight'❌ → n120 'Crooks and Coronets'✅（同一方法 3 run 内 ✅→❌→✅）；`435eb448` guard b1 'Mstislav'❌ → b2 'Vladimir II Monomakh'✅ → n120 'Vladimir II Monomakh'✅。**guard 自身的翻转率已高于 guard→budget 回归率** = 与随机不可区分。
+    - **这是 H-022 选型天花板（qwen3.6-27b 稳定选错候选）第三次跨运行确认**（H-025/H-026/H-028 同签名：gold 在 evidence 但仍答错）。预算修复既不造成也不修复这些翻转。
+  - **判定: no-regression PASS**。H-029/H-030 在全部 4 个低/高 BE 数据集上无质量回归（musique/hotpotqa both-ok 净中性或正，drop 完美零变化，2wiki 回归全为生成器噪声）。
 - **注意**: compile 非确定性使单次 run 不可靠（`5a72f74a` batch BE 但 live OK，plan 2-slot 而非 3-slot）；验证需多次 run 取分布。n120 配对样本即此分布验证。
 

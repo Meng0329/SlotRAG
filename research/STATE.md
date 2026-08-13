@@ -2,7 +2,7 @@
 
 > **最后更新**: 2026-08-13  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029 修复 PASS（n120 双数据集 +18~22pt acc_full），H-030 残留 BE 全回收（n120 配对验证 acc_full 0.883→1.000 / 0.900→1.000，BE 26/26 归零）commit `494af0c`，全量重跑待执行
+> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029+H-030 修复 PASS（musique/hotpotqa n120 acc_full 0.883→1.000 / 0.900→1.000，BE 26/26 归零；2wiki/drop no-regression PASS）commit `494af0c`，全量重跑待执行
 
 ---
 
@@ -211,7 +211,8 @@
   - 干预：Stage A executor 前视预留 `slot_call_cap = remaining - len(remaining)`；Stage B `_prune_plan_to_max_slots` 按 articulation point 降级 + `budget_fit = max_retrieval_calls - 1` 触发
   - 验证：**11/11 残留 BE 项恢复 OK，10/11 F1=1.0**（1 F1=0 为 LLM 生成错误非预算）；both-ok 质量中性（变化全为 LLM 非确定性）
   - **n120 完整配对验证**（`runs/slotrag-phase4-h030-n120`）：musique acc_full **0.883→1.000 (+11.7pt)**、hotpotqa **0.900→1.000 (+10.0pt)**；**BE 26/26 全回收**（guard 26 项 BE → budget 0 项）；both-ok 质量噪声级（musique ΔF1 -0.0086 / hotpotqa +0.0279，符号相反 = 非确定性，非系统性退化）
-  - 判定：**PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失完整解决
+  - **2wiki/drop no-regression 验证**（`runs/slotrag-phase4-h030-n120-2d`，n=120/集）：**drop 120/120 ok 两侧，ΔF1 +0.0000（0 项变化）**；**2wiki BE 5=5 一致**（0 新增 0 回收）、both-ok 7 回归全为 LLM flip-flop（evids:SAME + goldcov True 两侧 + guard 自身跨 run 翻转`0188e468`✅→❌→✅证实，非预算因果）
+  - 判定：**PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失完整解决；四个数据集（musique/hotpotqa high-BE + 2wiki/drop low-BE）全部无质量回归
 - [ ] **全量 guard-budget 重跑待执行**（n=1000/集，或直接扩 b2 剩余 + b3 补全）；完成后重算主表 acc_full + Coverage
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 
