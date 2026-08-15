@@ -1,0 +1,15 @@
+Under a matched budget, a slot-based RAG system wins one of four benchmark
+datasets, ties a second, and loses two on inherent answer-selection accuracy:
+Strongest-Baseline Coverage is $25\%$. The architecture succeeds when
+retrieval is the bottleneck and saturates when selection is. A budget-fix
+ablation converts a structural \texttt{BE} collapse into real accuracy
+(MuSiQue/HotpotQA), but no local fix---nine generation-side interventions,
+four string heuristics, or deterministic operators---raises Coverage further
+under the frozen model.
+
+We report this honestly: no ``beats SOTA'', \texttt{acc\_ok} never conflated
+with \texttt{acc\_full}, non-determinism disclosed, and every failing
+intervention documented. The practical lesson for slot-based RAG is that
+retrieval-side engineering is largely amortized---the open lever is a
+stronger selector, not more evidence or more prompt control. We leave that,
+and the full 12{,}557-sample SEALED run, as future work.

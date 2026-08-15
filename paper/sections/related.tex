@@ -1,0 +1,19 @@
+\paragraph{Slot / program decomposition for RAG.} Slot-based and
+program-guided RAG frameworks decompose a multi-hop question into typed
+retrieval steps or executable programs, promising compositional evidence.
+Our slot compiler shares that goal but is evaluated under a strict matched
+budget with adapted baselines, which most such systems do not report.
+
+\paragraph{Retrieval-augmented multi-hop reasoning.} Iterative-retrieval
+agents (IRCoT) and graph-retrieval systems (GraphRAG) are among the
+strongest adapted baselines on these benchmarks and are our comparison
+points. Our finding that a slot system can win one dataset, tie another, and
+lose two on inherent selection accuracy is scoped relative to these adapted
+baselines under the shared protocol.
+
+\paragraph{Honest / matched-budget evaluation.} There is a growing call to
+report RAG results under identical budgets and to separate quality from
+budget accounting. Our separate reporting of \texttt{acc\_full} and
+\texttt{acc\_ok}, our disclosure of per-run non-determinism, and our
+full-negative-result reporting for rejected interventions are in that spirit:
+we treat what did not work as first-class evidence.

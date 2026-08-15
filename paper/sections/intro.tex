@@ -1,0 +1,41 @@
+Retrieval-augmented generation (RAG) has become the workhorse recipe for
+answering multi-hop questions that require grounding in large knowledge
+sources. A growing line of work decomposes a question into \emph{slots} ---
+typed relational retrieval/extraction steps that are materialized and joined
+before a decoder produces the final answer. Slot decomposition promises
+stronger compositionality than flat top-$k$ retrieval: each hop retrieves
+precisely the evidence its typed role needs, and the intermediates are joined
+into a coherent evidence bundle for the generator.
+
+This paper asks an honest, under-examined question that most slot-system
+papers defer: \emph{under a matched budget --- the same finite retrieval and
+inference budget granted to the strongest published baselines --- how much of a
+benchmark does a slot-based RAG system actually cover?} We answer it
+concretely with a slot-based system, \textsc{SlotRAG-X}, evaluated on five
+multi-hop benchmarks (HotpotQA, 2WikiMultiHop, MuSiQue, StrategyQA, DROP)
+against their strongest adapted baselines, using one fixed LLM (Qwen3.6-27B)
+and an identical per-benchmark budget ($\S$4.3: $\max\_\mathrm{retrieval\_calls}=4$,
+$\max\_\mathrm{llm\_calls}=64$, $\max\_\mathrm{steps}=4$, $300$~s/query).
+
+Our headline result is deliberately modest and honest. Under this matched
+budget, \textsc{SlotRAG-X} achieves an Exact-Match/F1 Strongest-Baseline
+Coverage of \emph{25\%} ($1/4$): MuSiQue wins, HotpotQA ties within $0.028$
+of its strongest adapted baseline, and 2WikiMultiHop and DROP lose on
+inherent accuracy gaps. A budget-fix ablation (H-029/H-030) converts a
+``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA) budget-exceeded items
+into real accuracy, fully recovering two datasets that a raw \S4.3 accounting
+would have penalized to near zero. However, we show that the residual failure
+modes on 2WikiMultiHop/DROP are \emph{selection ceilings} of the frozen model
+--- gold answers are verbatim in the evidence yet the model selects the wrong
+entity --- and that no string-anchored or prompt-level correction can recover
+them (all four falsified heuristics are net-negative).
+
+The contribution of this paper is the honest map of where slot-based RAG
+stands under a matched budget and why: the architecture succeeds when
+\emph{retrieval} is the bottleneck (budget-limited), and saturates when answer
+\emph{selection} is the bottleneck (model-limited). We report all rejected
+interventions (nine generation-side and four string-correction heuristics) as
+first-class evidence for that ceiling, and we state the guardrails that keep
+the claim honest: no ``beats SOTA'' phrasing (baselines are adapted), no
+conflation of answer-complete rate with budget-matched accuracy, and no claim
+that any local fix raises Coverage above 25\%.

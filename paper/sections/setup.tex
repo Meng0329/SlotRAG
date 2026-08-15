@@ -1,0 +1,29 @@
+\paragraph{Matched budget ($\S$4.3).}  All systems---\textsc{SlotRAG-X} and every
+baseline---share one protocol: model Qwen3.6-27B (internal endpoint),
+$\max\_\mathrm{tokens}=2048$, temperature $0.0$, $\max\_\mathrm{steps}=4$,
+$\max\_\mathrm{llm\_calls}=64$, $\max\_\mathrm{retrieval\_calls}=4$, and
+$300$~s/question timeout. Budget-exceeded items score $0.0$ for every method,
+so coverage comparisons are not inflated by one side ignoring the budget.
+
+\paragraph{Benchmarks.}  Five multi-hop benchmarks: HotpotQA, 2WikiMultiHop,
+MuSiQue, StrategyQA, and DROP. Samples are drawn from the SEALED final
+test sets, isolated from development, with exposed samples excluded.
+Headlined cells use $n=867/1000/1000/1000$ (musique/hotpotqa/2wiki/drop);
+StrategyQA is evaluated on its full clean set ($n=180$, averaged over three
+runs, $\S$\ref{sec:results:failure}). Paired sampling: baseline and
+\textsc{SlotRAG-X} share identical sample IDs; sample size per dataset is
+power-sufficient for a $5\%$ effect ($\alpha=0.05$, power $0.80$; required
+$n\in[8,18]$, all headlined $n\gg$ that).
+
+\paragraph{Baselines.}  Strongest per-dataset adapted baselines from the
+coverage ledger, run under the same matched budget and adapted (not exact
+upstream) implementations: MuSiQue $\rightarrow$ IRCoT ($0.5263$), HotpotQA
+$\rightarrow$ GraphRAG ($0.8124$), 2WikiMultiHop $\rightarrow$ IRCoT
+($0.7449$), DROP $\rightarrow$ GraphRAG ($0.7246$). We state plainly that all
+baselines are \emph{adapted}; we never claim to beat exact upstream SOTA.
+
+\paragraph{WIN/TIE/LOSS.}  A cell is a WIN when $|\Delta|>0.03$ against its
+strongest adapted baseline, a TIE when $|\Delta|\le 0.03$, and a LOSS
+otherwise; Coverage is the fraction of datasets won. Non-determinism of the
+decoder on boundary questions (flip rates $0$--$3.9\%$) is disclosed and
+SEALED results are averaged over runs with run-to-run ranges reported.

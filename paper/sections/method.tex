@@ -1,0 +1,35 @@
+\paragraph{Slot compiler.}  \textsc{SlotRAG-X} compiles a multi-hop question
+into a small typed relational program over data slots. Each slot carries a
+typed role (e.g.\ an entity, a relational descriptor, or a free-form bridge)
+and a retrieval/extraction contract; the compiler emits a plan of $1$--$4$
+slots with a dependency graph over their bindings.
+
+\paragraph{Materializer.}  A materializer fills each slot by retrieving
+against a hybrid sparse/dense index and binding the slot's typed role. The
+strongest configuration (the \emph{guard} method, H-012) uses a
+\emph{frontier execution guard}: it protects the most selective output slot,
+anchors each hop's retrieval to already-bound values, and extracts per-path
+evidence retargeted to the generation prompt. It operates under a hard
+budget---at most $\max\_\mathrm{retrieval\_calls}=4$ physical calls, $\max\_
+\mathrm{llm\_calls}=64$, $\max\_\mathrm{steps}=4$, $300$~s/query---so
+materialization is \emph{selective}: it spends retrieval on the slots that
+compositionally matter and prunes plans that cannot fit the remaining budget.
+
+\paragraph{Generator.}  A fixed decoder (Qwen3.6-27B, temperature $0$) reads
+the joined evidence bundle and produces the answer. The generator's sole job
+is selection under evidence sufficiency; it is explicitly not asked to reason
+beyond what the bundle supports, and we show this is where accuracy saturates.
+
+\paragraph{Evidence bundles and per-path extraction.}  Each slot's materialized
+step yields a typed evidence fragment; per-path extraction (H-008) preserves
+the intermediate that would otherwise be dropped by a coarse join, and the
+fragments are bundled so the generator sees how the answer was composed.
+
+\paragraph{Budget accounting.}  Retrieval is the scarce resource. A single
+slot can spend more than one physical call when it opens two binding contexts
+(dual-access bundle). Because budget is enforced across slots and binding
+contexts, an over-spending slot can collapse a later slot to \texttt{BE}
+(budget-exceeded), which the protocol scores as $0.0$. This structural
+interaction is the crux of the budget-fix ablation in \S\ref{sec:results:budget}:
+recovering \texttt{BE} items surfaces real accuracy that a naïve accrual
+accounting would hide.

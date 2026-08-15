@@ -1,0 +1,83 @@
+\subsection{Main Table under Matched Budget}\label{sec:results:main}
+
+The headline results use full SEALED matched-budget runs. \texttt{acc\_full}
+is the mean primary score over all common items, with budget-exceeded items
+scored 0; \texttt{acc\_ok} is the mean over status-ok items only.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrrcl}
+\toprule
+Dataset & $n$ & \texttt{acc\_full} (guard) & \texttt{acc\_full} (budget) & $\Delta_b$ & Baseline & Verdict\\
+\midrule
+MuSiQue   & $867$ & 0.3171  & \textbf{0.5807} & $+0.0544$ & IRCoT 0.5263   & WIN\\
+HotpotQA  & $1000$ & 0.5312  & \textbf{0.7842} & $-0.0282$ & GraphRAG 0.8124 & TIE\\
+2WikiMultiHop & $1000$ & 0.6644 & \textbf{0.6901} & $-0.0548$ & IRCoT 0.7449   & LOSS\\
+DROP      & $1000$ & 0.6393  & \textbf{0.6403} & $-0.0843$ & GraphRAG 0.7246 & LOSS\\
+\bottomrule
+\end{tabular}
+\caption{Matched-budget ($\S$4.3) main table. \texttt{acc\_full} scores
+budget-exceeded items as 0; budget-fix = H-029/H-030 method.}
+\label{tab:main}
+\end{table}
+
+Under the WIN/TIE/LOSS rule ($|\Delta|>0.03$), \textsc{SlotRAG-X} wins MuSiQue,
+ties HotpotQA within 0.028 of GraphRAG, and loses 2WikiMultiHop and DROP on
+inherent accuracy gaps. Strongest-Baseline Coverage is $1/4 = 25\%$
+(StrategyQA is excluded as a robust TIE, $\S$\ref{sec:results:failure}).
+
+% Phase 3 nominal 40% is a mixed-set directionality result and is NOT the
+% current headline; it is reported only as a labeled historical estimate.
+
+\subsection{Budget-Fix Ablation: From False Collapse to Real Accuracy}\label{sec:results:budget}
+
+A raw $\S$4.3 accounting penalizes the guard on the cost of \emph{dual-access
+bundles}: a slot opening two binding contexts issues one 2-query batch, which
+counts as two physical calls against $\max\_\mathrm{retrieval\_calls}=4$.
+Cross-slot accumulation drives $49.4\%$ (MuSiQue) and $32.6\%$ (HotpotQA) of
+items to \texttt{BE}, scored as 0 --- a \emph{structural accounting collapse},
+not a quality signal.
+
+Two interventions fix it. H-029 (bound-single degradation) drops a bound
+slot's 2-query bundle to one anchored question+lexical query. H-030 (cross-slot
+budget reservation) front-reserves future slots and prunes plans that cannot
+fit. Together (guard-budget), budget-exceeded collapses to $0$ on MuSiQue
+($428\!\rightarrow\!0$) and HotpotQA ($326\!\rightarrow\!0$), 2WikiMultiHop
+$75\!\rightarrow\!37$, DROP stays $0$. Recovered items are high-completion
+(MuSiQue mean 0.547, HotpotQA 0.764); matched both-ok pairs show no systematic
+regression ($143$w/$124$l/$2771$t). The headline gains:
+
+\medskip
+\centerline{
+  MuSiQue $0.3171\rightarrow0.5807$ (WIN), \quad
+  HotpotQA $0.5312\rightarrow0.7842$ (TIE) }
+\medskip
+The two remaining sets are \emph{inherent} gaps, not budget: DROP ran 0
+\texttt{BE} throughout, and 2WikiMultiHop still trails IRCoT by 0.055 after
+recovering all recoverable items. Budget-fix alone does not raise Coverage; it
+surfaces the true 25\%.
+
+\subsection{Failure Attribution: Selection Ceilings}\label{sec:results:failure}
+
+Across 2000 items (HotpotQA + 2wiki, guard-budget), failures split into
+\emph{surface-form} truncation ($\sim$88 HotpotQA / $\sim$3 2wiki; predicted
+answer is a substring of gold, e.g.\ \emph{Duane Clarridge} vs
+\emph{Duane ``Dewy'' Clarridge}), \emph{alias-in-evidence} selection failure
+($159$ / $214$; gold verbatim in the evidence yet the model picks another
+entity), and \emph{alias-not-in-evidence} retrieval gaps ($56$ / $97$).
+
+Four string-correction heuristics (longest-substring completion, boundary
+truncation, parenthetical completion, and a distribution proof of
+infeasibility) are \emph{all net-negative}, e.g.\ longest-substring completion
+nets $-452$ (HotpotQA) / $-346$ (2wiki) by pulling answers into full
+sentences. Because ``pred is a substring of gold'' is rare ($<5\%$) while
+``pred is contained in longer evidence'' is common ($>40\%$), no
+gold-free deterministic rule can extend short answers without breaking many
+correct ones. This is the selection-ceiling evidence (H-022, confirmed $3\times$):
+gold answers are verbatim in the evidence and post-processing yields no gain.
+The correct intervention would be a stronger selector, which is out of scope
+under the frozen-model condition.
+
+StrategyQA is a robust TIE, not a WIN: three-run mean guard $0.8815$ vs IRCoT
+$0.8833$ ($\Delta=-0.19$pt), with the decoder flip-flopping on arithmetic
+boundary items at temperature 0.

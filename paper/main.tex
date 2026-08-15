@@ -1,0 +1,72 @@
+\documentclass[sigconf]{acmart}
+
+\title{SlotRAG-X: Toward SLAM-Style Slot-Based Retrieval-Augmented Generation\\
+under a Matched Budget --- An Honest Evaluation of Coverage Ceilings}
+
+\author{Anonymous}
+\affiliation{%
+  \institution{Anonymous Institution}
+  \country{}
+}
+\email{anonymous@anonymous.edu}
+
+\usepackage{booktabs}
+\usepackage{bm}
+\usepackage{lmodern}
+
+\begin{document}
+
+\begin{abstract}
+Slot-based retrieval-augmented generation (RAG) decomposes a multi-hop
+question into typed relation slots that are materialized and joined before
+answer generation. We report a rigorous, matched-budget evaluation of a
+slot-based RAG system (SlotRAG-X) across five multi-hop benchmarks
+(HotpotQA, 2WikiMultiHop, MuSiQue, StrategyQA, DROP) against their strongest
+published baselines, using a single fixed LLM (Qwen3.6-27B) and an identical
+per-benchmark budget (max\_retrieval\_calls=4, max\_llm\_calls=64,
+max\_steps=4, 300s/query --- the \S4.3 protocol).
+
+Our headline finding is deliberately honest: under this matched budget,
+SlotRAG-X achieves an Exact-Match/F1 Strongest-Baseline Coverage of
+\emph{25\%} (1/4 --- MuSiQue wins, HotpotQA ties within 0.028, 2WikiMultiHop
+and DROP lose on inherent accuracy gaps). A budget-fix ablation (H-029/H-030)
+converts a ``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA)
+budget-exceeded items into real accuracy, fully recovering two datasets that
+were previously penalized to zero. However, we show that the residual failure
+modes on 2WikiMultiHop/DROP are \emph{selection ceilings} of the frozen model
+--- gold answers are verbatim in the evidence yet the model selects the wrong
+entity --- and that no string-anchored or prompt-level correction can recover
+them (all four falsified heuristics are net-negative). This paper's
+contribution is the \emph{honest map} of where slot-based RAG stands under a
+matched budget and why: the architecture succeeds when retrieval is the
+bottleneck (budget-limited), and saturates when answer \emph{selection} is the
+bottleneck (model-limited).
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}\label{sec:intro}
+\input{sections/intro}
+
+\section{Preliminaries and the Slot Compiler}\label{sec:method}
+\input{sections/method}
+
+\section{Matched-Budget Experimental Setup}\label{sec:setup}
+\input{sections/setup}
+
+\section{Results}\label{sec:results}
+\input{sections/results}
+
+\section{Why Credit Is Not Gained by Local Fixes}\label{sec:guardrails}
+\input{sections/guardrails}
+
+\section{Related Work}\label{sec:related}
+\input{sections/related}
+
+\section{Conclusion}\label{sec:conclusion}
+\input{sections/conclusion}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs}
+
+\end{document}

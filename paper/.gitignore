@@ -1,0 +1,13 @@
+# Build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+# acmart sources vendored locally; keep class but ignore dtx/ins source
+acmart.dtx
+acmart.ins
+# keep acmart.cls and ACM-Reference-Format.bst (vendored for reproducible build)
