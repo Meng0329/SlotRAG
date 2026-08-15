@@ -2,7 +2,7 @@
 
 > **最后更新**: 2026-08-15  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ⏳ 进行中。**用户裁定（2026-08-15）接受 25% Coverage 转论文**。诚实 §4.3 matched-budget 主表 = 1/4 = 25%（musique WIN、hotpotqa TIE 距 graphrag 0.058 一步之遥、2wiki/drop LOSS）。方向 B 勘察（H-031）证伪字符串校正，策略层在"不换模型"下穷尽（H-022×3 + H-020/H-027 rejected + H-018 已生效仍截短）。25% = qwen3.6-27b matched-budget 真实 Coverage 上限，论文用 honest 叙事
+> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 骨架完成（`paper/`，commit `d367f7e`+`8a9dea8`，4 页 PDF 编译通过）。**用户裁定（2026-08-15）接受 25% Coverage 转论文**。诚实 §4.3 matched-budget 主表 = 1/4 = 25%（musique WIN、hotpotqa TIE 距 graphrag 0.058 一步之遥、2wiki/drop LOSS）。方向 B 勘察（H-031）证伪字符串校正，策略层在"不换模型"下穷尽（H-022×3 + H-020/H-027 rejected + H-018 已生效仍截短）。25% = qwen3.6-27b matched-budget 真实 Coverage 上限，论文用 honest 叙事
 
 ---
 
@@ -223,7 +223,13 @@
   - **全量配对质量判定（关键）**：both-ok 配对 **无系统性退化**——musique −0.010 (35w/35l 对称)、hotpotqa +0.006 (32w/25l)、2wiki +0.002 (44w/38l)、drop +0.001 (32w/26l)，总 143w/124l/2771t。**"acc_ok 下降"（musique 0.626→0.582）是集合构成假象**：guard ok=439 幸存者 vs budget ok=867 全含（纳入 426 个 BE 回收项），非真实质量回归。BE 回收质量高：musique 426 回收 mean 0.547 (282/426)、hotpotqa 326 回收 mean 0.764、2wiki 38 回收 mean 0.633
   - **2wiki 37 残尾 BE = 全结构硬顶（37/37 also-BE-under-guard，0 recovered-to-BE）**：非预算修复引入，是极端题在 4-call 预算下无论方法都做不完
   - **关键叙事转变**：预算修复完成的是"假崩溃→真实准确率"转换（musique/hotpotqa），但 **2wiki/drop 是固有准确率差（非预算）**——drop 全程 0 BE 预算修复零作用，天生输；2wiki 回收后仍输。**honest 主表 25% Coverage，与 Phase 3 名义 40/50%（非 matched-budget + 未全量 BE 清洗）不符**
-### Phase 5: 论文 + Artifact ⏳ 待启动
+### Phase 5: 论文 + Artifact ✅ 论文骨架完成（commit `d367f7e` + `8a9dea8`）
+
+- **论文位置**: `paper/`（acmart sigconf，4 页 PDF，`latexmk -pdf` 编译通过，0 错误/未定义引用）
+- **结构**: `main.tex` → `sections/{intro,method,setup,results,guardrails,related,conclusion,figcoverage}.tex`，`refs.bib`（9 条），vendored `acmart.cls` + `ACM-Reference-Format.bst`，Fig 1 = `figures/coverage_main.png`（主表柱状图，300dpi）
+- **honest 叙事**: 主结果 Coverage 1/4=25%；budget-fix 消融（H-029/H-030）"假崩溃→真实准确率"；2wiki/drop 选型天花板归因（H-022×3 + 4 falsified 字符串校正）；诚实护栏（不虚报 40%、不混淆 acc_ok/acc_full、不 claim beat-SOTA）
+- **build 注意**: matplotlib-PDF 嵌入 acmart 报伪 "Missing $"（图必须用 PNG）；acmart 需 lmodern + vendored 类文件
+- **未做**: refs 方法对比小节可补 IRCoT/GraphRAG/ReAct；full 12,557-sample SEALED 全量运行
 
 ---
 
