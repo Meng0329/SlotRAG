@@ -17,17 +17,31 @@ DROP      & $1000$ & 0.6393  & \textbf{0.6403} & $-0.0843$ & GraphRAG 0.7246 & L
 \bottomrule
 \end{tabular}
 \caption{Matched-budget ($\S$4.3) main table. \texttt{acc\_full} scores
-budget-exceeded items as 0; budget-fix = H-029/H-030 method.}
+budget-exceeded items as 0; budget-fix = H-029/H-030 method. Verdicts here
+are the \emph{aggregate} $\Delta$ vs each strongest baseline (Table~\ref{tab:mcnemar}
+gives the paired per-item test, which validates MuSiQue and demotes HotpotQA
+from TIE to a significant loss).}
 \label{tab:main}
 \end{table}
 
 \input{sections/figcoverage}
 
 
-Under the WIN/TIE/LOSS rule ($|\Delta|>0.03$), \textsc{SlotRAG-X} wins MuSiQue,
-ties HotpotQA within 0.028 of GraphRAG, and loses 2WikiMultiHop and DROP on
-inherent accuracy gaps. Strongest-Baseline Coverage is $1/4 = 25\%$
-(StrategyQA is excluded as a robust TIE, $\S$\ref{sec:results:failure}).
+Under the aggregate WIN/TIE/LOSS rule ($|\Delta|>0.03$), \textsc{SlotRAG-X}
+wins MuSiQue, ties HotpotQA within 0.028 of GraphRAG, and loses 2WikiMultiHop
+and DROP on inherent accuracy gaps. Strongest-Baseline Coverage is $1/4 =
+25\%$ (StrategyQA is excluded as a robust TIE, $\S$\ref{sec:results:failure}).
+
+We also test the headlined cells with an exact paired McNemar statistic
+(guard-budget vs its strongest baseline on matched \texttt{question\_id}s),
+which is the comparison that determines whether a win is genuine
+\S\ref{tab:mcnemar}. The paired flip margins are decisive: MuSiQue is a
+\emph{significant} paired win ($+64$ flips, $132$ vs $68$, $p<0.001$); the
+HotpotQA aggregate ``TIE'' demotes to a \emph{significant paired loss}
+($-38$, $22$ vs $60$, $p<0.001$); 2WikiMultiHop and DROP are significant
+paired losses (Table~\ref{tab:mcnemar}). Coverage under the paired test
+remains $1/4 = 25\%$, but MuSiQue's win---which a reviewer might dismiss as
+budget-recovery artifact---is confirmed on a head-to-head paired basis.
 
 % Phase 3 nominal 40% is a mixed-set directionality result and is NOT the
 % current headline; it is reported only as a labeled historical estimate.

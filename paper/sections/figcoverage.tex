@@ -7,3 +7,22 @@ Verdict per the 0.03 WIN/TIE/LOSS threshold. Strongest-Baseline Coverage is
 1 out of 4 = 25 percent.}
 \label{fig:coverage}
 \end{figure}
+
+\begin{table}[tb]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Dataset & $n$ & both-correct & guard-only & baseline-only & flip & McNemar $p$\\
+\midrule
+MuSiQue            & 867 & 468 & 132 & 68  & $+64$ & $<0.001$\\
+HotpotQA           & 1000 & 848 & 22  & 60  & $-38$ & $<0.001$\\
+2WikiMultiHop      & 1000 & 715 & 44  & 96  & $-52$ & $<0.001$\\
+DROP               & 1000 & 685 & 34  & 121 & $-87$ & $<0.001$\\
+\bottomrule
+\end{tabular}
+\caption{Exact paired McNemar on matched \texttt{question\_id}s (guard-budget
+vs strongest baseline). ``guard-only'' = correct under guard-budget, wrong
+under baseline; ``baseline-only'' = the reverse. Every cell is significant at
+$\alpha=0.05$; the win/loss direction is the sign of the flip margin.}
+\label{tab:mcnemar}
+\end{table}
