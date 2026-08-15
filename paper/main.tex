@@ -32,7 +32,10 @@ SlotRAG-X achieves an Exact-Match/F1 Strongest-Baseline Coverage of
 and DROP lose on inherent accuracy gaps). A budget-fix ablation (H-029/H-030)
 converts a ``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA)
 budget-exceeded items into real accuracy, fully recovering two datasets that
-were previously penalized to zero. However, we show that the residual failure
+were previously penalized to zero. We are explicit that the MuSiQue win is
+carried by those budget-recoveries (paired both-ok margin vs IRCoT is
+approximately neutral), and that the Coverage percentage mixes Exact-Match
+and DROP-F1 cells. We further show that the residual failure
 modes on 2WikiMultiHop/DROP are \emph{selection ceilings} of the frozen model
 --- gold answers are verbatim in the evidence yet the model selects the wrong
 entity --- and that no string-anchored or prompt-level correction can recover

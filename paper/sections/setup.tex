@@ -27,3 +27,17 @@ strongest adapted baseline, a TIE when $|\Delta|\le 0.03$, and a LOSS
 otherwise; Coverage is the fraction of datasets won. Non-determinism of the
 decoder on boundary questions (flip rates $0$--$3.9\%$) is disclosed and
 SEALED results are averaged over runs with run-to-run ranges reported.
+
+\paragraph{Metric and baseline disclosures.}  \texttt{acc\_full}/primary
+score is Exact-Match on HotpotQA, 2WikiMultiHop, MuSiQue and drop\_F1 on
+DROP; collapsing these into a single Coverage percentage mixes per-domain
+metrics, and we report the Coverage figure with that caveat explicit. All
+baselines are \emph{adapted} (not exact upstream) and run under the matched
+budget; the strongest baseline identity/values changed across phases on two
+datasets (2WikiMultiHop strongest moved react~$\rightarrow$~IRCoT,
+$0.7936\rightarrow0.7449$; DROP GraphRAG $0.7613\rightarrow0.7246$), so
+``strongest adapted baseline'' is defined per the matched protocol at the
+time of this evaluation and should not be read as a stable absolute SOTA.
+The headlined four cells (n=867/1000/1000/1000) are single-run; StrategyQA
+alone is 3-run averaged, and the hotpotqa TIE margin (0.0282) is within the
+decoder's disclosed flip range.
