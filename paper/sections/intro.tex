@@ -12,8 +12,8 @@ papers defer: \emph{under a matched budget --- the same finite retrieval and
 inference budget granted to the strongest published baselines --- how much of a
 benchmark does a slot-based RAG system actually cover?} We answer it
 concretely with a slot-based system, \textsc{SlotRAG-X}, evaluated on five
-multi-hop benchmarks (HotpotQA, 2WikiMultiHop, MuSiQue, StrategyQA, DROP)
-against their strongest adapted baselines, using one fixed LLM (Qwen3.6-27B)
+multi-hop benchmarks (HotpotQA \cite{hotpotqa}, 2WikiMultiHop \cite{2wikimultihop}, MuSiQue \cite{musique}, StrategyQA \cite{strategyqa}, DROP \cite{drop})
+against their strongest adapted baselines, using one fixed LLM (Qwen3.6-27B \cite{qwen3})
 and an identical per-benchmark budget ($\S$4.3: $\max\_\mathrm{retrieval\_calls}=4$,
 $\max\_\mathrm{llm\_calls}=64$, $\max\_\mathrm{steps}=4$, $300$~s/query).
 
