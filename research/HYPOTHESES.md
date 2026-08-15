@@ -664,4 +664,9 @@
     - **这是 H-022 选型天花板（qwen3.6-27b 稳定选错候选）第三次跨运行确认**（H-025/H-026/H-028 同签名：gold 在 evidence 但仍答错）。预算修复既不造成也不修复这些翻转。
   - **判定: no-regression PASS**。H-029/H-030 在全部 4 个低/高 BE 数据集上无质量回归（musique/hotpotqa both-ok 净中性或正，drop 完美零变化，2wiki 回归全为生成器噪声）。
 - **注意**: compile 非确定性使单次 run 不可靠（`5a72f74a` batch BE 但 live OK，plan 2-slot 而非 3-slot）；验证需多次 run 取分布。n120 配对样本即此分布验证。
+- **全量 matced-budget 运行确认（2026-08-14, `runs/slotrag-phase4-budget-full`, n=867/1000/1000/1000, paired b1 guard → budget）**:
+  - **§4.3 matched-budget 主表**: **musique acc_full 0.3171→0.5807**（BE 428→0，+0.0544 Δ，**翻正穿越 ircot 0.5263 → WIN**）；**hotpotqa 0.5312→0.7842**（BE 326→0，−0.0282 Δ vs graphrag 0.8124 → TIE，0.058 一步之遥）；**2wiki 0.6644→0.6901**（BE 75→37，−0.0548 Δ vs ircot 0.7449 → LOSS）；**drop 0.6393→0.6403**（BE 0→0，−0.0843 Δ vs graphrag 0.7246 → LOSS）。**Coverage = 1/4 = 25%**（strategyqa 排除，仅 musique WIN）。
+  - **全量 both-ok 配对质量判定（区分真实回归 vs 集合假象）**: **无系统性退化**——musique −0.010 (35w/35l 对称)、hotpotqa +0.006 (32w/25l)、2wiki +0.002 (44w/38l)、drop +0.001 (32w/26l)，总 **143w/124l/2771t**。**"acc_ok 下降"（musique 0.626→0.582）是集合构成假象**：guard ok=439 幸存者 vs budget ok=867 全含（纳入 426 个 BE 回收项、mean 0.547），真实质量信号是 both-ok 对称噪声。BE 回收质量高：musique 426 回收 mean 0.547 / hotpotqa 326 回收 mean 0.764 / 2wiki 38 回收 mean 0.633。
+  - **2wiki 37 残尾 BE = 全结构硬顶**（37/37 also-BE-under-guard，0 recovered-to-BE）：极端题 4-call 预算下无论方法做不完，非预算修复引入。
+  - **关键叙事转变**: 预算修复完成"假崩溃→真实准确率"转换（musique/hotpotqa），但 **2wiki/drop 是固有准确率差、非预算问题**（drop 全程 0 BE、预算修复零作用天生输 graphrag；2wiki 回收后仍输 ircot）。**honest matched-budget Coverage = 25%**，低于 Phase 3 名义 40/50%（非 matched-budget + 未全量 BE 清洗）。**已裁定（2026-08-15）：接受 25% 转 Phase 5 论文**。H-031 勘察证伪方向 B（字符串校正四套模拟全净负，alias 失败本质是 H-022 选型天花板非字符串问题；"生成契约修正"=重复已拒 H-018），策略层在"不换模型"下穷尽，25% = qwen3.6-27b matched-budget 真实 Coverage 上限。
 

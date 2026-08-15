@@ -148,10 +148,26 @@ Phase 4 用 `research/generate_sealed_samples.py --set test --size all` 预写�
 
 **判定：H-030 PASS。** 与 H-029 合璧后 §4.3 budget_exceeded 结构性损失**完整解决**。
 
-### 6.4 Phase 4 主表口径下的预期（待全量运行确认）
+### 6.4 Phase 4 主表口径下的实际结果（全量运行完成）
 
-n120 样本的 guard BE 率（musique 29.2% / hotpotqa 33.3%）接近 b1 全量（49.4% / 32.6%），但 n120 的 **guard acc_ok 略低于全量**（musique n120 acc_ok 0.680 vs 全量 0.626——实际上 n120 ok 项质量略高；guard acc_full n120 0.600 高于全量 0.317，因 n120 BE 率更低 29.2% vs 49.4%）。**H-029 在 n120 的 +9.0pt / +10.6pt acc_full 增益是全量 guard-BE 回收的保守下限**：全量 musique BE 率更高（49.4%），预计回收更多项（但每项 mean 需全量验证）。H-030 进一步保证残留 BE 项也能回收。
+**n120 预测回顾**：n120 预计 musique/hotpotqa 显著改善、2wiki/drop 维持 LOSS、Coverage 口径待定——全量运行在 musique/hotpotqa 上兑现（BE 归零、acc_full 大幅恢复），2wiki/drop 维持 LOSS 兑现，但 **Coverage 落在 25% 而非 40%**。
 
-**已确认（n120 配对验证）**：H-029+H-030 合璧后 guard-budget 在其配对样本上 **acc_full = acc_ok**（BE 26/26 全回收后无 budget 惩罚），musique **0.600→0.690 (+9.0pt)**、hotpotqa **0.646→0.752 (+10.6pt)**。两数据集残留 BE 均为 0。
+**全量 §4.3 matched-budget 主表（n=867/1000/1000/1000，paired b1 guard → budget）**：
 
-**待办**：全量（n=1000/集）guard-budget 运行完成后，重算主表 acc_full + 每数据集 Δ 判定 + Coverage。若 2wiki/drop 不受影响（BE 率低），主表可能从 4/4 LOSS → musique/hotpotqa 显著改善（上限接近 b1 全量 acc_ok：musique 0.626 / hotpotqa 0.788），2wiki/drop 维持 LOSS，Coverage 口径待定。
+| dataset | acc_full g→b | acc_ok g→b | BE g→b | baseline | Δ_budget | verdict |
+|---|---|---|---|---|---|---|
+| musique | 0.3171→**0.5807** | 0.6262→0.5820 | 428→**0** | ircot 0.5263 | **+0.0544** | 🟢 WIN |
+| hotpotqa | 0.5312→**0.7842** | 0.7882→0.7842 | 326→**0** | graphrag 0.8124 | **−0.0282** | 🟡 TIE |
+| 2wiki | 0.6644→**0.6901** | 0.7183→0.7167 | 75→**37** | ircot 0.7449 | **−0.0548** | 🔴 LOSS |
+| drop | 0.6393→0.6403 | 0.6393→0.6403 | 0→0 | graphrag 0.7246 | **−0.0843** | 🔴 LOSS |
+
+**Coverage = 1/4 = 25%**（strategyqa 排除，仅 musique WIN）。
+
+**关键质量判定（全量 both-ok 配对，区分真实回归 vs 集合假象）**：
+- **无系统性质量退化**：both-ok 配对 musique −0.010 (35w/35l 对称)、hotpotqa +0.006 (32w/25l)、2wiki +0.002 (44w/38l)、drop +0.001 (32w/26l)，总 **143w/124l/2771t**。单 query 降级不造成质量回归。
+- **"acc_ok 下降"（musique 0.626→0.582）是集合构成假象**：guard ok=439 幸存者 vs budget ok=867 全含（纳入 426 个 BE 回收项——结构更难、mean 0.547），非真实质量退化。真实信号是 both-ok 配对的对称噪声。
+- **BE 回收质量高**：musique 426 回收 mean 0.547 (282/426)、hotpotqa 326 回收 mean 0.764、2wiki 38 回收 mean 0.633。
+
+**2wiki 37 残尾 BE 归因**：**37/37 also-BE-under-guard，0 recovered-to-BE**——全为结构硬顶（极端题在 4-call 预算下无论方法都做不完），非预算修复引入。预算修复在 2wiki 已接近极限（75→37），剩 37 是预算结构上限。
+
+**结论（叙事转变）**：预算修复完成"假崩溃→真实准确率"转换（musique/hotpotqa），但 **2wiki/drop 是固有准确率差、非预算问题**——drop 全程 0 BE（预算修复零作用，天生输 graphrag 0.084）、2wiki 回收后仍输 ircot 0.055。**honest matched-budget Coverage = 25%**，与 Phase 3 名义 40/50%（非 matched-budget + 未全量 BE 清洗）不符。**已裁定（2026-08-15）：接受 25% 转 Phase 5 论文**。方向 B 勘察（H-031）证伪字符串校正，策略层在"不换模型"下穷尽（H-022 选型天花板×3 + H-020/H-027 rejected + H-018 已生效仍截短），25% = qwen3.6-27b matched-budget 真实 Coverage 上限。论文用 honest 叙事，Weakest-Baseline 覆盖单列。

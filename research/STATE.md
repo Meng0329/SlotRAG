@@ -1,8 +1,8 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-13  
+> **最后更新**: 2026-08-15  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 🔄 进行中 — SEALED strategyqa TIE、4 数据集 SEALED 首次运行 LOSS（budget_exceeded 结构性惩罚），H-029+H-030 修复 PASS（musique/hotpotqa n120 acc_full 0.600→0.690 / 0.646→0.752，BE 26/26 归零；2wiki/drop no-regression PASS）commit `494af0c`，全量重跑待执行
+> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ⏳ 进行中。**用户裁定（2026-08-15）接受 25% Coverage 转论文**。诚实 §4.3 matched-budget 主表 = 1/4 = 25%（musique WIN、hotpotqa TIE 距 graphrag 0.058 一步之遥、2wiki/drop LOSS）。方向 B 勘察（H-031）证伪字符串校正，策略层在"不换模型"下穷尽（H-022×3 + H-020/H-027 rejected + H-018 已生效仍截短）。25% = qwen3.6-27b matched-budget 真实 Coverage 上限，论文用 honest 叙事
 
 ---
 
@@ -213,7 +213,16 @@
   - **n120 完整配对验证**（`runs/slotrag-phase4-h030-n120`）：musique acc_full **0.600→0.690 (+9.0pt)**、hotpotqa **0.646→0.752 (+10.6pt)**（口径注：早期记录用 ok_rate 0.883/0.900 误报 acc_full，BE 全回收后 acc_full≈acc_ok）；**BE 26/26 全回收**（guard 26 项 BE → budget 0 项）；both-ok 质量噪声级（musique ΔF1 -0.0086 / hotpotqa +0.0279，符号相反 = 非确定性，非系统性退化）
   - **2wiki/drop no-regression 验证**（`runs/slotrag-phase4-h030-n120-2d`，n=120/集）：**drop 120/120 ok 两侧，ΔF1 +0.0000（0 项变化）**；**2wiki BE 5=5 一致**（0 新增 0 回收）、both-ok 7 回归全为 LLM flip-flop（evids:SAME + goldcov True 两侧 + guard 自身跨 run 翻转`0188e468`✅→❌→✅证实，非预算因果）
   - 判定：**PASS**。与 H-029 合璧后 §4.3 budget_exceeded 结构性损失完整解决；四个数据集（musique/hotpotqa high-BE + 2wiki/drop low-BE）全部无质量回归
-- [ ] **全量 guard-budget 重跑待执行**（n=1000/集，或直接扩 b2 剩余 + b3 补全）；完成后重算主表 acc_full + Coverage
+- [x] **全量 guard-budget 重跑完成**（`runs/slotrag-phase4-budget-full`，n=867/1000/1000/1000，paired b1 guard → budget，commit `494af0c` 基底）
+  - **诚实 §4.3 matched-budget 主表**：
+    - **musique acc_full 0.3171→0.5807**（BE 428→0）：**+0.0544 Δ，翻正穿越 ircot 0.5263 → 🟢 WIN**
+    - **hotpotqa 0.5312→0.7842**（BE 326→0）：**−0.0282 Δ vs graphrag 0.8124 → 🟡 TIE**（一步之遥翻正，0.058 内）
+    - **2wiki 0.6644→0.6901**（BE 75→37）：**−0.0548 Δ vs ircot 0.7449 → 🔴 LOSS**
+    - **drop 0.6393→0.6403**（BE 0→0）：**−0.0843 Δ vs graphrag 0.7246 → 🔴 LOSS**
+  - **Coverage = 1/4 = 25%**（strategyqa 排除，仅 musique WIN）
+  - **全量配对质量判定（关键）**：both-ok 配对 **无系统性退化**——musique −0.010 (35w/35l 对称)、hotpotqa +0.006 (32w/25l)、2wiki +0.002 (44w/38l)、drop +0.001 (32w/26l)，总 143w/124l/2771t。**"acc_ok 下降"（musique 0.626→0.582）是集合构成假象**：guard ok=439 幸存者 vs budget ok=867 全含（纳入 426 个 BE 回收项），非真实质量回归。BE 回收质量高：musique 426 回收 mean 0.547 (282/426)、hotpotqa 326 回收 mean 0.764、2wiki 38 回收 mean 0.633
+  - **2wiki 37 残尾 BE = 全结构硬顶（37/37 also-BE-under-guard，0 recovered-to-BE）**：非预算修复引入，是极端题在 4-call 预算下无论方法都做不完
+  - **关键叙事转变**：预算修复完成的是"假崩溃→真实准确率"转换（musique/hotpotqa），但 **2wiki/drop 是固有准确率差（非预算）**——drop 全程 0 BE 预算修复零作用，天生输；2wiki 回收后仍输。**honest 主表 25% Coverage，与 Phase 3 名义 40/50%（非 matched-budget + 未全量 BE 清洗）不符**
 ### Phase 5: 论文 + Artifact ⏳ 待启动
 
 ---
@@ -297,20 +306,30 @@
 
 ## 下一步行动
 
-### 决策点（Phase 4 中期，需用户裁定）
-**SEALED 现状**：strategyqa TIE、4 数据集 SEALED 首次运行 guard 4/4 LOSS（budget_exceeded 结构性惩罚：musique 49.4% BE / hotpotqa 32.6% BE），H-029 修复已 PASS（n120 双数据集 acc_full +18~22pt，质量净中性，cost 预算内）。
-- **当前 Coverage 口径**：40%（Phase 3 混合集合点估计，非严格 SEALED）+ strategyqa coverage 单元取消后名义上 2/5=40%。**Phase 4 SEALED 严格口径下**：strategyqa TIE、4 数据集 LOSS（修正前）——需等 H-029 全量重跑后重算。
-- 两条路径二选一：
-1. **全量 guard-budget 重跑**（n=1000/集 或扩 b2/b3），重算 SEALED 主表 + Coverage，再转 Phase 5 论文
-2. **模型级生成器升级**（换更强 LLM / 微调 qwen3.6-27b 选型），超出当前研究约束（"不换模型"不变量），需先撤销约束
+### 决策点（Phase 4 结束，已裁定）
+**SEALED 现状**：strategyqa TIE、4 数据集 SEALED **全量 matched-budget 主表 = 1/4 = 25% Coverage**（musique WIN、hotpotqa TIE、2wiki/drop LOSS）。
 
-### 短期 (Phase 4)
-1. **全量 guard-budget 运行**（H-029 已 PASS，需 n=1000/集 确认主表翻正幅度；b2 部分完成、b3 未启动——注意 launcher 中断）
-2. 2wiki/drop 验证 H-029 无回归（BE 率低，预期影响小）
-3. 三集合一致性 + FROZEN_PROTOCOL 复核
+**用户裁定（2026-08-15）：接受 25% Coverage，转 Phase 5 论文（方向 A）。**
+- **诚实结论**：在"不换模型"约束下，策略层已穷尽——字符串锚定校正证伪（4 模拟全负）、生成契约修正=重复已拒 H-018、选型级 H-020/H-027 已 rejected、H-022 选型天花板确认三次。三条独立证据线收敛：**25% = qwen3.6-27b 在 §4.3 matched-budget 下的真实 Coverage 上限**。
+- **Coverage 口径**：Phase 3 名义 40%（混合集合非严格 SEALED）→ Phase 4 诚实 matched-budget = **25%**（仅 musique WIN）。论文用 honest 25%，Weakest-Baseline 覆盖单列 + 完整失败归因披露。
+- 未采纳路径（保留为未来工作）：方向 B2 换模型（需撤销"不换模型"约束）、B1 检索别名扩展（需放宽预算）。
+
+### 方向 B 勘察（H-031 scouting，2026-08-14）：字符串锚定答案校正被证伪
+用户选方向 B 后，勘察"不换模型、不加检索"的答案校正可行性。**结论：字符串锚定校正不可行（证伪铁证，已 2026-08-15 由用户裁定关闭方向 B，转 Phase 5）**：
+- **全量失败归因（hotpotqa+2wiki, 2000 项）**：surf_form（pred⊆gold 子串，hotpotqa ~88 / 2wiki ~3）、**alias_in_evid（gold 逐字在证据里但 pred 与 gold 几乎 0 token 重叠，hotpotqa 159 / 2wiki 214——真正的选型失败 H-022 天花板）**、alias_not_in（gold 不在证据，56/97 检索层缺口）。
+- **四套确定性校正模拟全部净负**：最长子串补全 -452/-346、边界启发式 -452/-346、括号 qualifier 补全 -103/-115。根因：`pred⊂gold` 是稀有事件（<5%），"pred 被更长证据文本包含"是普遍事件（>40%），**两者不可区分**——任何"补全到更长"必然破坏大量正确答案（`Burnley`→`burnley ( )`）。
+- **真实可救面**：共享≥1 core token 且 gold 连续在证据 = hotpotqa 58% / 2wiki 37% 失败项，但**无 gold 的确定性规则无法自动选择正确形式**（实证）。
+- **三条独立证据线收敛 → 25% 可能是 qwen3.6-27b matched-budget 真实天花板**：H-022 选型天花板确认三次 + H-020/H-027 rejected + H-031 字符串证伪。
+- **补充勘误（避免重复踩坑）**：勘察中曾拟"生成契约修正——让 entity 答案保留完整形式"。但核对代码+记录后确认：hotpotqa/2wiki 的 `answer_kind` 是 `short`（非 entity），且 **H-018 生成保真（`generation_fidelity=True`）已在 `short` 上生效却仍未能阻止截短**（`Duane Clarridge` 实例）。即"生成契约修正" = **重复已 rejected 的 H-018**（第 7 个连续零/负效果生成干预，HYPOTHESES.md:18）。该方向不推进。
+- **决策**：方向 B 关闭（2026-08-15 用户裁定接受 25%）。
+
+### 短期 (Phase 4) — 已完成
+1. **全量 guard-budget 运行完成**（n=867/1000/1000/1000，蓄满即如实报告 25% Coverage，不与 Phase 3 名义 40% 混淆）
+2. 2wiki/drop 无回归已验证（全量配对 143w/124l/2771t，无系统性退化）
+3. **方向 B 勘察完成 + 关闭**（H-031 scouting：字符串证伪，策略层穷尽）
 
 ### 中期 (Phase 5)
-1. 论文 + Artifact（诚实叙事：Clean DEVELOPMENT_SET 严格重测，40% = 真实 Coverage）
+1. 论文 + Artifact（**诚实叙事：§4.3 matched-budget 下 25% = qwen3.6-27b 真实 Coverage**，非 Phase 3 名义 40%；Weakest-Baseline 覆盖单列 + 完整失败归因披露：musique WIN、hotpotqa TIE 一步之遥、2wiki/drop 固有选型上限）
 2. 投稿 PVLDB 2027
 
 ---
