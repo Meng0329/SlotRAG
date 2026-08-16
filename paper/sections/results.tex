@@ -93,11 +93,13 @@ per-item test would likely downgrade it; we do not claim systems superiority.
 \subsection{Failure Attribution: Selection Ceilings}\label{sec:results:failure}
 
 Across 2000 items (HotpotQA + 2wiki, guard-budget), failures split into
-\emph{surface-form} truncation ($\sim$88 HotpotQA / $\sim$3 2wiki; predicted
+\emph{surface-form} truncation ($72$ HotpotQA / $8$ 2wiki; predicted
 answer is a substring of gold, e.g.\ \emph{Duane Clarridge} vs
 \emph{Duane ``Dewy'' Clarridge}), \emph{alias-in-evidence} selection failure
-($159$ / $214$; gold verbatim in the evidence yet the model picks another
-entity), and \emph{alias-not-in-evidence} retrieval gaps ($56$ / $97$).
+($230$ / $270$; gold verbatim in the evidence yet the model picks another
+entity), and \emph{alias-not-in-evidence} retrieval gaps ($61$ / $89$).
+Alias-in-evidence is the dominant failure on both ($63\%$ / $67\%$ of
+wrongs), confirming the selection ceiling is not a retrieval artifact.
 
 Extending the same taxonomy to the dataset we \emph{win} (MuSiQue, $474$
 guard-budget wrong), the ceiling generalizes rather than being a 2wiki
@@ -114,13 +116,16 @@ Four string-correction heuristics (longest-substring completion, boundary
 truncation, parenthetical completion, and a distribution proof of
 infeasibility) are \emph{all net-negative}, e.g.\ longest-substring completion
 nets $-452$ (HotpotQA) / $-346$ (2wiki) by pulling answers into full
-sentences. Because ``pred is a substring of gold'' is rare ($<5\%$) while
-``pred is contained in longer evidence'' is common ($>40\%$), no
-gold-free deterministic rule can extend short answers without breaking many
-correct ones. This is the selection-ceiling evidence (H-022, confirmed $3\times$):
-gold answers are verbatim in the evidence and post-processing yields no gain.
-The correct intervention would be a stronger selector, which is out of scope
-under the frozen-model condition.
+sentences. The asymmetry that defeats any such rule is visible in the wrong
+items: ``pred is contained in longer evidence'' holds for $77$--$84\%$ of
+wrong answers (the model almost always produces a well-formed fragment of the
+gold context), so a rule that extends short answers toward the longer
+evidence breaks far more correct answers than it repairs. A gold-free
+deterministic rule therefore cannot raise net accuracy; this is the
+selection-ceiling evidence (H-022, confirmed $3\times$): gold answers are
+verbatim in the evidence and post-processing yields no gain. The correct
+intervention would be a stronger selector, which is out of scope under the
+frozen-model condition.
 
 StrategyQA is a robust TIE, not a WIN: three-run mean guard $0.8815$ vs IRCoT
 $0.8833$ ($\Delta=-0.19$pt), with the decoder flip-flopping on arithmetic
