@@ -99,6 +99,17 @@ answer is a substring of gold, e.g.\ \emph{Duane Clarridge} vs
 ($159$ / $214$; gold verbatim in the evidence yet the model picks another
 entity), and \emph{alias-not-in-evidence} retrieval gaps ($56$ / $97$).
 
+Extending the same taxonomy to the dataset we \emph{win} (MuSiQue, $474$
+guard-budget wrong), the ceiling generalizes rather than being a 2wiki
+artifact: \emph{alias-in-evidence} selection failure again dominates, at
+$230/474 = 48.5\%$ of wrongs (gold verbatim in the evidence, model picks
+another entity), with \emph{alias-not-in-evidence} retrieval gaps at
+$171/474 = 36.1\%$ and \emph{surface-form} truncation at $73/474 = 15.4\%$
+(e.g.\ \emph{Paraguay} for \emph{Alfredo Stroessner's Paraguay}). The ~25\% limit is
+therefore not a per-dataset fluke: the same selector that drives MuSiQue's
+recoverable budget-loss also caps it at the model-level ceiling once the
+budget signal is released.
+
 Four string-correction heuristics (longest-substring completion, boundary
 truncation, parenthetical completion, and a distribution proof of
 infeasibility) are \emph{all net-negative}, e.g.\ longest-substring completion
