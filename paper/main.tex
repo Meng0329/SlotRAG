@@ -28,8 +28,10 @@ max\_steps=4, 300s/query --- the \S4.3 protocol).
 
 Our headline finding is deliberately honest: under this matched budget,
 SlotRAG-X achieves an Exact-Match/F1 Strongest-Baseline Coverage of
-\emph{25\%} (1/4 --- MuSiQue wins, HotpotQA ties within 0.028, 2WikiMultiHop
-and DROP lose on inherent accuracy gaps). A budget-fix ablation (H-029/H-030)
+\emph{25\%} ($1/4$ over the four headlined cells --- MuSiQue wins, HotpotQA
+ties within 0.028 under the aggregate rule, 2WikiMultiHop and DROP lose on
+inherent accuracy gaps; $1/5=20\%$ outright wins when StrategyQA's robust
+TIE is included). A budget-fix ablation (H-029/H-030)
 converts a ``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA)
 budget-exceeded items into real accuracy, fully recovering two datasets that
 were previously penalized to zero. We are explicit that the MuSiQue win is
