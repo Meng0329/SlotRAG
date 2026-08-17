@@ -89,6 +89,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", type=str, default="2wikimultihop")
     ap.add_argument("--split", type=str, default="dev")
+    ap.add_argument("--split-file", type=str, default="",
+                    help="explicit filename under benchmark/<dataset>/; overrides split")
+    ap.add_argument("--prefix-filter", type=str, default="",
+                    help="only process questions whose id starts with this prefix (e.g. 3hop1)")
     ap.add_argument("--n", type=int, default=15)
     ap.add_argument("--budgets", type=str, default="1,2,3,4,5,6")
     ap.add_argument("--first-window", type=int, default=3)
@@ -107,14 +111,19 @@ def main(argv=None):
     cal = _calibrator()
     budgets = [int(b) for b in args.budgets.split(",") if b.strip()]
 
-    data_path = ROOT / "benchmark" / args.dataset / ("%s_%s.jsonl" % (args.dataset, args.split))
+    data_path = ROOT / "benchmark" / args.dataset / (
+        args.split_file if args.split_file else "%s_%s.jsonl" % (args.dataset, args.split))
     if not data_path.exists():
         print("missing %s" % data_path)
         return 1
     problems = []
     with open(data_path) as f:
         for line in f:
-            problems.append(json.loads(line))
+            prob = json.loads(line)
+            pid = str(prob.get("id") or "")
+            if args.prefix_filter and not pid.startswith(args.prefix_filter):
+                continue
+            problems.append(prob)
             if len(problems) >= args.n:
                 break
 

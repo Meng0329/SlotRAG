@@ -77,6 +77,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", type=str, default="hotpotqa")
     ap.add_argument("--split", type=str, default="validation")
+    ap.add_argument("--split-file", type=str, default="",
+                    help="explicit filename under benchmark/<dataset>/; overrides split")
     ap.add_argument("--well-defined-json", type=str,
                     default="/tmp/g5_welldefined_tau_hotpotqa.json")
     ap.add_argument("--budget", type=int, default=6)
@@ -102,7 +104,8 @@ def main(argv=None):
     keep_qids = set(wd_by_qid.keys())
     print("well-defined chains available: %d" % len(keep_qids))
 
-    data_path = ROOT / "benchmark" / args.dataset / ("%s_%s.jsonl" % (args.dataset, args.split))
+    data_path = ROOT / "benchmark" / args.dataset / (
+        args.split_file if args.split_file else "%s_%s.jsonl" % (args.dataset, args.split))
     if not data_path.exists():
         print("missing %s" % data_path)
         return 1
