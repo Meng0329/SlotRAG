@@ -114,7 +114,7 @@ def main(argv=None):
         # gold per slot? We don't have gold per slot cheaply; instead we treat a
         # slot as 'recovered' if ANY extraction materialized non-empty bindings at
         # that budget (target value found). Scarcity = needs >base calls.
-        ps = [Passage(id=p["id"], text=p["text"], doc_id=p["doc_id"]) for p in passages]
+        ps = [Passage(id=str(p["id"]), text=p["text"], doc_id=p["doc_id"]) for p in passages]
         retriever = HybridRetriever(
             passages=ps, embedding_client=embedding, reranker_client=reranker,
             bm25_k=20, dense_k=20, final_k=20, rrf_k=60,
