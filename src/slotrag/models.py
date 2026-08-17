@@ -513,3 +513,92 @@ class ExecutionResult(StrictModel):
     status: Literal["ok", "empty", "failed", "budget_exceeded", "unsupported_operation"] = "ok"
     error: str | None = None
     plan: SlotPlan | None = None
+
+
+# ---------------------------------------------------------------------------
+# G1 formal objects: EvidenceType / RequirementStatus / EvidenceRequirement /
+# EvidenceState / EvidenceRecordRequirementRef.
+#
+# Background (phase0 TKDE audit): the legacy system represents an evidence
+# need only implicitly via Slot (typed predicate + arguments + importance),
+# and records satisfaction only as a per-slot scalar sufficiency_status in
+# SlotExecutionTrace. There is no first-class "what evidence is still
+# missing, of which declared type, and why" object.  These classes add that
+# layer WITHOUT changing any existing field, so all legacy models and the
+# 390 offline tests remain valid (additive, non-breaking by design).
+# ---------------------------------------------------------------------------
+
+EvidenceType = Literal["passage", "entity", "relation", "table_row", "structured_record"]
+
+# Distance of a requirement from being satisfiable with the evidence already
+# materialized.  UNRESOLVED: no supporting evidence seen yet.
+# PARTIAL: some evidence, but not enough to bind all its variables.
+# SATISFIED: all variables bound by evidence that passes the provenance check.
+RequirementStatus = Literal["unresolved", "partial", "satisfied"]
+
+# Declared per-type provenance expectation.  Consumed by requirement-aware
+# packers / stopping policies (not yet wired) to decide what "evidence for an
+# entity" means (a passage mentioning the value vs. a typed entity record).
+EVIDENCE_TYPE_METADATA: dict[str, dict[str, str]] = {
+    "passage": {"provenance_unit": "passage", "min_unit": "sentence"},
+    "entity": {"provenance_unit": "value", "min_unit": "cell"},
+    "relation": {"provenance_unit": "triple", "min_unit": "tuple"},
+    "table_row": {"provenance_unit": "row", "min_unit": "row"},
+    "structured_record": {"provenance_unit": "record", "min_unit": "record"},
+}
+
+
+class EvidenceRequirement(StrictModel):
+    """A first-class, typed evidence need of a question.
+
+    In the legacy SlotPlan each Slot carries `importance` and scalar
+    `variable_types`; an EvidenceRequirement makes the *requirement* explicit
+    (status, expected evidence type, dependencies over other requirements)
+    so an optimizer/packer can reason about which requirement is still
+    unsatisfied and how the rest depends on it.  Additive: a SlotPlan can keep
+    working without any EvidenceRequirement attached.
+    """
+
+    id: str = Field(min_length=1)
+    slot_id: str = Field(min_length=1)          # the legacy Slot this requirement governs
+    evidence_type: EvidenceType = "passage"      # default keeps backward semantics (text)
+    status: RequirementStatus = "unresolved"
+    importance: float = Field(default=1.0, gt=0)
+    # variables this requirement must bind, expressed with "?"-prefix as in Slot
+    variables: list[str] = Field(default_factory=list)
+    # dependency is over *requirement* ids (not slot ids): if B depends on A,
+    # B is not satisfiable until A is satisfied.
+    depends_on: list[str] = Field(default_factory=list)
+    # unsatisfied reason recorded during execution for mechanism diagnostics
+    unsatisfied_reason: str | None = None
+
+    @property
+    def unresolved_variables(self) -> list[str]:
+        return self.variables
+
+
+class EvidenceState(StrictModel):
+    """A runtime snapshot of all requirements and the evidence bound for them,
+    used as the input contract to a requirement-aware optimizer / packer /
+    re-optimizer.  Captured between execution steps so a re-optimizer can see
+    "which requirement moved from unresolved->partial/satisfied". """
+
+    requirements: list[EvidenceRequirement] = Field(default_factory=list)
+    # per-requirement-id -> source_ids already materialized as (provisional) evidence
+    bound_evidence: dict[str, list[str]] = Field(default_factory=dict)
+    # per-requirement-id -> currently bound variable values
+    bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    budget_used_retrieval: int = Field(default=0, ge=0)
+    budget_used_tokens: int = Field(default=0, ge=0)
+
+    def status_of(self, requirement_id: str) -> RequirementStatus | None:
+        for req in self.requirements:
+            if req.id == requirement_id:
+                return req.status
+        return None
+
+    def satisfied_count(self) -> int:
+        return sum(1 for r in self.requirements if r.status == "satisfied")
+
+    def unresolved_or_partial(self) -> list[EvidenceRequirement]:
+        return [r for r in self.requirements if r.status != "satisfied"]
