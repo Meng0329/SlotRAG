@@ -126,6 +126,9 @@ def _dependency_respecting_orders(logical_plan: LogicalPlan) -> list[list[str]]:
             built.append(sid)
             backtrack(next_remaining, built, next_incoming)
             built.pop()
+    # kick off the enumeration from the empty prefix (missing before G4 audit:
+    # without this call the closure was never invoked and orders stayed []).
+    backtrack(subgoals, [], dict(incoming))
     # cap enumeration: topological enumeration is factorial in the worst case.
     # 256 is a deterministic cap; the requirement-aware selection below is robust
     # to this subset because the dominant candidate is dependency-ordered.
