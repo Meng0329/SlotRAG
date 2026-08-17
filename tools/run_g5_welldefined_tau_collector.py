@@ -94,7 +94,7 @@ def main(argv=None):
     ap.add_argument("--first-window", type=int, default=3)
     ap.add_argument("--out", type=str, default="/tmp/g5_welldefined_tau.json")
     ap.add_argument("--resume-log", type=str, default="/tmp/g5_welldefined_tau.log.jsonl",
-                    help="append each chain's record here immediately (survives kill)
+                    help="append each chain's record here immediately (survives kill)")
     args = ap.parse_args(argv[1:])
     _load_env()
 
