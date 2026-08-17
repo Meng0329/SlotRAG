@@ -161,7 +161,26 @@ def main(argv=None):
             action_policy=PhysicalActionPolicy(topk_expansion_mode="utility"))
         r = ex.execute(plan, strategy="adaptive", physical_plan=static)
         evid = {e.source_id for e in r.evidence}
-        return r, evid
+        # per-slot binding truth: does the slot's extracted binding contain the
+        # gold value? This is the CALIBRATOR-FREE pseudo-label — bindings are the
+        # raw extraction, not filtered by sufficiency judgment.
+        bindings = {}
+        for t in r.slot_traces:
+            binds = t.binding_contexts
+            # S1 truth = any binding has country=="Poland"
+            # S2 truth = any binding has pop=="38 million" (or country=="Poland")
+            s1_ok = any(
+                str(b.get("country", "")).strip().lower() == "poland"
+                for b in binds if isinstance(b, dict))
+            s2_ok = any(
+                (str(b.get("pop", "")).strip().lower() == "38 million")
+                or (str(b.get("country", "")).strip().lower() == "poland")
+                for b in binds if isinstance(b, dict))
+            if t.slot_id == "S1":
+                bindings["S1"] = s1_ok
+            elif t.slot_id == "S2":
+                bindings["S2"] = s2_ok
+        return r, evid, bindings
 
     # sanity: does S2 truth fall outside the first window for its query?
     s2_res = retriever.search(S2_SLOT_QUERY)
@@ -175,20 +194,21 @@ def main(argv=None):
     for budget in budgets:
         kept_s1, kept_s2 = [], []
         for run in range(args.n):
-            res, evid = run_with(budget)
-            kept_s1.append(GOLD["S1"] in evid)
-            kept_s2.append(GOLD["S2"] in evid)
+            res, evid, bindings = run_with(budget)
+            kept_s1.append(bindings.get("S1", False))
+            kept_s2.append(bindings.get("S2", False))
             rows.append({
                 "budget": budget, "run": run,
                 "status": res.status, "calls": res.metrics.retrieval_calls,
                 "keep_s1": GOLD["S1"] in evid, "keep_s2": GOLD["S2"] in evid,
+                "bind_s1": bindings.get("S1", False), "bind_s2": bindings.get("S2", False),
                 "evidence_ids": sorted(evid), "actions": res.metrics.physical_action_executed,
             })
         per_budget[budget] = {
             "keep_s1_rate": sum(kept_s1) / max(len(kept_s1), 1),
             "keep_s2_rate": sum(kept_s2) / max(len(kept_s2), 1),
         }
-        print("budget=%d: keep S1(truth doc1)=%.2f keep S2(truth doc8)=%.2f"
+        print("budget=%d: BIND S1(truth doc1)=%.2f BIND S2(truth doc8)=%.2f"
               % (budget, per_budget[budget]["keep_s1_rate"], per_budget[budget]["keep_s2_rate"]))
 
     # differential signal: does starvation drop S2 before/independently of S1?
