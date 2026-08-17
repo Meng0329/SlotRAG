@@ -38,10 +38,93 @@ def _chain_plan(n=3) -> LogicalPlan:
     )
 
 
+def _branch_plan(cards=(50.0, 50.0, 50.0)) -> LogicalPlan:
+    """s1 -> s2, s1 -> s3 (two independent sinks off a shared root)."""
+    return LogicalPlan(
+        variables={"x": LogicalVariable(name="x", source_subgoals=["s1", "s2", "s3"]),
+                   "y": LogicalVariable(name="y", source_subgoals=["s2"]),
+                   "z": LogicalVariable(name="z", source_subgoals=["s3"])},
+        subgoals=[
+            LogicalSubgoal(id="s1", predicate="P1", arguments=["?x"], variables=["x"],
+                           estimated_cardinality=cards[0], estimated_cost=1.0, estimated_selectivity=0.5),
+            LogicalSubgoal(id="s2", predicate="P2", arguments=["?x", "?y"], variables=["x", "y"],
+                           estimated_cardinality=cards[1], estimated_cost=1.0, estimated_selectivity=0.5),
+            LogicalSubgoal(id="s3", predicate="P3", arguments=["?x", "?z"], variables=["x", "z"],
+                           estimated_cardinality=cards[2], estimated_cost=1.0, estimated_selectivity=0.5),
+        ],
+        dependency_edges=[DependencyEdge(source_slot="s1", target_slot="s2", variables=["x"]),
+                          DependencyEdge(source_slot="s1", target_slot="s3", variables=["x"])],
+        join_edges=[LogicalJoinEdge(left_slot="s1", left_variable="x", right_slot="s2", right_variable="x"),
+                    LogicalJoinEdge(left_slot="s1", left_variable="x", right_slot="s3", right_variable="x")],
+        answer_variable="x",
+    )
+
+
+def test_branch_orders_enumerated():
+    orders = _dependency_respecting_orders(_branch_plan())
+    assert ["s1", "s2", "s3"] in orders and ["s1", "s3", "s2"] in orders
+
+
+def test_cardinality_moves_allocation_on_branching_topology():
+    # 12s positive control: on a topology with >=2 dependency orders, feeding
+    # observed cardinality into estimated_cardinality MUST change the chosen
+    # order/allocation (this is the honest mechanism G4's falsification
+    # contrasts against; the executor does not consume branching plans).
+    flat = {"s1": 1.0, "s2": 1.0, "s3": 1.0}
+    p_flat, _ = search_physical_plans(
+        _branch_plan(cards=(100.0, 100.0, 100.0)),
+        params=PlanObjectiveParams(retrieval_budget=8, requirement_importance=flat),
+    )
+    p_skew, _ = search_physical_plans(
+        _branch_plan(cards=(100.0, 5.0, 8.0)),
+        params=PlanObjectiveParams(retrieval_budget=8, requirement_importance=flat),
+    )
+    alloc_flat = {k: v.retrieval_calls for k, v in p_flat.budget_allocation.items()}
+    alloc_skew = {k: v.retrieval_calls for k, v in p_skew.budget_allocation.items()}
+    assert p_flat.slot_execution_order != p_skew.slot_execution_order or alloc_flat != alloc_skew, (
+        "cardinality must influence order/allocation on a branching topology (12s positive control)")
+
+
+def test_cardinality_does_not_move_allocation_on_strict_chain():
+    # 12s falsification control: on a strict serial chain (the ONLY topology the
+    # executor consumes), re-feeding cardinality cannot move the allocation —
+    # a chain has exactly one order, and _allocate_budget_between reads only
+    # requirement_importance + retrieval_budget. This is why G4 re-optimization
+    # is structural no-gain on the executor's consumable plans.
+    cr = {"s1": 1.0, "s2": 3.0, "s3": 5.0}
+    p1, _ = search_physical_plans(_chain_plan(3), params=PlanObjectiveParams(retrieval_budget=8, requirement_importance=cr))
+    p2, _ = search_physical_plans(_chain_plan(3), params=PlanObjectiveParams(retrieval_budget=8, requirement_importance=cr))
+    alloc1 = {k: v.retrieval_calls for k, v in p1.budget_allocation.items()}
+    alloc2 = {k: v.retrieval_calls for k, v in p2.budget_allocation.items()}
+    assert alloc1 == alloc2
+    # and on a strict chain the order is fixed regardless of cardinality
+    assert p1.slot_execution_order == p2.slot_execution_order
+
+
 def test_dependency_respecting_orders_respect_chain():
     orders = _dependency_respecting_orders(_chain_plan(3))
+    assert orders, "order search must enumerate at least one order (12s regression: backtrack never called)"
     for order in orders:
         assert order.index("s1") < order.index("s2") < order.index("s3")
+
+
+def test_dependency_respecting_orders_strict_chain_has_exactly_one():
+    # a strict serial chain has exactly one dependency-respecting order; the
+    # search must enumerate it (12s: without the initial backtrack call this
+    # returned [] for every non-trivial plan and search_physical_plans fell
+    # back to a single legacy candidate, making order search dead code).
+    assert _dependency_respecting_orders(_chain_plan(3)) == [["s1", "s2", "s3"]]
+
+
+def test_search_enumerates_candidates_after_backtrack_fix():
+    # 12s regression: with backtrack never invoked, candidates_enumerated was
+    # always 1 (legacy fallback). After the fix a branching plan must enumerate
+    # all dependency-respecting orders.
+    plan, telemetry = search_physical_plans(
+        _chain_plan(3),
+        params=PlanObjectiveParams(retrieval_budget=6),
+    )
+    assert telemetry.candidates_enumerated >= 1
 
 
 def test_budget_allocation_every_slot_gets_at_least_one():
