@@ -20,12 +20,15 @@ from .binding import AdaptiveBindingBeam
 from .models import (
     BindingRow,
     EvidenceRecord,
+    EvidenceRequirement,
+    EvidenceState,
     ExecutionResult,
     ExtractedBindingTrace,
     JoinSpec,
     MaterializationTrace,
     PhysicalActionCandidateTrace,
     RelationalOperator,
+    RequirementStatus,
     RetrievalCandidateTrace,
     RetrievalResult,
     RetrievalSearchTrace,
@@ -3870,3 +3873,112 @@ class AdaptiveExecutor:
             slot_traces=slot_traces,
             status="ok" if has_output else "empty",
         )
+
+
+# ---------------------------------------------------------------------------
+# G1 wiring (non-invasive): derive an EvidenceState from a completed real run.
+#
+# This is deliberately NOT called inside the execute() hot loop (which has ~10
+# return sites across success/empty/failed/budget paths). Instead it is a pure
+# post-processing function: given the plan a run started with and the result it
+# produced, it reconstructs a first-class requirement-state snapshot purely from
+# real run artifacts (slot_traces carrying sufficiency_status + binding
+# contexts, plus the materialized evidence). Because it never mutates any
+# execution path, the legacy 400+ tests are untouched and the snapshot is honest
+# (derived from what actually happened, never from a golden/oracle label).
+#
+# Mapping sufficiency -> requirement status:
+#   SUFFICIENT  -> satisfied   (all its variables assumed bound by evidence)
+#   PARTIAL     -> partial     (some evidence, not everything)
+#   INSUFFICIENT-> unresolved  (no supporting evidence seen)
+# A slot that never materialized gets an unresolved requirement by default.
+# ---------------------------------------------------------------------------
+
+def _status_from_sufficiency(
+    status: str | None,
+) -> RequirementStatus:
+    if status == "SUFFICIENT":
+        return "satisfied"
+    if status == "PARTIAL":
+        return "partial"
+    return "unresolved"
+
+
+def derive_evidence_state(
+    plan: SlotPlan,
+    result: ExecutionResult,
+) -> EvidenceState:
+    """Build a requirement-state snapshot from a completed execution.
+
+    Each slot in ``plan.slots`` becomes one :class:`EvidenceRequirement`.
+    A slot's status/type/importance come from its ``Slot`` plus the
+    ``SlotExecutionTrace.sufficiency_status`` recorded during execution.
+    ``unsatisfied_reason`` is set on non-satisfied requirements so a
+    requirement-aware optimizer/packer can explain *why* evidence is still
+    missing (nothing bound, empty extraction, or insuffient coverage).
+    """
+
+    slot_by_id = {slot.id: slot for slot in plan.slots}
+    trace_by_slot = {trace.slot_id: trace for trace in result.slot_traces}
+    # dependencies: use the slot join edges (slot -> slots it joins with)
+    join_deps: dict[str, set[str]] = {slot.id: set() for slot in plan.slots}
+    for join in plan.joins:
+        join_deps[join.left_slot].add(join.right_slot)
+        join_deps[join.right_slot].add(join.left_slot)
+
+    requirements: list[EvidenceRequirement] = []
+    bound_evidence: dict[str, list[str]] = {}
+    bindings: dict[str, dict[str, str]] = {}
+
+    for slot in plan.slots:
+        trace = trace_by_slot.get(slot.id)
+        status = _status_from_sufficiency(
+            trace.sufficiency_status if trace is not None else None
+        )
+        # evidence sources materialized for this slot: from result.evidence
+        # records whose slot_id matches (the truthful, completed materialization).
+        source_ids = [
+            ev.source_id
+            for ev in result.evidence
+            if ev.slot_id == slot.id
+        ]
+        bound_evidence[slot.id] = list(dict.fromkeys(source_ids))
+
+        # bindings observed: union of this slot's binding contexts
+        slot_bindings: dict[str, str] = {}
+        if trace is not None:
+            for ctx in trace.binding_contexts:
+                slot_bindings.update(ctx)
+        if slot_bindings:
+            bindings[slot.id] = slot_bindings
+
+        # unsatisfied reason (mechanism diagnostics)
+        reason: str | None = None
+        if status != "satisfied":
+            if trace is None:
+                reason = "slot never materialized"
+            elif not trace.binding_contexts:
+                reason = "no binding context attempted"
+            elif trace.sufficiency_status == "INSUFFICIENT":
+                reason = "sufficiency calibrator: insufficient evidence"
+            else:
+                reason = "partial evidence coverage"
+
+        requirements.append(EvidenceRequirement(
+            id=f"r_{slot.id}",
+            slot_id=slot.id,
+            evidence_type="passage",  # text-only backend today; extended by G9 heterogeneous
+            status=status,
+            importance=slot.importance,
+            variables=list(slot.variables),
+            depends_on=sorted(join_deps.get(slot.id, set()) - {slot.id}),
+            unsatisfied_reason=reason,
+        ))
+
+    return EvidenceState(
+        requirements=requirements,
+        bound_evidence={k: v for k, v in bound_evidence.items() if v},
+        bindings={k: v for k, v in bindings.items() if v},
+        budget_used_retrieval=result.metrics.retrieval_calls,
+        budget_used_tokens=result.metrics.prompt_tokens + result.metrics.completion_tokens,
+    )

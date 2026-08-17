@@ -513,6 +513,10 @@ class ExecutionResult(StrictModel):
     status: Literal["ok", "empty", "failed", "budget_exceeded", "unsupported_operation"] = "ok"
     error: str | None = None
     plan: SlotPlan | None = None
+    # G1: optional runtime requirement-state snapshot, populated post-execution
+    # by the pure helper derive_evidence_state() in planner.py (never during the
+    # hot loop, so legacy paths are untouched).
+    evidence_state: EvidenceState | None = None
 
 
 # ---------------------------------------------------------------------------
