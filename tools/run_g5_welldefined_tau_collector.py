@@ -93,6 +93,8 @@ def main(argv=None):
     ap.add_argument("--budgets", type=str, default="1,2,3,4,5,6")
     ap.add_argument("--first-window", type=int, default=3)
     ap.add_argument("--out", type=str, default="/tmp/g5_welldefined_tau.json")
+    ap.add_argument("--resume-log", type=str, default="/tmp/g5_welldefined_tau.log.jsonl",
+                    help="append each chain's record here immediately (survives kill)
     args = ap.parse_args(argv[1:])
     _load_env()
 
@@ -199,6 +201,13 @@ def main(argv=None):
             print("[EXC] %s slots=%d tau=%s last=%s ans_bearing=%s  -> %s"
                   % (str(prob.get("id"))[:8], len(plan.slots), thresholds, last_sid,
                      sorted(ans_bearing), rec["excluded_reason"][:60]))
+
+        # incremental durable write: append this chain's raw record so a killed
+        # run (e.g. timeout SIGTERM) still preserves completed chains.
+        log = Path(args.resume_log)
+        with log.open("a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        sys.stdout.flush()
 
     n_wd = len(well_defined)
     n_ex = len(excluded)
