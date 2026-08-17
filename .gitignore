@@ -15,3 +15,4 @@ runs/
 !research/FAILURE_LEDGER.csv
 !research/RELATED_WORK_MATRIX.csv
 !tests/fixtures/*.jsonl
+runs_archive/
