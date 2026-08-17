@@ -201,10 +201,8 @@ def main(argv=None):
                 pass
 
     n_chains = len(results)
-    # aggregate
-    d_cr_vs_static = [r_["delta_static_minus_chainrule"] for r_ in [x for x in results] for x in []]
-    d_cr_vs_static, d_cr_vs_flat = [], []
-    parity = []
+    # aggregate across all chains × runs
+    d_cr_vs_static, d_cr_vs_flat, parity = [], [], []
     for rec in results:
         for row in rec["rows"]:
             d_cr_vs_static.append(row["delta_static_minus_chainrule"])
