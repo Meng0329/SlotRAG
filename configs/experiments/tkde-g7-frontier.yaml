@@ -1,20 +1,24 @@
-# G7 matched-budget frontier — 3-arm explicit optimizer comparison (smoke/frontier)
+# G7 matched-budget frontier — pure optimizer ablation (smoke/frontier)
 #
 # Honest controlled design (per §24 + Gate P6):
-#   - frozen_plan_source: slotrag-qo  → all arms replay the SAME compiled SlotPlan
-#     (deterministic, audited snapshot), so the ONLY variable is the physical-plan
-#     selection path (static compiler vs explicit optimizer).
-#   - Arms (matched budget):
-#       static     = slotrag-qo          → compile_physical_plan (uniform alloc)
-#       cost-only  = slotrag-qo-flat     → search_physical_plans, flat importance
-#                     (all slots 1.0 → budget-driven allocation, no chain-law)
-#       chain-rule = slotrag-qo-chain    → search_physical_plans, τ=2·depth−1
-#       chain-bm25 = slotrag-qo-chain-bm25 → chain-rule + hybrid/bm25 per-slot variants
-#   - retrieval_backend hybrid (dense+sparse RRF) matched across arms; realized
-#     retrieval_calls is the cost dimension, answer EM/F1 the quality dimension.
+#   - Pure physical-plan *selection* comparison. evidence_sufficiency is DROPPED
+#     so the ONLY variable is the optimizer path (static compiler vs explicit
+#     search_physical_plans), and no sufficiency calibrator (with its bm25-only
+#     inventory) is required — removing a backend/protocol confound.
+#   - frozen_plan_source: slotrag-g7-static → all arms replay the SAME audited
+#     compiled SlotPlan; only the physical-plan selection path varies.
+#   - Arms (matched budget, hybrid retrieval):
+#       static    = slotrag-g7-static      → compile_physical_plan (uniform alloc)
+#       cost-only = slotrag-g7-flat        → search_physical_plans, flat importance
+#                     (all slots 1.0 → budget-driven allocation)
+#       chain-rule= slotrag-g7-chain       → search_physical_plans, τ=2·depth−1
+#       chain-bm25= slotrag-g7-chain-bm25  → chain-rule + hybrid/bm25 per-slot variants
+#   - matched budget: max_retrieval_calls threads into the optimizer's
+#     retrieval_budget (asserted in test_slotrag_qo_chain...). Realized
+#     retrieval_calls is the cost dimension; EM/F1 the quality dimension.
 #
 # split=train keeps this a smoke (STEP 4: minimal real experiment first).
-# The validation frontier will reuse this same suite shape with split=validation.
+# The validation frontier reuses this shape with split=validation + sealed budget.
 benchmark_root: benchmark
 output_root: runs
 datasets: [hotpotqa]
@@ -30,9 +34,9 @@ stages:
     split: train
     sample_size: 3
     methods:
-      - slotrag-qo
-      - slotrag-qo-flat
-      - slotrag-qo-chain
-      - slotrag-qo-chain-bm25
-    frozen_plan_source: slotrag-qo
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+      - slotrag-g7-chain-bm25
+    frozen_plan_source: slotrag-g7-static
     retrieval_backend: hybrid

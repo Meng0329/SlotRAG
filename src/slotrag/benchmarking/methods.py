@@ -243,6 +243,64 @@ METHODS: dict[str, MethodSpec] = {
         primary_query_variant="question_plus_lexical_slot",
         description="G7: chain-rule optimizer enumerating hybrid vs bm25 per-slot physical impls under matched budget",
     ),
+    # ====== G7 optimizer-ablation family (no evidence-sufficiency) ======
+    # Pure matched-budget comparison of physical-plan *selection* (static
+    # compiler vs explicit optimizer), isolating the optimizer as the only
+    # variable. evidence_sufficiency is dropped to remove the arm-specific
+    # stopping-rule confound and the calibrator dependency; the static arm
+    # uses compile_physical_plan, flat/cost-only and chain-rule use the
+    # explicit search_physical_plans optimizer.
+    "slotrag-g7-static": MethodSpec(
+        "slotrag-g7-static",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7 static arm: compile_physical_plan (uniform allocation), no sufficiency stopping",
+    ),
+    "slotrag-g7-flat": MethodSpec(
+        "slotrag-g7-flat",
+        "slotrag",
+        physical_plan=True,
+        physical_plan_optimizer=True,
+        plan_optimizer_importance="flat",
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7 cost-only arm: search_physical_plans with flat importance (all 1.0 -> budget-driven), no sufficiency",
+    ),
+    "slotrag-g7-chain": MethodSpec(
+        "slotrag-g7-chain",
+        "slotrag",
+        physical_plan=True,
+        physical_plan_optimizer=True,
+        plan_optimizer_importance="chain-rule",
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7 chain-rule arm: search_physical_plans with τ=2·depth−1 importance, no sufficiency",
+    ),
+    "slotrag-g7-chain-bm25": MethodSpec(
+        "slotrag-g7-chain-bm25",
+        "slotrag",
+        physical_plan=True,
+        physical_plan_optimizer=True,
+        plan_optimizer_importance="chain-rule",
+        plan_optimizer_strategy_variants=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7 chain-rule + per-slot hybrid/bm25 physical impl variants, no sufficiency",
+    ),
     "slotrag-dual-access": MethodSpec(
         "slotrag-dual-access",
         "slotrag",

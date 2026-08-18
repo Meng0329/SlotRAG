@@ -1898,3 +1898,21 @@ def test_slotrag_qo_chain_registered_flag_matrix():
 
     # the static qo must still use the *compiler*, not the optimizer
     assert methods.METHODS["slotrag-qo"].physical_plan_optimizer is False
+
+    # G7 pure-ablation family: no evidence_sufficiency (drops the stopping-rule
+    # confound and the calibrator dependency), optimizer flags mirror the qo set
+    g7_static = methods.METHODS["slotrag-g7-static"]
+    assert g7_static.physical_plan is True
+    assert g7_static.physical_plan_optimizer is False
+    assert g7_static.evidence_sufficiency is False
+    g7_flat = methods.METHODS["slotrag-g7-flat"]
+    assert g7_flat.physical_plan_optimizer is True
+    assert g7_flat.plan_optimizer_importance == "flat"
+    assert g7_flat.evidence_sufficiency is False
+    g7_chain = methods.METHODS["slotrag-g7-chain"]
+    assert g7_chain.physical_plan_optimizer is True
+    assert g7_chain.plan_optimizer_importance == "chain-rule"
+    assert g7_chain.plan_optimizer_strategy_variants is False
+    g7_chain_bm25 = methods.METHODS["slotrag-g7-chain-bm25"]
+    assert g7_chain_bm25.physical_plan_optimizer is True
+    assert g7_chain_bm25.plan_optimizer_strategy_variants is True
