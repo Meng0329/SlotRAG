@@ -1,0 +1,33 @@
+# G7 matched-budget frontier — pure optimizer ablation, VALIDATION split
+#
+# Runs the optimizer-ablation family on the validation split. The well-defined
+# τ=2·depth-1 chains (裁决12t) all live in validation (6 chains: 5a716639,
+#  5a85ea09, 5a85b2d9, 5a8e3ea9, 5ab3b0bf, 5abd9452) — the honest target
+# subdomain for the chain-law frontier claim.
+#
+# Honest: evidence_sufficiency dropped (isolates physical-plan selection);
+# matched budget via max_retrieval_calls → optimizer retrieval_budget (asserted).
+# frozen_plan_source slotrag-g7-static replays the SAME audited SlotPlan across
+# all arms. Post-hoc analysis reports the well-defined subset (a plan-structure
+# predicate, not answer selection — protocol §7 clean).
+benchmark_root: benchmark
+output_root: runs
+datasets: [hotpotqa]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 6
+  question_timeout_seconds: 600
+stages:
+  frontier:
+    split: evaluation
+    sample_size: 6
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+      - slotrag-g7-chain-bm25
+    frozen_plan_source: slotrag-g7-static
+    retrieval_backend: hybrid
