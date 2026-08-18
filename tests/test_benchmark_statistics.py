@@ -729,3 +729,70 @@ def test_summarize_run_writes_complete_analysis_artifacts(tmp_path):
         "REPORT.md",
     ):
         assert (summary_dir / filename).exists()
+
+
+def test_cohens_d_paired():
+    from slotrag.benchmarking.statistics import cohens_d
+    # constant shift => d = inf (zero difference variance), mean positive
+    d = cohens_d([1.0, 1.0, 1.0], [0.0, 0.0, 0.0])
+    assert d > 0
+    # no difference => 0
+    assert cohens_d([0.5, 0.5], [0.5, 0.5]) == 0.0
+    # reverse shift => negative
+    assert cohens_d([0.0, 0.0], [1.0, 1.0]) < 0
+
+
+def test_cohens_d_requires_equal_length():
+    from slotrag.benchmarking.statistics import cohens_d
+    try:
+        cohens_d([1.0], [1.0, 2.0])
+        assert False, "should raise"
+    except ValueError:
+        pass
+
+
+def test_mcnemar_exact():
+    from slotrag.benchmarking.statistics import mcnemar
+    # b=5 candidate-only wins, c=0 reference-only wins => discordant 5, exact p tiny
+    cand = [1, 1, 1, 1, 1, 0, 0]
+    ref = [0, 0, 0, 0, 0, 0, 0]
+    r = mcnemar(cand, ref)
+    assert r["candidate_only_wins_b"] == 5
+    assert r["reference_only_wins_c"] == 0
+    assert r["discordant_pairs"] == 5
+    assert r["p_exact"] < 0.1
+    # symmetric split b=c=2 => p not significant (exact two-sided ~ 1.0 realm)
+    r2 = mcnemar([1, 1, 0, 0], [0, 0, 1, 1])
+    assert r2["candidate_only_wins_b"] == 2 and r2["reference_only_wins_c"] == 2
+
+
+def test_mcnemar_requires_equal_length():
+    from slotrag.benchmarking.statistics import mcnemar
+    try:
+        mcnemar([1], [0, 1])
+        assert False, "should raise"
+    except ValueError:
+        pass
+
+
+def test_cluster_bootstrap_ci():
+    from slotrag.benchmarking.statistics import cluster_bootstrap_ci
+    # two clusters with DIFFERENT within-cluster means => cluster-level variance
+    # (c1 diff 0.6, c2 diff 0.2) so resampling clusters yields nonzero se.
+    a = [1.0, 1.0, 0.8, 0.8]
+    b = [0.4, 0.4, 0.6, 0.6]
+    cl = ["c1", "c1", "c2", "c2"]
+    r = cluster_bootstrap_ci(a, b, cluster_ids=cl, iterations=4000, seed=7)
+    assert r["clusters"] == 2
+    assert r["mean_weighted"] > 0
+    assert r["ci_low"] > 0 and r["ci_high"] > 0  # systematically positive
+    assert r["se"] > 0
+
+
+def test_cluster_bootstrap_ci_requires_clusters():
+    from slotrag.benchmarking.statistics import cluster_bootstrap_ci
+    try:
+        cluster_bootstrap_ci([1.0, 1.0], [0.0, 0.0], cluster_ids=["only1"], iterations=10)
+        assert False, "should raise"
+    except ValueError:
+        pass

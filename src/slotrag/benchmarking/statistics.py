@@ -870,6 +870,110 @@ def paired_bootstrap(records: list[dict[str, Any]], *, reference: str = "slotrag
     return comparisons
 
 
+def cohens_d(a: list[float], b: list[float]) -> float:
+    """Paired Cohen's d (mean of the paired difference / SD of the difference).
+
+    Signed so that positive => the first (candidate) arm is higher on average.
+    Uses the std of the paired differences to stay consistent with the paired
+    bootstrap contrasts: d = mean(d)/sd(d) over the per-question differences.
+    """
+    if len(a) != len(b) or len(a) < 2:
+        raise ValueError("cohens_d requires equal-length, length>=2 sequences")
+    d = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    sd = float(np.std(d, ddof=1))
+    if sd == 0.0:
+        return float("inf") if float(np.mean(d)) > 0 else (0.0 if float(np.mean(d)) == 0 else float("-inf"))
+    return float(np.mean(d) / sd)
+
+
+def mcnemar(
+    candidate: list[int],
+    reference: list[int],
+) -> dict[str, Any]:
+    """Exact McNemar test on paired binary outcomes (EM or else binary metrics).
+
+    b = #discordant pairs where candidate=1 & reference=0 (candidate-only win)
+    c = #discordant pairs where candidate=0 & reference=1 (reference-only win)
+    Two-sided exact p (binominal on the discordant pair count), plus McNemar's
+    chi-square approximation, odds ratio, and the discordant-pair marginals.
+
+    Returns dict; matches the honest "no post-hoc selection" requirement: this
+    is the preregistered binary-comparison test for G10 (EM wins/losses).
+    """
+    if len(candidate) != len(reference):
+        raise ValueError("mcnemar requires equal-length paired sequences")
+    b = sum(1 for cand, ref in zip(candidate, reference) if cand and not ref)
+    c = sum(1 for cand, ref in zip(candidate, reference) if (not cand) and ref)
+    n = b + c
+    p_exact = 1.0
+    if n > 0:
+        from math import comb
+
+        midp = 0.5 * comb(n, b) / (2 ** n)
+        sum_ = float(sum(comb(n, k) for k in range(b + 1)) / (2 ** n))
+        p_exact = min(1.0, 2.0 * min(sum_ - midp, 1.0 - sum_ + midp))
+    chi = 0.0
+    if n > 0 and b != c:
+        chi = float((abs(b - c) - 1) ** 2 / max(b + c, 1))
+    return {
+        "candidate_only_wins_b": b,
+        "reference_only_wins_c": c,
+        "discordant_pairs": n,
+        "b_minus_c": b - c,
+        "p_exact": p_exact,
+        "chi_square": chi,
+    }
+
+
+def cluster_bootstrap_ci(
+    a: list[float],
+    b: list[float],
+    *,
+    cluster_ids: list[Any],
+    iterations: int = 10_000,
+    seed: int = 2027,
+    level: float = 0.95,
+) -> dict[str, Any]:
+    """Cluster-aware paired bootstrap CI (resample clusters, not individual obs).
+
+    Uses the paired within-question difference d_q = a_q - b_q, grouped by
+    cluster id. Each bootstrap iteration resamples CLUSTERS with replacement
+    (preserving the dependence structure among questions sharing a cluster),
+    then reports the mean of the pooled resampled differences. This is the
+    cluster-aware resampling G10 requires when records share a cluster (e.g.
+    questions over the same supporting-paragraph supergraph / document set).
+
+    Returns mean, quantile CI, and se — treating cluster as the independent unit.
+    """
+    if len(a) != len(b) or len(cluster_ids) != len(a):
+        raise ValueError("cluster_bootstrap_ci requires a,b,cluster_ids of equal length")
+    diff: dict[Any, list[float]] = defaultdict(list)
+    for q, (av, bv) in enumerate(zip(a, b)):
+        diff[cluster_ids[q]].append(float(av - bv))
+    cluster_list = list(diff.keys())
+    if len(cluster_list) < 2:
+        raise ValueError("cluster_bootstrap_ci requires >=2 distinct clusters")
+    rng = np.random.default_rng(seed)
+    means = []
+    for _ in range(iterations):
+        chosen = [rng.integers(0, len(cluster_list)) for _ in cluster_list]
+        pooled = []
+        for idx in chosen:
+            pooled.extend(diff[cluster_list[idx]])
+        means.append(float(np.mean(pooled)))
+    alpha = 1.0 - level
+    return {
+        "clusters": len(cluster_list),
+        "observations": len(a),
+        "mean": float(np.mean([np.mean(v) for v in diff.values()])),  # cluster-centred mean
+        "mean_weighted": float(np.mean([float(np.mean(diff[c])) * len(diff[c]) / len(a) for c in cluster_list])),
+        "ci_low": float(np.percentile(means, 100 * alpha / 2)),
+        "ci_high": float(np.percentile(means, 100 * (1 - alpha / 2))),
+        "se": float(np.std(means, ddof=1)),
+        "iterations": iterations,
+    }
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
