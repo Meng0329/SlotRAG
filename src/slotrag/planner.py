@@ -38,7 +38,7 @@ from .models import (
     SlotPlan,
 )
 from .providers import AgnesClient, ChatResult
-from .qo import PhysicalPlan
+from .qo import PhysicalPlan, RetrievalStrategy
 from .query_optimization import QueryVariant, canonical_evidence_id, formulate_query
 from .query_rewriting import QueryRewriter
 from .evidence_bundle import EvidenceBundle, EvidenceBundleExtractor, RetrievalPath, UnionExtractor
@@ -1379,7 +1379,10 @@ class SlotMaterializer:
         bindings: dict[str, str],
         *,
         query_variant: QueryVariant | None = None,
+        retrieval_strategy: RetrievalStrategy = "hybrid",
     ) -> tuple[list[BindingRow], RunMetrics]:
+        if retrieval_strategy == "bm25" and self.dual_access_bundle:
+            raise ValueError("retrieval_strategy='bm25' is mutually exclusive with dual_access_bundle")
         slot_query = slot.query_text(bindings)
         rewriter_queries: list[str] = [slot_query]
         if self.query_rewriter is not None:
@@ -1419,6 +1422,14 @@ class SlotMaterializer:
             return ranked
 
         def search(query_text: str, query_variant: QueryVariant) -> list[RetrievalResult]:
+            if retrieval_strategy == "bm25":
+                # sparse-only physical impl: a single lexical batch query with no
+                # dense/rerank participation (the executor honors per-slot choice).
+                batch = getattr(self.retriever, "search_batch", None)
+                if batch is None:
+                    raise ValueError("retrieval_strategy='bm25' requires a batch-capable retriever")
+                ranked = batch([query_text], top_k=self.max_passages, sparse_access_modes=["configured"])[0]
+                return record_search(query_text, query_variant, list(ranked), "configured")
             return record_search(query_text, query_variant, self.retriever.search(query_text))
 
         def search_batch(
@@ -2163,6 +2174,7 @@ class SlotMaterializer:
         contexts: list[dict[str, str]],
         *,
         query_variant: QueryVariant | None = None,
+        retrieval_strategy: RetrievalStrategy = "hybrid",
     ) -> tuple[list[BindingRow], RunMetrics]:
         """Materialize once per distinct binding context and merge the rows."""
         merged: list[BindingRow] = []
@@ -2176,6 +2188,7 @@ class SlotMaterializer:
                 slot,
                 bindings,
                 query_variant=query_variant,
+                retrieval_strategy=retrieval_strategy,
             )
             all_evidence.extend(self.last_evidence)
             all_traces.extend(self.last_materialization_traces)
@@ -2248,10 +2261,11 @@ class SlotMaterializer:
         contexts: list[dict[str, str]],
         *,
         query_variant: QueryVariant,
+        retrieval_strategy: RetrievalStrategy = "hybrid",
     ) -> tuple[list[BindingRow], RunMetrics]:
         """Execute one explicit physical query formulation per binding context."""
 
-        return self.materialize_many(slot, contexts, query_variant=query_variant)
+        return self.materialize_many(slot, contexts, query_variant=query_variant, retrieval_strategy=retrieval_strategy)
 
     def estimate_materialization_retrieval_calls(self, contexts: list[dict[str, str]]) -> int:
         """Return a conservative call estimate for one materialization pass.
@@ -2282,6 +2296,7 @@ class SlotMaterializer:
         contexts: list[dict[str, str]],
         *,
         top_k: int,
+        retrieval_strategy: RetrievalStrategy = "hybrid",
     ) -> tuple[list[BindingRow], RunMetrics]:
         """Re-materialize a slot with a larger bounded evidence window."""
         if top_k <= self.max_passages:
@@ -2289,7 +2304,7 @@ class SlotMaterializer:
         previous = self.max_passages
         self.max_passages = top_k
         try:
-            return self.materialize_many(slot, contexts)
+            return self.materialize_many(slot, contexts, retrieval_strategy=retrieval_strategy)
         finally:
             self.max_passages = previous
 
@@ -3286,11 +3301,14 @@ class AdaptiveExecutor:
                         error=f"retrieval call budget exceeded ({self.max_retrieval_calls})",
                     )
             materialize_many = getattr(self.materializer, "materialize_many", None)
+            slot_strategy: RetrievalStrategy = "hybrid"
+            if physical_plan is not None:
+                slot_strategy = physical_plan.retrieval_strategy.get(slot.id, "hybrid")
             materialization_started = time.perf_counter()
             if materialize_many is not None:
-                rows, slot_metrics = materialize_many(slot, binding_contexts)
+                rows, slot_metrics = materialize_many(slot, binding_contexts, retrieval_strategy=slot_strategy)
             else:
-                rows, slot_metrics = self.materializer.materialize(slot, binding_contexts[0])
+                rows, slot_metrics = self.materializer.materialize(slot, binding_contexts[0], retrieval_strategy=slot_strategy)
             materialization_ms = (time.perf_counter() - materialization_started) * 1000
             slot_evidence = list(getattr(self.materializer, "last_evidence", []))
             slot_materialization_traces = list(
@@ -3469,6 +3487,7 @@ class AdaptiveExecutor:
                     slot,
                     binding_contexts,
                     top_k=action_top_k_after,
+                    retrieval_strategy=slot_strategy,
                 )
                 expansion_ms = (time.perf_counter() - expansion_started) * 1000
                 expanded_evidence = list(getattr(self.materializer, "last_evidence", []))
@@ -3542,6 +3561,7 @@ class AdaptiveExecutor:
                     slot,
                     binding_contexts,
                     query_variant=action_query_variant,
+                    retrieval_strategy=slot_strategy,
                 )
                 complementary_ms = (time.perf_counter() - complementary_started) * 1000
                 complementary_evidence = list(getattr(self.materializer, "last_evidence", []))

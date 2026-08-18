@@ -174,3 +174,41 @@ def test_search_importance_changes_allocation():
     )[0]
     # s1 with 5x importance should be allocated at least as many calls
     assert high_imp.budget_allocation["s1"].retrieval_calls >= low_imp.budget_allocation["s1"].retrieval_calls
+
+
+# --- G2(b): physical-impl enumeration + executor consumption --------------
+
+def test_strategy_variants_off_enumerates_single_hybrid_impl():
+    # G2(b) control: with variants off, the optimizer is deterministic single-impl.
+    plan, _ = search_physical_plans(_chain_plan(3), params=PlanObjectiveParams(retrieval_budget=6))
+    assert all(strat == "hybrid" for strat in plan.retrieval_strategy.values())
+
+
+def test_strategy_variants_on_enumerates_bm25_and_hybrid_impls():
+    # G2(b) evidence: with variants allowed, the search emits >=2 distinct
+    # physical-impl candidates (hybrid reference + bm25 sparse-only) and the
+    # selected plan carries a real strategy dict.
+    params = PlanObjectiveParams(retrieval_budget=6, allow_retrieval_strategy_variants=True)
+    plan, telemetry = search_physical_plans(_chain_plan(3), params=params)
+    assert telemetry.candidates_enumerated >= 2
+    # both impls are legal per-slot strategies
+    for sid, strat in plan.retrieval_strategy.items():
+        assert strat in {"hybrid", "bm25"}
+    # the selected plan's strategy must be reflected identically in the plan
+    assert set(plan.retrieval_strategy) == set(plan.slot_execution_order)
+
+
+def test_bm25_strategy_changes_estimated_cost_in_optimizer_objective():
+    # G2(b) evidence: choosing bm25 must change the optimizer's cost (real trade-off),
+    # not be a no-op typed field.
+    from slotrag.optimizer import PlanObjectiveParams, _estimate_plan_utility
+    params = PlanObjectiveParams(retrieval_budget=6)
+    order = ["s1", "s2", "s3"]
+    calls = {"s1": 1, "s2": 2, "s3": 3}
+    hyb_util, hyb_cost = _estimate_plan_utility(_chain_plan(3), order, calls, params,
+                                                {sid: "hybrid" for sid in order})
+    bm_util, bm_cost = _estimate_plan_utility(_chain_plan(3), order, calls, params,
+                                              {sid: "bm25" for sid in order})
+    # same retrieval-call count but bm25 sparse-only is strictly cheaper
+    assert bm_cost < hyb_cost
+    assert bm_util == hyb_util  # utility (satisfaction) identity, cost differs

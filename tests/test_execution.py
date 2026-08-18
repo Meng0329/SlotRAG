@@ -25,7 +25,7 @@ class FakeMaterializer:
     def __init__(self):
         self.calls = []
 
-    def materialize(self, slot, bindings):
+    def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
         self.calls.append((slot.id, dict(bindings)))
         rows = {
             "S1": [BindingRow(slot_id="S1", bindings={"person": "Ada"}, source_id="p1", source_span="Ada founded X", confidence=1)],
@@ -35,7 +35,7 @@ class FakeMaterializer:
 
 
 class MultiBindingMaterializer(FakeMaterializer):
-    def materialize(self, slot, bindings):
+    def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
         self.calls.append((slot.id, dict(bindings)))
         if slot.id == "S1":
             return [
@@ -46,7 +46,7 @@ class MultiBindingMaterializer(FakeMaterializer):
         company = {"Ada": "X", "Grace": "Y"}[person]
         return [BindingRow(slot_id="S2", bindings={"person": person, "company": company}, source_id=f"{person}-p2", source_span=f"{person} founded {company}", confidence=1)], RunMetrics(documents_accessed=1, passages_processed=1)
 
-    def materialize_many(self, slot, contexts):
+    def materialize_many(self, slot, contexts, *, retrieval_strategy='hybrid'):
         rows = []
         metrics = RunMetrics()
         for context in contexts:
@@ -793,7 +793,7 @@ class ComparisonMaterializer:
     def __init__(self):
         self.calls = []
 
-    def materialize(self, slot, bindings):
+    def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
         self.calls.append((slot.id, dict(bindings)))
         rows = {
             "S1": BindingRow(
@@ -917,7 +917,7 @@ def test_frontier_safe_selection_prevents_transitive_variable_join_failure():
             "S5": {"physicist1": "Eugen von Lommel", "equation": "Lommel differential equation"},
         }
 
-        def materialize(self, slot, _bindings):
+        def materialize(self, slot, _bindings, *, retrieval_strategy='hybrid'):
             return [BindingRow(
                 slot_id=slot.id,
                 bindings=self.rows[slot.id],
@@ -963,7 +963,7 @@ def test_frontier_safe_selection_prevents_transitive_variable_join_failure():
 
 def test_adaptive_executor_propagates_role_projection_metrics():
     class RoleProjectionMaterializer:
-        def materialize(self, slot, _bindings):
+        def materialize(self, slot, _bindings, *, retrieval_strategy='hybrid'):
             return [
                 BindingRow(
                     slot_id=slot.id,
@@ -1076,11 +1076,11 @@ def test_executor_executes_one_bounded_topk_expansion_and_merges_rows():
             self.last_materialization_traces = []
             self.last_retrieval_results = []
 
-        def materialize(self, slot, bindings):
+        def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
             self.calls.append(("initial", slot.id, dict(bindings), self.max_passages))
             return [], RunMetrics(retrieval_calls=1, passages_processed=1)
 
-        def materialize_many_with_top_k(self, slot, contexts, *, top_k):
+        def materialize_many_with_top_k(self, slot, contexts, *, top_k, retrieval_strategy='hybrid'):
             self.calls.append(("expand", slot.id, list(contexts), top_k))
             return [
                 BindingRow(
@@ -1131,11 +1131,11 @@ def test_executor_does_not_offer_topk_expansion_after_retrieval_budget_is_spent(
             self.last_materialization_traces = []
             self.last_retrieval_results = []
 
-        def materialize(self, slot, bindings):
+        def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
             self.calls.append(("initial", slot.id, dict(bindings)))
             return [], RunMetrics(retrieval_calls=1, passages_processed=1)
 
-        def materialize_many_with_top_k(self, slot, contexts, *, top_k):
+        def materialize_many_with_top_k(self, slot, contexts, *, top_k, retrieval_strategy='hybrid'):
             self.calls.append(("expand", slot.id, list(contexts), top_k))
             return [], RunMetrics(retrieval_calls=1, passages_processed=1)
 
@@ -1172,14 +1172,14 @@ def test_executor_runs_one_complementary_query_and_stops_on_evidence_gain():
             self.last_materialization_traces = []
             self.last_retrieval_results = []
 
-        def materialize(self, slot, bindings):
+        def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
             self.calls.append(("slot", slot.id, dict(bindings)))
             self.last_retrieval_results = [
                 RetrievalResult(passage=Passage(id="noise", text="Noise"), score=0.1)
             ]
             return [], RunMetrics(retrieval_calls=1, passages_processed=1)
 
-        def materialize_many_with_query_variant(self, slot, contexts, *, query_variant):
+        def materialize_many_with_query_variant(self, slot, contexts, *, query_variant, retrieval_strategy='hybrid'):
             self.calls.append((query_variant, slot.id, list(contexts)))
             self.last_retrieval_results = [
                 RetrievalResult(
@@ -1567,7 +1567,7 @@ def test_field_extremum_template_compiles_and_executes_within_four_step_budget()
         def __init__(self):
             self.calls = []
 
-        def materialize(self, slot, bindings):
+        def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
             self.calls.append((slot.id, dict(bindings)))
             rows = {
                 "S1": BindingRow(
@@ -3025,3 +3025,68 @@ def test_role_type_filter_abstains_without_repair_when_every_row_contradicts():
     assert metrics.semantic_role_type_abstentions == 1
     assert metrics.structured_output_failures == 0
     assert metrics.structured_output_repairs == 0
+
+
+# --- G2(b): executor consumes the per-slot retrieval_strategy physical impl --
+def test_materializer_bm25_strategy_routes_to_sparse_batch_impl():
+    """G2(b) consumption evidence: a per-slot 'bm25' physical impl must route
+    through the sparse-only batch path, while 'hybrid' (legacy) uses the plain
+    dense+sparse RRF search. This pins that retrieval_strategy is LIVE, not a
+    typed-but-ignored field."""
+
+    class DualRetriever:
+        def __init__(self):
+            self.search_calls = 0
+            self.batch_calls = 0
+
+        def search(self, query):
+            self.search_calls += 1
+            return [RetrievalResult(passage=Passage(id="p", text="Fact"), score=1.0)]
+
+        def search_batch(self, queries, *, top_k=None, sparse_access_modes=None):
+            self.batch_calls += 1
+            return [[RetrievalResult(passage=Passage(id="p", text="Fact"), score=1.0)] for _ in queries]
+
+    # hybrid: uses search (dense+sparse RRF)
+    hyb_retriever = DualRetriever()
+    hyb = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "p"}]]),
+        hyb_retriever,
+        max_passages=1,
+    )
+    hyb.materialize(Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]), {},
+                    retrieval_strategy="hybrid")
+    assert hyb_retriever.search_calls == 1
+    assert hyb_retriever.batch_calls == 0
+
+    # bm25: uses the sparse-only batch impl
+    bm_retriever = DualRetriever()
+    bm = SlotMaterializer(
+        SequenceExtractionClient([[{"founder": "Ada", "source_id": "p"}]]),
+        bm_retriever,
+        max_passages=1,
+    )
+    bm.materialize(Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]), {},
+                   retrieval_strategy="bm25")
+    assert bm_retriever.search_calls == 0
+    assert bm_retriever.batch_calls == 1
+
+
+def test_materializer_bm25_strategy_rejects_dual_access_bundle():
+    """bm25 (single sparse impl) cannot be composed with the 2-query composite
+    bundle physical impl — a validation error, not a silent bypass."""
+    class BatchRetriever:
+        def search(self, _query):
+            raise AssertionError("should not reach")
+        def search_batch(self, queries, *, top_k=None, sparse_access_modes=None):
+            return [[RetrievalResult(passage=Passage(id="p", text="Fact"), score=1.0)] for _ in queries]
+
+    m = SlotMaterializer(
+        SequenceExtractionClient([]),
+        BatchRetriever(),
+        question_context="Who founded Alpha?",
+        dual_access_bundle=True,
+    )
+    with pytest.raises(ValueError):
+        m.materialize(Slot(id="S1", predicate="Founded", arguments=["Alpha", "?founder"]), {},
+                      retrieval_strategy="bm25")

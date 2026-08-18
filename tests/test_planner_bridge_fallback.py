@@ -54,7 +54,7 @@ class _BridgeMaterializer:
         self.last_materialization_traces = []
         self.last_retrieval_results = []
 
-    def materialize(self, slot, bindings):
+    def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
         self.calls.append((slot.id, dict(bindings)))
         if slot.id == "S1":
             if bindings.get("person"):
@@ -72,7 +72,7 @@ class _BridgeMaterializer:
             source_id=f"{person}-p2", source_span=f"{person} founded OpenAI", confidence=1,
         )], RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
 
-    def materialize_many(self, slot, contexts):
+    def materialize_many(self, slot, contexts, *, retrieval_strategy='hybrid'):
         rows = []
         metrics = RunMetrics()
         for context in contexts or [{}]:
@@ -148,7 +148,7 @@ class _JoinRepairMaterializer(_BridgeMaterializer):
     disagrees with S1's anchor). The bridge retry infers the correct person so
     the join on `person` succeeds."""
 
-    def materialize(self, slot, bindings):
+    def materialize(self, slot, bindings, *, retrieval_strategy='hybrid'):
         self.calls.append((slot.id, dict(bindings)))
         if slot.id == "S1":
             return [BindingRow(
@@ -168,7 +168,7 @@ class _JoinRepairMaterializer(_BridgeMaterializer):
             source_id="p2", source_span="Grace led Y", confidence=1,
         )], RunMetrics(documents_accessed=1, passages_processed=1, extraction_llm_calls=1)
 
-    def materialize_many(self, slot, contexts):
+    def materialize_many(self, slot, contexts, *, retrieval_strategy='hybrid'):
         rows = []; metrics = RunMetrics()
         for context in contexts or [{}]:
             current, current_metrics = self.materialize(slot, context)

@@ -175,6 +175,7 @@ def _estimate_plan_utility(
     order: list[str],
     calls_by_slot: dict[str, int],
     params: PlanObjectiveParams,
+    strategy_by_slot: dict[str, RetrievalStrategy] | None = None,
 ) -> tuple[float, float]:
     """Score a candidate plan by requirement-aware expected satisfaction.
 
@@ -189,22 +190,29 @@ def _estimate_plan_utility(
     Cost = retrieval_calls * cost_per_call + token_cost_weight * tokens +
     latency_cost_weight * latency (the latter two use allocated token/latency
     budgets as proxies until G5 learns per-operator cost).
+
+    When ``strategy_by_slot`` is supplied, a ``bm25`` (sparse-only) physical
+    impl is scored at a discount: it omits dense/rerank compute, so its call
+    cost is cheaper, but independent of a learned estimator this is only a
+    declared cost prior (G5's job to calibrate). ``hybrid`` is the reference
+    (no discount). This makes the choice of physical impl a *real* objective
+    dimension the search can trade off, rather than a typed-but-ignored knob.
     """
     subgoal_by_id = {s.id: s for s in logical_plan.subgoals}
+    strategy_by_slot = strategy_by_slot or {}
     utility = 0.0
     cost = 0.0
     for sid in order:
-        imp = params.requirement_importance.get(
-            sid, subgoal_by_id[sid].importance if hasattr(subgoal_by_id[sid], "importance") else 1.0
-        )
-        # subgoal model may not carry importance; use 1.0 default consistently
         imp = params.requirement_importance.get(sid, 1.0)
         calls = calls_by_slot.get(sid, 1)
         card = max(subgoal_by_id[sid].estimated_cardinality, 1.0)
         base = max(1.0, math.log1p(card))  # rarer evidence needs more calls
         marginal = 1.0 - math.exp(-calls / base)
         utility += imp * marginal
-        cost += calls * params.cost_per_retrieval_call
+        call_cost = params.cost_per_retrieval_call
+        if strategy_by_slot.get(sid) == "bm25":
+            call_cost *= 0.5  # sparse-only omits dense/rerank compute (declared prior, G5 to calibrate)
+        cost += calls * call_cost
     cost += params.token_cost_weight * params.token_budget
     cost += params.latency_cost_weight * params.latency_budget_ms
     return utility, cost
@@ -253,22 +261,33 @@ def search_physical_plans(
         orders = [legacy.slot_execution_order]
 
     candidate_records: list[PlanCandidate] = []
-    seen: set[tuple[tuple[str, ...], tuple[tuple[str, int], ...]]] = set()
+    seen: set[tuple[tuple[str, ...], tuple[tuple[str, int], ...], tuple[tuple[str, str], ...]]] = set()
     for order in orders:
         allocation = _allocate_budget_between(order, params.requirement_importance, params.retrieval_budget)
-        key = (tuple(order), tuple(sorted(allocation.items())))
-        if key in seen:
-            continue
-        seen.add(key)
-        utility, cost = _estimate_plan_utility(logical_plan, order, allocation, params)
-        candidate_records.append(PlanCandidate(
-            slot_execution_order=order,
-            retrieval_calls_by_slot=allocation,
-            retrieval_strategy={sid: "hybrid" for sid in order},
-            estimated_utility=utility,
-            estimated_cost=cost,
-            requirement_satisfaction_estimate=utility,  # utility proxy pre-cost
-        ))
+        # physical-impl variants per candidate: by default a single uniform hybrid
+        # impl (the legacy physical op); when strategy variants are allowed, each
+        # slot independently offers hybrid (dense+sparse RRF) vs bm25 (sparse-only).
+        strategy_variants: list[dict[str, RetrievalStrategy]] = [{}]
+        if params.allow_retrieval_strategy_variants:
+            strategy_variants = [
+                {sid: "hybrid" for sid in order},
+                {sid: "bm25" for sid in order},
+            ]
+        for strategy in strategy_variants:
+            key = (tuple(order), tuple(sorted(allocation.items())), tuple(sorted(strategy.items())))
+            if key in seen:
+                continue
+            seen.add(key)
+            strategy_resolved = {sid: strategy.get(sid, "hybrid") for sid in order}
+            utility, cost = _estimate_plan_utility(logical_plan, order, allocation, params, strategy_resolved)
+            candidate_records.append(PlanCandidate(
+                slot_execution_order=order,
+                retrieval_calls_by_slot=allocation,
+                retrieval_strategy=strategy_resolved,
+                estimated_utility=utility,
+                estimated_cost=cost,
+                requirement_satisfaction_estimate=utility,  # utility proxy pre-cost
+            ))
 
     # dominance pruning: drop candidates with <= utility and >= cost of another
     pruned = 0
@@ -308,6 +327,10 @@ def search_physical_plans(
     )
     final = final.model_copy(update={
         "slot_execution_order": selected.slot_execution_order,
+        "retrieval_strategy": {
+            sid: selected.retrieval_strategy.get(sid, "hybrid")
+            for sid in selected.slot_execution_order
+        },
         "budget_allocation": {
             sid: BudgetAllocation(
                 retrieval_calls=selected.retrieval_calls_by_slot[sid],
