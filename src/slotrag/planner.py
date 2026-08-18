@@ -1052,6 +1052,7 @@ class SlotCompiler:
                     predicate="EvidenceAnsweringQuestion",
                     arguments=["?answer"],
                     constraints={"question": question},
+                    variable_types={"answer": "boolean"},
                     estimated_cardinality=2,
                 )],
                 outputs=["?answer"],

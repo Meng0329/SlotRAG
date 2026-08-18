@@ -104,6 +104,7 @@ MAIN_METHODS = [
     "slotrag-qo-flat",
     "slotrag-qo-chain",
     "slotrag-qo-chain-bm25",
+    "slotrag-hover",
     "hybrid",
     "ircot",
     "react",
@@ -300,6 +301,19 @@ METHODS: dict[str, MethodSpec] = {
         complementary_retrieval=True,
         primary_query_variant="question_plus_lexical_slot",
         description="G7 chain-rule + per-slot hybrid/bm25 physical impl variants, no sufficiency",
+    ),
+    "slotrag-hover": MethodSpec(
+        "slotrag-hover",
+        "slotrag",
+        physical_plan=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        typed_extraction_contracts=True,
+        description="G8 claim verification: typed-boolean EvidenceAnsweringQuestion slot "
+                    "extracts yes/no/unknown judgment; core materializer/executor/optimizer unchanged",
     ),
     "slotrag-dual-access": MethodSpec(
         "slotrag-dual-access",
@@ -1133,7 +1147,7 @@ def _retrieval_result(items: list[RetrievalResult], *, slot_id: str, metrics: Ru
 
 
 def _answer_kind(dataset: str, question: QuestionRecord | None = None, *, drop_short: bool = False) -> str:
-    if dataset == "strategyqa":
+    if dataset in {"strategyqa", "hover"}:
         return "boolean"
     if dataset == "drop":
         if question is not None and str(question.metadata.get("operation_type", "")).casefold() == "listing":
@@ -1250,7 +1264,7 @@ def _deterministic_output(dataset: str, plan: Any, result: ExecutionResult) -> s
             return None
         if isinstance(parsed, (dict, list, tuple, set)):
             return None
-    if dataset == "strategyqa":
+    if dataset in {"strategyqa", "hover"}:
         match = re.match(r"^\s*(yes|no|true|false)\b", value, flags=re.IGNORECASE)
         if not match:
             return None
@@ -1361,7 +1375,7 @@ def _finalize(
         _chat_metrics(response, phase="generation"),
         RunMetrics(generation_latency_ms=(time.perf_counter() - started) * 1000),
     )
-    if dataset == "strategyqa":
+    if dataset in {"strategyqa", "hover"}:
         evidence_answer = _evidence_boolean(result)
         if evidence_answer is not None and evidence_answer != answer:
             answer = evidence_answer
