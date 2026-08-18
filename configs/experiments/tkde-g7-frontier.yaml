@@ -1,0 +1,38 @@
+# G7 matched-budget frontier — 3-arm explicit optimizer comparison (smoke/frontier)
+#
+# Honest controlled design (per §24 + Gate P6):
+#   - frozen_plan_source: slotrag-qo  → all arms replay the SAME compiled SlotPlan
+#     (deterministic, audited snapshot), so the ONLY variable is the physical-plan
+#     selection path (static compiler vs explicit optimizer).
+#   - Arms (matched budget):
+#       static     = slotrag-qo          → compile_physical_plan (uniform alloc)
+#       cost-only  = slotrag-qo-flat     → search_physical_plans, flat importance
+#                     (all slots 1.0 → budget-driven allocation, no chain-law)
+#       chain-rule = slotrag-qo-chain    → search_physical_plans, τ=2·depth−1
+#       chain-bm25 = slotrag-qo-chain-bm25 → chain-rule + hybrid/bm25 per-slot variants
+#   - retrieval_backend hybrid (dense+sparse RRF) matched across arms; realized
+#     retrieval_calls is the cost dimension, answer EM/F1 the quality dimension.
+#
+# split=train keeps this a smoke (STEP 4: minimal real experiment first).
+# The validation frontier will reuse this same suite shape with split=validation.
+benchmark_root: benchmark
+output_root: runs
+datasets: [hotpotqa]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 4
+  max_llm_calls: 64
+  max_retrieval_calls: 6
+  question_timeout_seconds: 600
+stages:
+  frontier:
+    split: train
+    sample_size: 3
+    methods:
+      - slotrag-qo
+      - slotrag-qo-flat
+      - slotrag-qo-chain
+      - slotrag-qo-chain-bm25
+    frozen_plan_source: slotrag-qo
+    retrieval_backend: hybrid

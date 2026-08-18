@@ -1810,6 +1810,7 @@ def _run_slotrag(
                 physical_plan, _splan_telemetry = search_physical_plans(
                     logical,
                     params=PlanObjectiveParams(
+                        retrieval_budget=max_retrieval_calls,
                         requirement_importance=importance or {},
                         allow_retrieval_strategy_variants=spec.plan_optimizer_strategy_variants,
                     ),

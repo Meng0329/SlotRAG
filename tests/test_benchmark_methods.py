@@ -1823,6 +1823,9 @@ def test_slotrag_qo_chain_routes_through_explicit_optimizer_with_chain_rule_impo
     def fake_search(logical, *, params):
         captured["importance"] = dict(params.requirement_importance)
         captured["strategy_variants"] = params.allow_retrieval_strategy_variants
+        # matched-budget invariant: the optimizer's retrieval budget MUST follow
+        # the benchmark's max_retrieval_calls (not a hidden default of 4).
+        captured["retrieval_budget"] = params.retrieval_budget
         return FakePlan(), FakeTelemetry()
 
     monkeypatch.setattr("slotrag.optimizer.search_physical_plans", fake_search)
@@ -1865,6 +1868,9 @@ def test_slotrag_qo_chain_routes_through_explicit_optimizer_with_chain_rule_impo
 
     # chain-rule importance is positional τ=2·depth−1 over the S1,S2,S3 order
     assert captured["importance"] == {"S1": 1, "S2": 3, "S3": 5}
+    # matched-budget invariant: retrieval_budget must equal max_retrieval_calls (6),
+    # not the hidden default of 4 — this is the core G7 honesty guarantee.
+    assert captured["retrieval_budget"] == 6
     # hybrid-only variants when strategy variants are off
     assert captured["strategy_variants"] is False
     assert result.order == ["S1", "S2", "S3"]
