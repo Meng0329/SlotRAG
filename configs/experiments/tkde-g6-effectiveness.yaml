@@ -1,0 +1,45 @@
+# G6 effectiveness — pure optimizer-ablation on DEVEL split (honest no-regression check)
+#
+# Purpose: Gate G6 = "核心 benchmark 无无法解释的系统性大幅落后". The C5 optimizer method
+# (slotrag-g7-chain) must run on a real standard DEVEL sample and show NO unexplained
+# systematic regression vs static across the full mixture (mostly 2-slot, where
+# τ=2·depth−1 gives zero optimizer benefit by design). The ≥3-slot benefit is already
+# proven (§29, matched budget); G6 guards against a *regression* on the 2-slot-majority
+# split.
+#
+# Design (honest, matches frozen protocol):
+#   - Same frozen SlotPlan replayed across arms (frozen_plan_source: slotrag-g7-static),
+#     ONLY physical-plan selection path varies (static compiler vs explicit optimizer).
+#   - evidence_sufficiency DROPPED (isolates physical-plan selection; removes bm25-only
+#     calibrator confound). Pure optimizer ablation.
+#   - Arms (matched budget, hybrid backend):
+#       static    = slotrag-g7-static  → compile_physical_plan (uniform alloc)
+#       cost-only = slotrag-g7-flat    → search_physical_plans, flat importance
+#       chain-rule= slotrag-g7-chain   → search_physical_plans, τ=2·depth−1
+#   - matched budget: max_retrieval_calls threads into optimizer retrieval_budget.
+#   - success criterion: chain-rule EM/F1 ≥ static - margin (no systematic regression),
+#     and realized retrieval_calls ≤ static (no cost regression). No headline accuracy
+#     WIN claim (2-slot majority → zero optimizer benefit is structural).
+#
+# split=evaluation + stratified deterministic sample (seed 2027) = DEVEL. This is a
+# real DEVEL effectiveness run, not a smoke.
+benchmark_root: benchmark
+output_root: runs
+datasets: [hotpotqa]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  g6-effective:
+    split: evaluation
+    sample_size: 20
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+    frozen_plan_source: slotrag-g7-static
+    retrieval_backend: hybrid
