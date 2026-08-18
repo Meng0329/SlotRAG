@@ -1786,3 +1786,102 @@ def test_typed_extraction_candidate_only_enables_materializer_contract(monkeypat
     assert methods.METHODS["slotrag-typed-extraction"].field_extremum_templates is True
     assert methods.METHODS["slotrag-typed-extraction"].polar_comparison_templates is True
     assert methods.METHODS["slotrag-typed-extraction"].polar_row_consensus is True
+
+
+def test_slotrag_qo_chain_routes_through_explicit_optimizer_with_chain_rule_importance(monkeypatch):
+    """G7: slotrag-qo-chain must call search_physical_plans (the explicit
+    G3/G5 optimizer), not the static compile_physical_plan, and must pass the
+    deterministic chain-rule importance (τ=2·depth−1) built positionally from
+    the logical plan's subgoal order."""
+    plan = SlotPlan.model_validate({
+        "slots": [
+            {"id": "S1", "predicate": "Founder", "arguments": ["?person", "OpenAI"], "estimated_cardinality": 10, "estimated_cost": 2},
+            {"id": "S2", "predicate": "Founded", "arguments": ["?person", "?company"], "estimated_cardinality": 1, "estimated_cost": 1},
+            {"id": "S3", "predicate": "Headquarters", "arguments": ["?company", "?city"], "estimated_cardinality": 5, "estimated_cost": 1},
+        ],
+        "joins": [["S1.person", "S2.person"], ["S2.company", "S3.company"]],
+        "outputs": ["?person", "?company", "?city"],
+    })
+    captured = {}
+
+    class Compiler:
+        def __init__(self, _client):
+            pass
+
+        def compile(self, _question, **_kwargs):
+            return plan, RunMetrics()
+
+    class FakePlan:
+        slot_execution_order = ["S1", "S2", "S3"]
+        budget_allocation = {}
+        retrieval_strategy = {"S1": "hybrid", "S2": "hybrid", "S3": "hybrid"}
+        telemetry = SimpleNamespace(validation_errors=[], validation_warnings=[])
+
+    class FakeTelemetry:
+        pass
+
+    def fake_search(logical, *, params):
+        captured["importance"] = dict(params.requirement_importance)
+        captured["strategy_variants"] = params.allow_retrieval_strategy_variants
+        return FakePlan(), FakeTelemetry()
+
+    monkeypatch.setattr("slotrag.optimizer.search_physical_plans", fake_search)
+    monkeypatch.setattr(methods, "SlotCompiler", Compiler)
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self, _plan, *, strategy, physical_plan=None):
+            return ExecutionResult(
+                rows=[{"person": "Ada", "company": "X", "city": "SF"}],
+                evidence=[EvidenceRecord(source_id="p", source_span="Ada founded X", slot_id="S2", bindings={})],
+                order=list(physical_plan.slot_execution_order),
+                metrics=RunMetrics(physical_plan_applied=1, physical_plan_order=list(physical_plan.slot_execution_order)),
+            )
+
+    monkeypatch.setattr(methods, "AdaptiveExecutor", Executor)
+    monkeypatch.setattr(methods, "_finalize", lambda _c, _d, _q, result, **_kwargs: result)
+    config = SimpleNamespace(execution=SimpleNamespace(
+        materialization_top_k=5,
+        default_slot_cost=1.0,
+        unbound_argument_cost=2.0,
+        max_replans=4,
+        max_retrieval_calls=4,
+        max_binding_contexts=2,
+    ))
+
+    result = methods._run_slotrag(
+        methods.METHODS["slotrag-qo-chain"],
+        "hotpotqa",
+        QuestionRecord(id="q", question="Who founded OpenAI?"),
+        object(),
+        object(),
+        config,
+        seed=2027,
+        max_steps=4,
+        max_retrieval_calls=6,
+    )
+
+    # chain-rule importance is positional τ=2·depth−1 over the S1,S2,S3 order
+    assert captured["importance"] == {"S1": 1, "S2": 3, "S3": 5}
+    # hybrid-only variants when strategy variants are off
+    assert captured["strategy_variants"] is False
+    assert result.order == ["S1", "S2", "S3"]
+
+
+def test_slotrag_qo_chain_registered_flag_matrix():
+    chain = methods.METHODS["slotrag-qo-chain"]
+    assert chain.physical_plan is True
+    assert chain.physical_plan_optimizer is True
+    assert chain.plan_optimizer_importance == "chain-rule"
+    assert chain.plan_optimizer_strategy_variants is False
+
+    chain_bm25 = methods.METHODS["slotrag-qo-chain-bm25"]
+    assert chain_bm25.physical_plan_optimizer is True
+    assert chain_bm25.plan_optimizer_strategy_variants is True
+    assert "slotrag-qo-chain" in methods.MAIN_METHODS
+    assert "slotrag-qo-chain-bm25" in methods.MAIN_METHODS
+
+    # the static qo must still use the *compiler*, not the optimizer
+    assert methods.METHODS["slotrag-qo"].physical_plan_optimizer is False

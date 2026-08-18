@@ -7,7 +7,7 @@ import re
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -69,6 +69,9 @@ class MethodSpec:
     dual_query_evidence_guard: bool = False
     dual_query_evidence_guard_disjoint_only: bool = True
     physical_plan: bool = False
+    physical_plan_optimizer: bool = False
+    plan_optimizer_importance: Literal["chain-rule", "flat"] = "chain-rule"
+    plan_optimizer_strategy_variants: bool = False
     adaptive_binding_beam: bool = False
     physical_action_policy: bool = False
     topk_expansion_mode: TopKExpansionMode = "utility"
@@ -98,6 +101,8 @@ MAIN_METHODS = [
     "slotrag-sufficiency",
     "slotrag-physical-policy",
     "slotrag-qo",
+    "slotrag-qo-chain",
+    "slotrag-qo-chain-bm25",
     "hybrid",
     "ircot",
     "react",
@@ -193,6 +198,35 @@ METHODS: dict[str, MethodSpec] = {
         complementary_retrieval=True,
         primary_query_variant="question_plus_lexical_slot",
         description="Evidence-Sufficiency-Guided Physical SlotRAG Optimizer",
+    ),
+    "slotrag-qo-chain": MethodSpec(
+        "slotrag-qo-chain",
+        "slotrag",
+        physical_plan=True,
+        physical_plan_optimizer=True,
+        plan_optimizer_importance="chain-rule",
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        evidence_sufficiency=True,
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7: explicit optimizer-backed plan under deterministic chain-rule importance (τ=2·depth−1), hybrid physical impl",
+    ),
+    "slotrag-qo-chain-bm25": MethodSpec(
+        "slotrag-qo-chain-bm25",
+        "slotrag",
+        physical_plan=True,
+        physical_plan_optimizer=True,
+        plan_optimizer_importance="chain-rule",
+        plan_optimizer_strategy_variants=True,
+        adaptive_binding_beam=True,
+        physical_action_policy=True,
+        topk_expansion_mode="disabled",
+        evidence_sufficiency=True,
+        complementary_retrieval=True,
+        primary_query_variant="question_plus_lexical_slot",
+        description="G7: chain-rule optimizer enumerating hybrid vs bm25 per-slot physical impls under matched budget",
     ),
     "slotrag-dual-access": MethodSpec(
         "slotrag-dual-access",
@@ -1743,18 +1777,51 @@ def _run_slotrag(
             )
     physical_plan = None
     if spec.physical_plan:
-        try:
-            physical_plan = compile_physical_plan(logical_plan_from_slot_plan(plan))
-        except PlanValidationError as exc:
-            return ExecutionResult(
-                status="failed",
-                error=f"physical plan validation failed: {exc}",
-                plan=plan,
-                metrics=compiler_metrics.model_copy(update={
-                    "physical_plan_validation_errors": exc.telemetry.validation_errors,
-                    "physical_plan_validation_warnings": exc.telemetry.validation_warnings,
-                }),
-            )
+        logical = logical_plan_from_slot_plan(plan)
+        if spec.physical_plan_optimizer:
+            # G7 frontier: explicit optimizer search (G3/G5) instead of the
+            # static compiler. By default the plan is optimized under the
+            # G5 deterministic chain-rule importance (τ=2·depth−1), the
+            # calibrated per-slot sensitivity; strategy variants (hybrid vs
+            # bm25) can additionally be enumerated as distinct physical impls.
+            from ..optimizer import PlanObjectiveParams, search_physical_plans
+            importance: dict[str, float] | None = None
+            if spec.plan_optimizer_importance == "chain-rule":
+                importance = {
+                    subgoal.id: 2 * (idx + 1) - 1
+                    for idx, subgoal in enumerate(logical.subgoals)
+                }
+            try:
+                physical_plan, _splan_telemetry = search_physical_plans(
+                    logical,
+                    params=PlanObjectiveParams(
+                        requirement_importance=importance or {},
+                        allow_retrieval_strategy_variants=spec.plan_optimizer_strategy_variants,
+                    ),
+                )
+            except PlanValidationError as exc:
+                return ExecutionResult(
+                    status="failed",
+                    error=f"physical plan optimizer failed: {exc}",
+                    plan=plan,
+                    metrics=compiler_metrics.model_copy(update={
+                        "physical_plan_validation_errors": exc.telemetry.validation_errors,
+                        "physical_plan_validation_warnings": exc.telemetry.validation_warnings,
+                    }),
+                )
+        else:
+            try:
+                physical_plan = compile_physical_plan(logical)
+            except PlanValidationError as exc:
+                return ExecutionResult(
+                    status="failed",
+                    error=f"physical plan validation failed: {exc}",
+                    plan=plan,
+                    metrics=compiler_metrics.model_copy(update={
+                        "physical_plan_validation_errors": exc.telemetry.validation_errors,
+                        "physical_plan_validation_warnings": exc.telemetry.validation_warnings,
+                    }),
+                )
         compiler_metrics = compiler_metrics.model_copy(update={
             "physical_plan_validation_errors": physical_plan.telemetry.validation_errors,
             "physical_plan_validation_warnings": physical_plan.telemetry.validation_warnings,
