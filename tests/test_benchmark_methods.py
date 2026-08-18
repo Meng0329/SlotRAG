@@ -1883,5 +1883,12 @@ def test_slotrag_qo_chain_registered_flag_matrix():
     assert "slotrag-qo-chain" in methods.MAIN_METHODS
     assert "slotrag-qo-chain-bm25" in methods.MAIN_METHODS
 
+    # cost-only control: flat importance → empty requirement_importance → all
+    # slots default to importance 1.0, budget-driven (no chain-law sensitivity)
+    flat = methods.METHODS["slotrag-qo-flat"]
+    assert flat.physical_plan_optimizer is True
+    assert flat.plan_optimizer_importance == "flat"
+    assert "slotrag-qo-flat" in methods.MAIN_METHODS
+
     # the static qo must still use the *compiler*, not the optimizer
     assert methods.METHODS["slotrag-qo"].physical_plan_optimizer is False
