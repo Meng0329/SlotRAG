@@ -1,6 +1,6 @@
 agnes:
   base_url: http://10.200.37.71:8801/v1
-  model: qwen3.6-27b
+  model: qwen3.8-27b
   api_key_env: SLOTRAG_AGNES_API_KEY
   timeout_seconds: 60
   max_retries: 3
