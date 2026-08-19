@@ -1,0 +1,61 @@
+# R1.1-EXT — External baseline matched-budget comparison (DEVEL, hybrid substrate)
+#
+# Pre-registered in research/R1_1_EXT_PRE_REGISTRATION.md (commit 6f4462f).
+# Extends R1.1 (n=10, hotpotqa) to main-table protocol scale: 3 datasets × 20/24
+# questions, same frozen evaluation split (seed 2027) as the G6/G11 main table,
+# so baseline arms share the EXACT question IDs the paper's tab:overall reports.
+#
+# Baseline set (real adapters in methods.py, family != slotrag):
+#   - hybrid  = vanilla single-pass whole-question retrieval (1 call)
+#   - ircot   = interleaved reasoning+retrieval, budget-matched steps
+#   - react   = structured search/finish loop, budget-matched steps
+#   (planrag/graphrag excluded: unbounded query list / passage graphs deviate
+#    from the matched-call budget contract, same as R1.1.)
+#
+# Matched-budget contract (honest, matches FROZEN protocol):
+#   - budget.max_retrieval_calls = 8 for ALL arms.
+#   - slotrag arms consume via AdaptiveExecutor; ircot/react via budget-matched
+#     step loop (range(max_retrieval_calls), patched in methods.py).
+#   - Same substrate: hybrid retrieval backend for every arm.
+#   - No frozen_plan_source (external baselines cannot take a frozen plan);
+#     slotrag arms run their own compile path. Isolates end-to-end methods.
+#   - split=evaluation stratified sample (seed 2027) = DEVEL, no leakage.
+#     n=20 for hotpotqa/2wiki (matches G6), n=24 for musique (matches G11).
+#
+# Honesty notes:
+#   - Real calls reported per arm; matched budget is upper bound, not forced spend.
+#   - R1.1 n=10 showed chain EM 30% < baselines 40% (not significant, p=1.000).
+#     R1.1-EXT reports whatever the point estimates are; no WIN claim.
+benchmark_root: benchmark
+output_root: runs
+datasets: [hotpotqa, 2wikimultihop, musique]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  # hotpotqa + 2wiki share n=20 (matches G6 main table question IDs).
+  tkde-r11-ext-baselines:
+    split: evaluation
+    sample_size: 20
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-chain
+      - hybrid
+      - ircot
+      - react
+    retrieval_backend: hybrid
+  # musique uses its own stage at n=24 to match the G11 main table (n=24).
+  tkde-r11-ext-baselines-musique:
+    split: evaluation
+    sample_size: 24
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-chain
+      - hybrid
+      - ircot
+      - react
+    retrieval_backend: hybrid
