@@ -1417,10 +1417,10 @@ def _run_planrag(dataset: str, question: QuestionRecord, retriever: HybridRetrie
     return _finalize(client, dataset, question, _retrieval_result(items, slot_id="planrag", metrics=metrics))
 
 
-def _run_ircot(dataset: str, question: QuestionRecord, retriever: HybridRetriever, client: AgnesClient) -> ExecutionResult:
+def _run_ircot(dataset: str, question: QuestionRecord, retriever: HybridRetriever, client: AgnesClient, max_retrieval_calls: int = 4) -> ExecutionResult:
     items: list[RetrievalResult] = []
     metrics = RunMetrics()
-    for step_index in range(4):
+    for step_index in range(max_retrieval_calls):
         response = client.complete(
             [
                 {"role": "system", "content": "Interleave evidence-guided reasoning and retrieval. Emit only the next search step; stop only when evidence is sufficient."},
@@ -1443,10 +1443,10 @@ def _run_ircot(dataset: str, question: QuestionRecord, retriever: HybridRetrieve
     return _finalize(client, dataset, question, _retrieval_result(items, slot_id="ircot", metrics=metrics))
 
 
-def _run_react(dataset: str, question: QuestionRecord, retriever: HybridRetriever, client: AgnesClient) -> ExecutionResult:
+def _run_react(dataset: str, question: QuestionRecord, retriever: HybridRetriever, client: AgnesClient, max_retrieval_calls: int = 4) -> ExecutionResult:
     items: list[RetrievalResult] = []
     metrics = RunMetrics()
-    for step_index in range(4):
+    for step_index in range(max_retrieval_calls):
         response = client.complete(
             [
                 {"role": "system", "content": "Act through the structured search tool. Choose finish only when the observations answer the question."},
@@ -2083,8 +2083,8 @@ def run_method(
     runners: dict[str, Callable[[], ExecutionResult]] = {
         "hybrid": lambda: _run_hybrid(dataset, question, retriever, client),
         "planrag": lambda: _run_planrag(dataset, question, retriever, client),
-        "ircot": lambda: _run_ircot(dataset, question, retriever, client),
-        "react": lambda: _run_react(dataset, question, retriever, client),
+        "ircot": lambda: _run_ircot(dataset, question, retriever, client, max_retrieval_calls),
+        "react": lambda: _run_react(dataset, question, retriever, client, max_retrieval_calls),
         "graphrag": lambda: _run_graphrag(dataset, question, client),
         "slotrag": lambda: _run_slotrag(
             spec,

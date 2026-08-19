@@ -1,0 +1,52 @@
+# G11 large-sample extension — musique 3-hop DEVEL pure-optimizer ablation
+#
+# Purpose: close G11 remaining item (a) "larger mixed-validation + musique 3-hop
+# domain" (裁决12z6 / §33 boundary). The prior G6/G6-2wiki runs established
+# "no regression on 2-slot-majority split." This run targets the ≠rationale:
+# the musique 3-hop1 domain where the τ=2·depth−1 chain-law and G3(chain-rule)
+# benefit were FIRST demonstrated (裁决12q, §22, `run_g5_chainrule_g3.py
+# --budget 8` on 2 well-defined 3-slot chains: all-chain p<0.001). G11 (a)
+# asks for this benefit to be reproduced through the **full benchmark-runner
+# path** (run_method → gaugeable attempts), not only the research harness.
+#
+# Design (matches frozen protocol / G6 pattern):
+#   - Same frozen SlotPlan replayed across arms (frozen_plan_source:
+#     slotrag-g7-static), ONLY physical-plan selection path varies.
+#   - evidence_sufficiency DROPPED (isolates physical-plan selection; pure
+#     optimizer ablation — same as G6/G7).
+#   - Arms (matched budget, hybrid backend):
+#       static    = slotrag-g7-static → compile_physical_plan (uniform alloc)
+#       cost-only = slotrag-g7-flat   → search_physical_plans, flat importance
+#       chain-rule= slotrag-g7-chain  → search_physical_plans, τ=2·depth−1
+#   - matched budget: max_retrieval_calls threads into optimizer retrieval_budget.
+#   - sample: musique validation, stratified deterministic DEVEL sample (seed
+#     2027). Stratify toward 3-hop (3hop1/3hop2) + a 2-hop mix so the sample
+#     contains both the benefit domain (≥3-slot, where τ=2d−1 acts) and the
+#     floor domain (2-slot, zero optimizer benefit by design). This is a REAL
+#     mixed-validation effectiveness/robustness run, not a smoke.
+#
+# Honest success criterion: chain-rule EM/F1 ≥ static − margin (no systematic
+# regression) on the full sample; and on the 3-hop/≥3-slot subset, retrieval_calls
+# chain ≤ static (cost WIN expected, mirroring §22/裁决12q). No headline accuracy
+# WIN claim on the 2-slot floor (structural). Musique "answers" may be multi-word
+# personal names → EM is strict-string; report both EM and (if F1 computable) F1.
+benchmark_root: benchmark
+output_root: runs
+datasets: [musique]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  g11-musique-3hop:
+    split: evaluation
+    sample_size: 24
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+    frozen_plan_source: slotrag-g7-static
+    retrieval_backend: hybrid

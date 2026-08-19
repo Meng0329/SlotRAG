@@ -1,0 +1,53 @@
+# R1.1 — External baseline matched-budget comparison (DEVEL, hybrid substrate)
+#
+# Purpose: Reviewer B/D common hard requirement — place slotrag arms against at
+# least 2 external RAG baselines on the SAME substrate + SAME matched budget,
+# report EM/F1 + calls in the same table.
+#
+# Baseline set (real adapters in methods.py, family != slotrag):
+#   - hybrid     = vanilla single-pass whole-question retrieval (1 call)
+#   - ircot      = interleaved reasoning+retrieval, budget-matched steps
+#   - react      = structured search/finish loop, budget-matched steps
+#   (planrag/graphrag exist in METHODS but are excluded here: planrag emits an
+#    unbounded query list and graphrag needs per-question passage graphs — both
+#    deviate from the matched-call budget contract this run enforces.)
+#
+# Matched-budget contract (honest, matches FROZEN protocol):
+#   - budget.max_retrieval_calls = 8 for ALL arms. slotrag arms consume via
+#     AdaptiveExecutor; ircot/react consume via budget-matched step loop
+#     (range(max_retrieval_calls), patched in methods.py to thread the budget).
+#   - Same substrate: hybrid retrieval backend for every arm.
+#   - No frozen_plan_source: external baselines cannot take a frozen plan
+#     (methods.py raises for family != slotrag), so slotrag arms run their own
+#     compile path too. This is a *different* comparison than G6/G7 (which froze
+#     the plan); R1.1 isolates the end-to-end methods, not the physical-plan
+#     selection alone.
+#   - split=evaluation stratified sample (seed 2027) = DEVEL, no leakage.
+#
+# Honesty notes:
+#   - Real calls are reported per arm; the matched budget is an upper bound, not
+#     a forced spend. slotrag chain on hotpotqa realized 1-6 calls (mostly <=4);
+#     ircot/react now share the same 8-call ceiling.
+#   - Success is a report, not a WIN: EM/F1/calls for all arms in one table,
+#     with paired bootstrap CIs on slotrag-vs-baseline call deltas.
+benchmark_root: benchmark
+output_root: runs
+datasets: [hotpotqa]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  tkde-r11-baselines:
+    split: evaluation
+    sample_size: 10
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-chain
+      - hybrid
+      - ircot
+      - react
+    retrieval_backend: hybrid
