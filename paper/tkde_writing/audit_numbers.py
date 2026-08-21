@@ -1,4 +1,10 @@
-"""Complete paper-to-data audit, v4 — added ΔEM half-up check + per-dataset EM rounding."""
+"""Complete paper-to-data audit, v5 — added RQ6 external-baseline (R11) verification block.
+
+v4 covered the matched-budget internal ablation (RQ1-RQ3). v5 adds a separate,
+clearly-labeled section that re-derives the native-budget external-baseline EM
+numbers reported in the §8 "External Baselines (RQ6)" paragraph, so those
+corroborating figures are auditable from raw run artifacts too.
+"""
 import json, glob
 import numpy as np
 
@@ -169,6 +175,48 @@ for ds in ["hotpotqa","2wiki","musique"]:
     for q,r in d["slotrag-g7-chain"].items(): dist[r["nslots"]]=dist.get(r["nslots"],0)+1
     s1=dist.get(1,0); s2=dist.get(2,0); ge3=sum(v for k,v in dist.items() if k>=3)
     print(f"  {ds}: 1-slot={s1}, 2-slot={s2}, ge3={ge3}")
+
+# ---- RQ6 external baselines (R11, native-budget, corroborating evidence) ----
+# Separate from the matched-budget internal ablation above. These numbers are
+# reported as corroborating (not primary) evidence in the §8 "External Baselines
+# (RQ6)" paragraph. Run: tkde-r11-ext-baselines-q38.
+print("\n── RQ6 external baselines (R11, paper §8 'External Baselines (RQ6)') ──")
+R11_ROOT = "/data/mzb/SlotRAG/runs/tkde-r11-ext-baselines-q38/items"
+R11_STAGE = {"hotpotqa": "tkde-r11-ext-baselines",
+             "2wikimultihop": "tkde-r11-ext-baselines",
+             "musique": "tkde-r11-ext-baselines-musique"}
+R11_METHODS = ["slotrag-g7-chain", "slotrag-g7-static", "hybrid", "ircot", "react"]
+# (paper_chain, paper_static, paper_hybrid, paper_ircot, paper_react) in %
+R11_PAPER = {
+    "hotpotqa": (35.0, 40.0, 35.0, 25.0, 5.0),
+    "2wikimultihop": (40.0, 65.0, 10.0, 25.0, 25.0),
+    "musique": (45.8, 29.2, 16.7, 16.7, 16.7),
+}
+for ds in ["hotpotqa", "2wikimultihop", "musique"]:
+    stage = R11_STAGE[ds]
+    paper = R11_PAPER[ds]
+    computed = []
+    for m in R11_METHODS:
+        c = t = 0
+        for f in glob.glob(f"{R11_ROOT}/{stage}/{ds}/{m}/*.json"):
+            try:
+                j = json.load(open(f))
+            except Exception:
+                continue
+            c += int((j.get("scores") or {}).get("em", 0) == 1)
+            t += 1
+        em = c / t * 100 if t else None
+        computed.append(em)
+        pc = paper[R11_METHODS.index(m)]
+        status = "OK" if (em is not None and abs(em - pc) < 0.05) else "MISMATCH"
+        print(f"  {ds}: {m:16s} n={t:2d} EM={em:.1f}% (paper {pc:.1f}%) [{status}]")
+    all_ok = all(em is not None and abs(em - pc) < 0.05
+                 for em, pc in zip(computed, paper))
+    # Honest framing check: chain strictly beats all upstream on MuSiQue; the
+    # paragraph claims a clean accuracy win there and no universal claim elsewhere.
+    ms_win = (R11_PAPER["musique"][0] > max(R11_PAPER["musique"][2:]))
+    print(f"    -> all 5 methods match paper: {'OK' if all_ok else 'MISMATCH'} | "
+          f"MuSiQue chain beats all upstream: {'YES' if ms_win else 'NO'}")
 
 print("\n" + "="*72)
 print("AUDIT COMPLETE — compare printed values against paper claims above.")

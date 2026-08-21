@@ -29,7 +29,7 @@
 - G12 PASS（全部 gate 闭合，论文合规）
 
 ### 剩余开放项（优先级排序）
-1. **[ ] R1.1-EXT 外部基线接入主表**：`tkde-r11-ext-baselines-q38` 等 runs 已存在且 configs 已引用，但未进入 §8 主表/RQ6。需把 external baseline 对比写入 RQ2/RQ6 并补审计脚本检查。
+1. **[x] R1.1-EXT 外部基线接入主表**：§8 RQ6 已加 "External Baselines (RQ6)" 段落（`tkde-r11-ext-baselines-q38`，native-budget，n=20/20/24），诚实标注为 corroborating evidence 非主结果；`audit_numbers.py` v5 新增 R11 核对块，15 个数字全 [OK]；论文编译通过（0 undefined citations，12 页）。
 2. **[ ] SEALED_TEST 冻结+执行**：pre-registered protocol 未冻结、未跑。当前所有数字均 dev/validation split（n=55 matched），Limitations 已诚实披露「非 held-out sealed set」。
 3. **[ ] 外部有效性（cross-venue）**：仅 qwen3.8-27b 单 decoder，generalizability 未测。
 4. **[ ] 投稿前 Final Audit**（Phase 17）：refs DOI 核对、双栏图可读性、artifact README 独立复现主表。

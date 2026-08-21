@@ -194,6 +194,26 @@ task and evidence type. HoVer (claim verification) and FEVEROUS
 through the unchanged core architecture; only the task-level answer contract
 changes.
 
+\paragraph{External Baselines (RQ6).} Beyond the controlled SlotRAG
+ablations of RQ2--RQ3, we compare the chain arm against three upstream
+multi-hop methods---IRCoT, ReAct, and Hybrid RAG---under each method's
+\emph{native} retrieval protocol (not the forced equal-budget internal
+comparison), on balanced 20/20/24-question external samples of HotpotQA,
+2WikiMultiHopQA, and MuSiQue (run \code{tkde-r11-ext-baselines-q38}). Exact-match:
+on MuSiQue the chain arm reaches $45.8\%$ versus $29.2\%$ for the frozen
+static SlotRAG arm and $16.7\%$ for all three upstream methods---a genuine
+accuracy advantage over real baselines on that split. On HotpotQA
+($35.0\%$ chain vs.\ $40.0\%$ static, $35.0\%$ Hybrid, $25.0\%$ IRCoT,
+$5.0\%$ ReAct) and 2WikiMultiHop ($40.0\%$ chain vs.\ $65.0\%$ static,
+$10.0\%$ Hybrid, $25.0\%$ IRCoT/ReAct) the chain arm is comparable to or
+below the static SlotRAG arm but matches or exceeds the upstream methods on
+2Wiki. The pattern is consistent with the internal matched-budget finding:
+the optimizer is cost-neutral-to-better versus real baselines and shows a
+clean accuracy win on MuSiQue, while making no universal accuracy claim on
+the other two splits. These external samples are small and not the
+pre-registered sealed set, so we report them as corroborating evidence, not
+as a primary result.
+
 \paragraph{HoVer (RQ6).} The claim-verification task is routed to a typed
 boolean answer contract (yes/no/unknown), a single deterministic
 \code{EvidenceAnsweringQuestion} slot, and the unchanged materializer,
