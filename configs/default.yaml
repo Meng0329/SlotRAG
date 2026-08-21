@@ -52,7 +52,10 @@ data:
   processed_dir: data/processed
 
 rate_limit:
-  provider_rpm: 30
-  operational_rpm: 20
-  max_concurrency: 4
+  provider_rpm: 120
+  operational_rpm: 100
+  max_concurrency: 12
+  agnes_max_concurrency: 12
+  embedding_max_concurrency: 16
+  reranker_max_concurrency: 8
   state_dir: runs/.rate-limits
