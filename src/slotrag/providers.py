@@ -208,8 +208,9 @@ class AgnesClient(_HTTPProvider):
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        if enable_thinking is not None:
-            payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        # Default thinking OFF. Enable only when explicitly requested (9b/3.x
+        # models return null `content` under thinking mode and waste budget).
+        payload["chat_template_kwargs"] = {"enable_thinking": bool(enable_thinking)}
         body, elapsed = self._post(
             self.config.url("chat/completions"),
             self.config.api_key,

@@ -1,0 +1,37 @@
+# SEALED_TEST — held-out 40% (research/eval_sets/test_set.json)
+#
+# Honest pre-registered sealed evaluation. Sample files are FIXED held-out IDs
+# (runs/tkde-sealed-test-q35/samples/g7-sealed/*.jsonl), auto-loaded verbatim
+# by the runner (no re-sampling). All three core datasets, full held-out size.
+#
+# Design mirrors the canonical matched-budget protocol (tkde-g6-effectiveness):
+#   - frozen_plan_source: slotrag-g7-static → SAME audited SlotPlan replayed
+#     across all arms; ONLY the physical-plan selection path varies.
+#   - evidence_sufficiency DROPPED (isolates physical-plan selection).
+#   - Arms (matched budget 8, hybrid retriever):
+#       static    = slotrag-g7-static
+#       cost-only = slotrag-g7-flat
+#       chain-rule= slotrag-g7-chain   (τ=2·depth−1)
+#   - Generator: qwen3.5-9b (global env SLOTRAG_AGNES_MODEL); thinking forced
+#     OFF at provider layer for this model.
+#   - Concurrency: agnes_max_concurrency=1024 (probe-verified clean ceiling).
+benchmark_root: benchmark
+output_root: runs/tkde-sealed-test-q35
+datasets: [hotpotqa, 2wikimultihop, musique]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  g7-sealed:
+    split: evaluation
+    sample_size: 100000          # ignored: fixed sample files override selection
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+    frozen_plan_source: slotrag-g7-static
+    retrieval_backend: hybrid

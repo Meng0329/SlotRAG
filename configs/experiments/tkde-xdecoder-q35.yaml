@@ -1,0 +1,35 @@
+# CROSS-DECODER — generalizability probe (qwen3.5-9b)
+#
+# Re-runs the EXACT matched-budget protocol on the SAME question IDs the paper
+# reports (runs/tkde-xdecoder-q35/samples/g7-cross/*.jsonl), but with the
+# generator switched to qwen3.5-9b (global env SLOTRAG_AGNES_MODEL). This is the
+# external-validity / cross-decoder test: does the optimizer's behavior (cost
+# reduction on ≥3-slot, no EM regression on 1-2-slot) hold under a different
+# decoder? Sample files are FIXED (auto-loaded verbatim, no re-sampling).
+#
+# Same honest design as tkde-g6-effectiveness / tkde-g11-musique:
+#   - frozen_plan_source: slotrag-g7-static (plan structure identical across
+#     decoders; only generation differs).
+#   - evidence_sufficiency DROPPED (isolates physical-plan selection).
+#   - Arms (matched budget 8, hybrid): static / flat / chain-rule.
+#   - n = 20/20/24 (identical to paper dev/val matched set).
+benchmark_root: benchmark
+output_root: runs/tkde-xdecoder-q35
+datasets: [hotpotqa, 2wikimultihop, musique]
+seed: 2027
+random_seeds: [2027]
+budget:
+  max_steps: 8
+  max_llm_calls: 96
+  max_retrieval_calls: 8
+  question_timeout_seconds: 600
+stages:
+  g7-cross:
+    split: evaluation
+    sample_size: 100000
+    methods:
+      - slotrag-g7-static
+      - slotrag-g7-flat
+      - slotrag-g7-chain
+    frozen_plan_source: slotrag-g7-static
+    retrieval_backend: hybrid
