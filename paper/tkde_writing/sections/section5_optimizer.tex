@@ -1,0 +1,137 @@
+\section{Requirement-Aware Physical-Plan Allocator}
+\label{sec:optimizer}
+
+% OP-P0 — Repositioning framework (P2 path b): the general enummeration is the
+% real mechanism; on the chain topology the allocator is deterministic.
+Section~\ref{sec:algebra} gives requirements importance, type, and dependency.
+This section describes how slotrag turns a logical evidence program into a
+physical plan under a matched budget, and how the physical-plan of the chain
+workload we study reduces to a deterministic, importance-weighted allocation.
+
+We adopt an explicit \emph{prediction/decision} separation: a property estimator
+supplies estimates of optimizer-visible properties (yield, coverage, cost), and
+a physical-plan allocator turns them into an execution order, a retrieval-call
+allocation, and a physical implementation per requirement. On the well-defined
+chains that dominate our workloads, requirement importance is
+construction-derived and exact ($\tau = 2d - 1$), so the allocation is
+deterministic and auditable rather than a searched optimum. On general
+(non-chain) graphs the allocator falls back to a bounded enumeration over legal
+orders, physical implementations, and budget allocations; because the evaluated
+workloads are chain-topology, the enumeration is a \emph{mechanism}, not a claim
+of general plan search --- the branching re-optimization that would give
+enumeration non-trivial freedom is future work (Section~\ref{sec:execution}).
+We state this boundary so the reader does not over-read general plan-searching
+into a system that today runs chains.
+
+% OP-P2 — Estimator architecture
+The optimizer makes decisions from estimates of optimizer-visible properties:
+expected evidence yield, marginal requirement coverage, selectivity, failure
+probability, and cost. Our design deliberately separates \emph{prediction} from
+\emph{decision}: the estimator supplies property estimates; an explicit
+optimizer consumes them. For the well-defined chains that dominate our
+workload, we derive the requirement importance estimate in closed form. The
+chain law states that a requirement at dependency depth $d$ carries importance
+$\tau = 2d - 1$: each requirement is worth the depth of the chain it anchors,
+and the downstream requirement is strictly more important than the upstream
+one. This law was discovered by a counterfactual scan over compiled plans and
+holds deterministically on well-defined chains (Spearman correlation 1). It is
+a calibrated, construction-derived estimator rather than a learned one; we do
+not claim a learned estimator adds value on this subdomain. On
+non-well-defined chains the closed form is a proxy artifact and is outside the
+claim.
+
+% OP-P3 — Calibration / training data
+Because the importance estimator is derived by construction, it requires no
+training data and cannot leak sealed test information. This is the honest
+fallback the design intends: when a property estimator admits no calibration
+from development executions, the system uses a deterministic, construction-level
+estimator rather than silently substituting a different learned model. All
+evaluation in this paper respects the development / validation / sealed-test
+registry; no sealed instance participates in any threshold tuning or property
+calibration.
+
+% OP-P4 — Plan enumeration
+The optimizer enumerates candidate physical plans by combining three factors:
+legal execution orders (dependency-respecting topological orders of the
+requirement graph), compatible physical implementations (hybrid vs.\ bm25 per
+requirement), and budget allocations (a distribution of the retrieval-call
+budget across requirements). Enumeration is bounded: dependency orders are
+capped at a deterministic subset ($256$) of topological orders, and each
+candidate is deduplicated by a canonical key. For a strict chain, the
+dependency graph admits exactly one legal order, so enumeration reduces to
+budget allocation; for branching graphs, multiple orders become legal and the
+allocation can differ across them.
+
+% OP-P5 — Dominance / Pareto pruning
+Candidates are pruned by dominance. A candidate plan $A$ dominates $B$ if $A$
+has at least as much expected requirement utility and no more expected cost on
+every constrained resource dimension. Dominance pruning is necessary because a
+cheaper plan does not automatically dominate a more expensive one: a plan that
+spends more calls on a high-importance downstream requirement can satisfy a
+materially different evidence state. Pruning removes only candidates that are
+Pareto-dominated, and the number of pruned candidates is recorded in the
+optimizer telemetry so the search itself is auditable.
+
+% OP-P6 — Utility-aware selection
+Plan selection is requirement-aware. The objective is
+
+\vspace{-0.1em}
+\begin{equation}
+\label{eq:objective}
+U(\pi) = \sum_{s \in \pi} w_s \cdot \Bigl(1 - e^{-\,c_s / \beta_s}\Bigr) - \lambda(\pi),
+\end{equation}
+\vspace{-0.1em}
+
+\noindent
+where $w_s$ is the importance of requirement $s$ ($\tau = 2d-1$ on well-defined
+chains), $c_s$ is the number of retrieval calls allocated to $s$, $\beta_s$
+scales with the requirement's estimated cardinality (rarer evidence needs more
+calls), and $\lambda(\pi)$ is the estimated resource cost of the plan. The
+saturating marginal means utility is credited only for \emph{expected progress}
+on a requirement: marginal value diminishes as calls accumulate, and an
+already-satisfied requirement contributes no further utility. This discourages
+repeated retrieval of already-satisfied facts even when such retrieval would
+rank highly on relevance alone---the failure mode of pure cost- or
+relevance-driven selection.
+
+% OP-P7 — Complexity and algorithm
+\begin{figure}[t]
+\centering
+\caption{Bounded physical-plan search (requirement-aware optimizer).}
+\label{alg:search}
+\small
+\begin{tabular}{@{}l@{}l}
+$C \leftarrow \emptyset$ & candidate plans \\
+\textbf{for} each legal topo order $\pi$ of dependency edges $E$: & \\
+\quad $\mathit{alloc} \leftarrow \textsc{Allocate}(\pi,\ \tau,\ B)$ & importance-weighted greedy \\
+\quad \textbf{for} each physical assignment $\sigma$ per slot: & \\
+\qquad $C \leftarrow C \cup \{(\pi,\ \sigma,\ \mathit{alloc})\}$ & \\
+$\mathit{best} \leftarrow \arg\max_{c\in C} \mathrm{Utility}(c)$ & Pareto-dominance, tie: fewer calls \\
+\textbf{return} $\mathit{best}$ &
+\end{tabular}
+\end{figure}
+
+Algorithm~\ref{alg:search} presents the bounded search. The dominant cost
+factors are the number of legal orders and the number of physical
+implementations per requirement; both are capped (orders $\le 256$,
+implementations $\le 2$ per requirement). The allocation step is a deterministic
+greedy pass over requirements in a fixed order. In the worst case the search is
+exponential in the number of requirements before the cap, which is why the cap
+is a declared search-space bound rather than a silent truncation: the
+requirement-aware selection is robust to the subset because the dominant
+candidate is always the dependency-ordered plan. The realized search overhead
+is reported as a systems cost in Section~\ref{sec:mechanism}.
+
+\paragraph{Complexity bound.}
+On a strict chain the dependency graph admits exactly one legal execution order
+($\pi$ is fixed), so the enumeration factor collapses and the allocator reduces
+to the deterministic importance-weighted greedy over a fixed order
+(\S OP-P4); search overhead is then $O(|S|)$ for allocation plus $O(2^1)$
+physical-assignment checks, which is dominated by a single retrieval forward
+pass. On a branching graph the number of legal orders $O$ and per-requirement
+implementations $I$ are both bounded ahead of time ($O \le 256$, $I \le 2$),
+giving a declared worst case of $O(256 \cdot 2^{|S|} \cdot |S|)$ candidate
+plans; the Pareto-pruning step (\S OP-P5) removes dominated candidates during
+enumeration, and the number of pruned candidates is recorded in optimizer
+telemetry. Because the evaluated workloads are chain-topology, the realized
+cost sits at the $O(|S|)$ end of this bound rather than the declared worst case.

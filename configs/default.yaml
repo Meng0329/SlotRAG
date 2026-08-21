@@ -1,6 +1,6 @@
 agnes:
   base_url: http://10.200.37.71:8801/v1
-  model: qwen3.8-27b
+  model: qwen3.6-27b
   api_key_env: SLOTRAG_AGNES_API_KEY
   timeout_seconds: 60
   max_retries: 3
@@ -52,10 +52,7 @@ data:
   processed_dir: data/processed
 
 rate_limit:
-  provider_rpm: 120
-  operational_rpm: 100
-  max_concurrency: 12
-  agnes_max_concurrency: 12
-  embedding_max_concurrency: 16
-  reranker_max_concurrency: 8
+  provider_rpm: 30
+  operational_rpm: 20
+  max_concurrency: 4
   state_dir: runs/.rate-limits

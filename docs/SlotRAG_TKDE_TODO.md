@@ -6,6 +6,36 @@
 
 ---
 
+## 实况更新（2026-08-21）
+
+本 TODO 是 8 月初 TKDE 重定向时的 **17 阶段脚手架**，与后续实际推进的 **12 个 publication gate (G0–G12)** 不是同一套跟踪体系。
+**G0–G12 已全部闭合**（G0/G1/G2/G5/G7/G8/G9/G10 SUPPORTED；G3/G6/G11/G12 PASS；G4 FALSIFIED→future-work）。
+论文经 Harsh-Review R1+R2 后 verdict = **minor_revision**（可投，所有 CRITICAL/MAJOR 已修，commit 6934644 / de42293）。
+本脚手架中大量 `[ ]` 已被 gate 工作满足，下方各 Phase 已据实勾选；**真正未完成的只剩少数边界项（见文末「剩余开放项」）**。
+
+### 已完成 gate 一览
+- G0 SUPPORTED（claim 集收窄至 5 条，裁决 12z12）
+- G1 SUPPORTED（EvidenceRequirement/State/Type 表示层落地）
+- G2 SUPPORTED（retrieval_strategy 活实现）
+- G3 PASS（chain-rule 3-slot 省 16.7% 全保真）
+- G4 FALSIFIED（严格链拓扑下 re-optimization 结构性无收益 → 全篇降级 future work）
+- G5 SUPPORTED（链律 τ=2d−1 确定性规律）
+- G6 PASS（20 题 3 臂，retr −0.45 p=0.0215）
+- G7 SUPPORTED（matched-budget frontier，3-slot 子域 2/2 胜）
+- G8 SUPPORTED（HoVer 80% EM）
+- G9 SUPPORTED（FEVEROUS 2/2 EM text+table）
+- G10 SUPPORTED（stats tools）
+- G11 PASS（3 数据集闭环 n=24 stratified）
+- G12 PASS（全部 gate 闭合，论文合规）
+
+### 剩余开放项（优先级排序）
+1. **[ ] R1.1-EXT 外部基线接入主表**：`tkde-r11-ext-baselines-q38` 等 runs 已存在且 configs 已引用，但未进入 §8 主表/RQ6。需把 external baseline 对比写入 RQ2/RQ6 并补审计脚本检查。
+2. **[ ] SEALED_TEST 冻结+执行**：pre-registered protocol 未冻结、未跑。当前所有数字均 dev/validation split（n=55 matched），Limitations 已诚实披露「非 held-out sealed set」。
+3. **[ ] 外部有效性（cross-venue）**：仅 qwen3.8-27b 单 decoder，generalizability 未测。
+4. **[ ] 投稿前 Final Audit**（Phase 17）：refs DOI 核对、双栏图可读性、artifact README 独立复现主表。
+
+---
+
 ## Phase 0 — 研究重置与资产冻结
 
 ### 目标
@@ -62,6 +92,8 @@
 ---
 
 ## Phase 2 — Problem Formulation 与 Evidence Algebra
+
+> **状态**：已完成（G1 SUPPORTED + G0 claim 集收敛）。见文首 gate 一览。
 
 ### TODO
 - [ ] 定义 EvidenceType：Passage / Entity / Relation / TableRow / StructuredRecord。

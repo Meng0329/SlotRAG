@@ -1,0 +1,127 @@
+\section{Experimental Methodology}
+\label{sec:experiments}
+
+% EX-P1 — Research questions
+Our evaluation is organized around nine research questions spanning
+effectiveness, matched-budget efficiency, optimizer contribution, runtime
+behavior, estimator validity, cross-task transfer, heterogeneous evidence,
+failure mechanisms, and systems overhead. The logical chain is
+straightforward: RQ1 asks whether the system is effective end-to-end; RQ2
+whether it is efficient at a fixed budget; RQ3 isolates the optimizer's
+contribution from the retrieval substrate; RQ4 examines runtime adaptation;
+RQ5 validates the property estimates; RQ6 tests whether the abstraction
+survives a change of terminal task; RQ7 whether it generalizes beyond
+homogeneous passage evidence; RQ8 attributes failures to a stage; and RQ9
+measures systems overhead. Each research question maps to at least one
+contribution in the design of the previous sections.
+
+% EX-P2 — Datasets/tasks
+The benchmark suite is selected by workload property rather than leaderboard
+coverage. Multi-hop QA (HotpotQA, 2WikiMultiHopQA, MuSiQue) stresses dependent
+evidence acquisition over several hops. HoVer changes the terminal task from
+question answering to claim verification, testing whether the evidence program
+abstraction survives a change of task without rewriting the core architecture.
+FEVEROUS adds heterogeneous evidence (text passages and tables), testing whether
+the algebra generalizes beyond homogeneous passages. StrategyQA and DROP are
+outside this submission's matched-budget evaluation (no frozen budget protocol
+was applied to them in the TKDE cycle); they are listed as candidate pressure
+workloads for future work, not as reported results. The selection rationale is that
+each workload isolates one axis of the claim: dependency depth, task type, and
+evidence type.
+
+% EX-P3 — Controlled substrate
+To isolate execution strategy, we control the retrieval substrate wherever
+technically possible: corpus version, index, chunking, candidate pool,
+generator, answer prompt, and context cap are held fixed across all methods
+compared in a cell. The physical-plan optimizer is the only systematic
+difference among the arms of an ablation. Baselines are labeled as either
+\emph{exact upstream reproductions} (the upstream method's own code, index, and
+prompts) or \emph{controlled adaptations} (upstream method adapted to our shared
+substrate); the two categories are never conflated in a result table, and an
+exact-vs-adapted audit is part of the reproducibility manifest.
+
+% EX-P4 — Baselines
+Baselines cover distinct control families rather than a time-ordered list:
+single-shot and iterative retrieval; structured planning and executable-program
+RAG (PlanRAG, PyRAG); learned adaptive control (DynaKRAG); and static and
+cost-only physical planning as diagnostic controls for the proposed optimizer.
+In the optimizer ablation, the static arm replays the same frozen logical plan
+under the legacy uniform allocation, the cost-only arm optimizes over cost
+alone, and the requirement-aware arm applies Equation~\ref{eq:objective}. The
+frozen-plan replay isolates the physical-plan selection path: every arm sees
+the identical compiled plan, so observed differences are attributable to
+selection policy, not to compiler nondeterminism.
+
+% EX-P5 — Metrics
+Metrics are reported at three layers. Task metrics measure answer or
+verification quality (EM, F1, accuracy). Evidence metrics distinguish
+retrieved, materialized, and packed evidence: we report retrieved evidence
+recall, materialized coverage, and packed answer-in-context survival
+separately, so a shortfall at any stage is visible rather than folded into a
+single accuracy number. Systems metrics measure retrieval calls, passages
+accessed, reader tokens, LLM invocations, latency, monetary cost where
+available, optimizer planning overhead, and provenance completeness. The
+distinction between retrieved, materialized, and packed evidence is not a
+refinement; it is required to answer the bottleneck question (RQ8).
+
+% EX-P6 — Matched-budget protocol
+Primary comparisons are matched by explicit resource constraints rather than by
+nominal hyperparameters. The primary matched dimension is realized retrieval
+calls: the retrieval-call budget is threaded into the optimizer's search
+(\code{retrieval\_budget}), so every arm is compared at the same budget
+ceiling, and realized calls are reported per question. We additionally report
+quality at common context-token and model-invocation budgets and trace the
+realized quality--cost frontier. Matched budget is the load-bearing honesty
+rule of this paper: a method wins a cell only if it beats the strongest frozen
+baseline at the same realized budget, never by spending more.
+
+Pairing and budget-exceeded accounting. Answer correctness is computed on the
+matched valid pairs of a comparison: a question enters the paired statistic
+only if both arms produced an ``ok'' record for it (retrieval, planning, and
+generation succeeded within budget). Records that failed for a reason other
+than reaching the retrieval-call ceiling---for example an `other` terminal
+error---are excluded symmetrically whenever they fail on all arms, and are
+retained (scored zero) if they fail on only one arm of a pair; Table~\ref{tab:overall}
+reports the resulting matched-pair count $\#q$ alongside each cell. In the
+reported sample there are four asymmetric cases, all favoring the chain arm:
+on HotpotQA two static-arm records reached the retrieval-call ceiling while the
+chain arm solved the same question within budget (both chain-correct), and one
+static-arm record failed with an `other` terminal error while the chain arm
+solved it (chain-incorrect); on 2Wiki one static-arm record failed with an
+`other` error while the chain arm solved it (chain-incorrect). MuSiQue has no
+asymmetric case. Under the alternative full-sample accounting in which these
+budget-exceeded and single-arm-failed records are retained as zero-scored
+answers (denominator $=$ all shared questions), the $\Delta$EM would be
+HotpotQA $30.0\%\to45.0\%$ ($\Delta{=}{+}15.0$), 2Wiki
+$45.0\%\to50.0\%$ ($\Delta{=}{+}5.0$), MuSiQue $33.3\%\to41.7\%$
+($\Delta{=}{+}8.3$); the reported matched-pair $\Delta$EM in
+Table~\ref{tab:overall} is $+6.3/+5.9/+9.1$. The two conventions agree in
+direction and the matched-pair rule is the conservative one for the method on
+the two budget-exceeded cells, so we report it throughout; the full-sample
+view is disclosed in the artifact README.
+
+% EX-P7 — Statistics
+Statistical inference follows the paired structure of the evaluation. Primary
+hypotheses, metrics, and budgets are specified in the frozen evaluation protocol
+(recorded and auditable before any sealed-run execution; see
+Section~\ref{sec:experiments}). We report paired bootstrap
+confidence intervals, paired effect sizes (Cohen's $d$), exact binomial
+McNemar tests for binary correctness, and cluster-aware bootstrap intervals
+where the data exhibit cluster structure. Multiple-comparison correction
+(Holm) is applied when a family of hypotheses is tested together. A win is
+graded: a statistically supported win ($p<0.05$, CI excluding zero, $d>0.2$)
+ranks above a point-estimate win, which ranks above a tie, which ranks above a
+loss. We do not report a point-estimate difference as a win, and we do not
+report $p>0.05$ as equivalence.
+
+% EX-P8 — Reproducibility and contamination control
+We maintain explicit development, validation, and sealed-test registries with
+fixed deterministic samples (stratified, seed fixed and recorded). All tuning
+decisions are logged before sealed evaluation. Nondeterministic components are
+evaluated with repeated runs or stability analyses rather than hidden behind a
+single favorable execution; where a method is deterministic by construction
+(given a frozen plan), we prove it empirically and record the proof. Every run
+is persisted as an immutable attempt with a reproducibility manifest
+(matrix, command, baseline audit, adapter audit), and the reproducibility
+gate---records audit complete and no blocking reasons---is checked before a run
+is admitted to a result table.

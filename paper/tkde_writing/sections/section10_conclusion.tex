@@ -1,0 +1,62 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We formulated complex multi-hop retrieval as \emph{declarative evidence
+execution}: a question is compiled into typed, dependent evidence requirements;
+a deterministic importance-weighted allocator assigns legal orders, physical
+implementations, and budget allocations to those requirements under a matched
+budget; and a deterministic executor acquires evidence with hard budget
+enforcement and full provenance. We introduced a typed evidence algebra whose
+state-transition semantics (\code{apply\_observation}) make requirement
+progress first-class and auditable, and we derived a chain law pinning
+requirement importance to dependency depth ($\tau = 2d-1$) on well-defined
+chains, so the estimator is construction-derived rather than learned.
+
+The evaluation establishes a cost, not an accuracy, claim, and we are
+deliberate about that boundary. Under the matched-budget protocol, on the
+matched valid pairs the requirement-aware optimizer does not spend more on
+average than the frozen static baseline:
+realized retrieval calls fall on every dataset ($-0.19$ on HotpotQA, $-0.24$
+on 2Wiki, $-0.09$ on MuSiQue; pooled $-0.16$ calls/question), though none of
+these reductions is statistically supported (bootstrap $p \in [0.119,0.376]$;
+Holm-adjusted $p$ up to $0.581$). EM differences are directionally positive
+but equally non-significant ($\Delta$EM $+6.3/+5.9/+9.1$pt; McNemar
+$p\geq 0.625$; pooled $+7.3$pt on 55 matched questions). On the $\ge 3$-slot
+subdomain the cost saving is larger and statistically supported in the cleanest
+comparison: pooled chain $3.45$ vs.\ cost-only $4.73$ calls/question
+($\Delta=-1.27$, bootstrap $p<0.001$; vs.\ static $-1.09$, $p=0.036$) at pooled
+EM that is equal across arms ($54.5\%/45.5\%/54.5\%$). No quality claim is made on
+EM. The $1$--$2$-slot chains---which dominate most QA splits---leave the
+optimizer little allocation freedom, so the cost saving is concentrated on the
+$\ge 3$-slot subdomain.
+We report the point-estimate quality difference as a point estimate, and we treat
+runtime re-optimization over alternative physical plans as future work under a
+branching execution model, because on the chain-only topology this system runs
+today it is vacuous.
+
+More broadly, this study suggests that complex retrieval can be treated as an
+execution problem in which evidence goals remain stable while physical
+acquisition strategies adapt to observed state and resource constraints. The
+honest path forward is to make the evidence requirements and their satisfaction
+state the interface between declarative programs and physical optimization, and
+to evaluate every claim---including the absence of a benefit---against a
+matched budget with the same rigor as the presence of one.
+
+\paragraph{Limitations}
+The matched-budget headline numbers rest on a \emph{development-split} sample
+of matched valid pairs $n=16/17/22$ (HotpotQA / 2WikiMultiHop / MuSiQue,
+pooled $n=55$); the $\ge 3$-slot subdomain cost finding is exploratory at
+$n=11$ (pooled $1{+}4{+}6$). None of these numbers is validated on a held-out
+sealed set, and the pre-registered TKDE protocol for that set is not yet
+frozen. All results use a single frozen decoder (qwen3.8-27b at temperature 0)
+through a shared provider; generalizability to other decoders is untested.
+Evidence corpora are
+the public HotpotQA/2Wiki/MuSiQue passage indices; the heterogeneous-evidence
+result (HoVer/FEVEROUS pilot) is a small transfer proof-of-concept, not a
+Wikipedia-scale retrieval benchmark. The chain law $\tau = 2d - 1$ is exact on
+well-defined \emph{chains} where the compiled requirement order respects
+topological dependencies; on general (branching) graphs the enumerate-index
+proxy is a heuristic and is outside the claim's scope. Cost accounting covers
+realized retrieval calls and LLM calls under the matched budget; latency and
+monetary cost are reported for the optimizer overhead but are not the primary
+comparison axis.

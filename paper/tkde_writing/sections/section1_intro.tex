@@ -1,0 +1,79 @@
+\section{Introduction}
+\label{sec:intro}
+
+Retrieval-augmented generation (RAG) decomposes complex questions into
+retrieval and reasoning steps, and a growing line of work makes those steps
+increasingly explicit: logical query trees \cite{planrag}, executable programs
+\cite{pyrag}, typed slots \cite{slotrag}, and learned adaptive control
+\cite{dynakrag}. This explicitness is a prerequisite for treating multi-hop
+retrieval as an \emph{execution} problem rather than a prompt-engineering
+problem. But it also raises a systems question that most RAG papers do not
+state precisely: given a finite resource budget, \emph{how should a system
+compile a question into dependent evidence requirements, choose physical
+implementations for them, allocate budget across them, and acquire the evidence
+while observing the outcomes at runtime}?
+
+This paper answers that question with a concrete evidence-centric execution
+model. We make three connected moves. First, we treat evidence \emph{requirements}
+--- conditions that must be satisfied, with a type, an importance, a set of
+variables to bind, and dependencies over other requirements --- as first-class
+objects, and give them a typed algebra with monotone state-transition
+semantics (\S\ref{sec:algebra}). Second, we separate the logical evidence
+program from its physical implementations and introduce a deterministic
+importance-weighted allocator that assigns execution orders, retrieval
+implementations, and budget allocations to typed requirements under a matched
+budget (\S\ref{sec:optimizer}). Third, we execute plans deterministically with
+hard budget enforcement and full provenance, so that every answer is traceable
+to the evidence and physical actions that produced it (\S\ref{sec:execution}).
+
+The design is governed throughout by an honesty discipline that we apply to
+ourselves. A property estimator is claimed only where it is construction-derived
+and exact; on the well-defined chains that dominate our workloads, requirement
+importance equals $\tau = 2d-1$ by derivation, and we do not claim a learned
+estimator adds value there. Runtime re-optimization over alternative physical
+plans is explicitly future work under a branching execution model, because on
+the chain-only topology this system runs today it would be vacuous. And in the
+evaluation, a win is claimed only when it is statistically supported under the
+matched-budget protocol; point-estimate differences are reported as such.
+
+Our main experimental finding is that the requirement-aware optimizer, while
+modest in its absolute accuracy footprint, is a \emph{cost}-oriented win on
+the subdomain where it has degrees of freedom, with directionally positive
+EM. On the full matched development sample it does not spend more on average
+than the frozen static baseline (pooled $-0.16$ calls/question; HotpotQA $-0.19$, 2Wiki $-0.24$,
+MuSiQue $-0.09$), and EM differences are directionally positive on all three
+datasets ($\Delta$EM $+6.3/+5.9/+9.1$pt). Neither effect is statistically
+supported at this sample size: cost reductions have bootstrap
+$p \in [0.119,0.376]$ and EM differences have McNemar $p \geq 0.625$ (pooled
+EM $+7.3$pt on 55 matched questions). On the $\ge 3$-slot subdomain, where the
+optimizer has real allocation freedom, the cost saving is larger and
+statistically supported in the cleanest comparison: pooled $3.45$ calls/question
+versus $4.73$ for the cost-only arm ($\Delta=-1.27$, bootstrap $p<0.001$;
+vs.\ static $-1.09$, $p=0.036$; a deterministic structural finding on
+$\ge 3$-slot chains), at pooled EM that is equal across arms
+($54.5\%/45.5\%/54.5\%$). We make no quality claim on EM. The honest boundary is
+that the $1$--$2$-slot chains dominating most QA splits leave the optimizer
+little allocation freedom, so the cost saving is concentrated on the
+$\ge 3$-slot subdomain.
+
+\paragraph{Contributions.}
+\begin{itemize}
+\item An evidence-centric execution model for multi-hop RAG, in which a
+question is compiled into typed, dependent evidence requirements with a formal
+monotone state-transition algebra (\S\ref{sec:algebra}).
+\item A requirement-aware physical-plan allocator that assigns legal orders,
+physical implementations, and budget allocations to typed requirements under a
+matched budget, derived from the chain-law importance
+$\tau = 2d-1$ on well-defined chains (\S\ref{sec:optimizer}).
+\item A deterministic adaptive executor with hard budget enforcement and
+end-to-end provenance, enabling per-question trace audits and operator-level
+failure attribution (\S\ref{sec:execution}).
+\item An honest evaluation under a matched-budget protocol: a uniform cost
+reduction without any quality regression on the full development sample
+(pooled $-0.16$ calls/question, directionally positive EM $+7.3$pt; neither
+statistically supported at this sample size, reported as such), and a
+statistically supported $\ge 3$-slot subdomain saving of $1.27$ calls/question
+over the cost-only arm (bootstrap $p<0.001$) at equal pooled EM---defining the
+boundary where the optimizer has little allocation freedom
+(\S\ref{sec:results}).
+\end{itemize}

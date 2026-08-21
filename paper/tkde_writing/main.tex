@@ -1,0 +1,79 @@
+\documentclass[sigconf]{acmart}
+
+% Blind-draft scaffold for TKDE submission.
+% Sections 1-10 fully drafted (code-anchored); numbers in §3-§7 verified
+% against frozen runs; figures/tables in §8-§9 use frozen results.
+\title{Declarative Evidence Execution for Multi-Hop RAG:\\ Requirement-Aware
+Physical Optimization under Matched Budgets}
+
+\author{Anonymous}
+\affiliation{%
+  \institution{Anonymous Institution}
+  \country{}
+}
+\email{anonymous@anonymous.edu}
+
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{bm}
+\usepackage{lmodern}
+
+% \code: typeset a code identifier (replaces inline \verb to keep 1-line safe).
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+
+\begin{abstract}
+Multi-hop retrieval-augmented generation (RAG) requires acquiring mutually
+dependent evidence items under finite resource budgets before producing an
+answer. We treat this as an \emph{execution} problem: a question is compiled
+into a typed evidence program whose requirements are first-class objects with
+status, type, importance, and dependencies; a deterministic importance-weighted
+allocator assigns execution orders, physical implementations, and budget
+allocations to those requirements under a matched budget; and a
+deterministic adaptive executor acquires evidence, enforces budgets, and
+records provenance. We derive a chain law that pins requirement importance to
+dependency depth ($\tau = 2d-1$) on well-defined chains, making the estimator
+construction-derived rather than learned. Under the matched-budget protocol on
+three multi-hop QA workloads (HotpotQA, 2WikiMultiHopQA, MuSiQue; $55$ matched
+questions), the requirement-aware allocator does not spend more on average than
+the frozen static baseline on the matched valid pairs---pooled $-0.16$ calls/question, with EM differences
+directionally positive on all three datasets ($\Delta$EM $+6.3/+5.9/+9.1$pt)
+---though neither effect is statistically supported at this sample size
+(cost bootstrap $p\in[0.119,0.376]$; EM McNemar $p\geq0.625$), and we report
+both as such. On the $\ge 3$-slot subdomain, where the chain law gives the
+allocator genuine freedom, the cost saving is larger and statistically
+supported in the cleanest comparison: pooled $3.45$ calls/question versus
+$4.73$ for the cost-only arm ($\Delta=-1.27$, bootstrap $p<0.001$; vs.\
+static $-1.09$, $p=0.036$), at pooled EM that is equal across arms
+($54.5\%/45.5\%/54.5\%$). We state the structural boundary honestly: on the
+$1$--$2$-slot chains that dominate most QA splits, a budget floor leaves the
+optimizer little allocation freedom.
+\end{abstract}
+
+\maketitle
+
+% --- Section order per LOOP_PROMPT writing map ---
+\input{sections/section1_intro}
+\input{sections/section2_related}
+\input{sections/section3_problem}
+\input{sections/section4_algebra}
+\input{sections/section5_optimizer}
+\input{sections/section6_execution}
+\input{sections/section7_methodology}
+\input{sections/section8_results}
+\input{sections/section9_mechanism}
+\input{sections/section10_conclusion}
+
+% --- Pending: tables/figures ---
+% Table1 positioning (tab:positioning) — Section 2
+% Fig3 walkthrough (fig:walkthrough) — Section 4
+% Alg1 bounded search (alg:search) — Section 5
+% Table4 overall (tab:overall) — Section 8
+% Fig overall-em (fig:overall-em) — Section 8 (RQ1)
+% Fig ge3-calls (fig:ge3-calls) — Section 8 (RQ3)
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs}
+
+\end{document}

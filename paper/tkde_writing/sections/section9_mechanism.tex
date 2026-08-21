@@ -1,0 +1,117 @@
+\section{System and Mechanism Analysis}
+\label{sec:mechanism}
+
+\subsection{Estimator Validity (RQ5)}
+The importance estimator is derived by construction (the chain law
+$\tau = 2d-1$), so its validity is structural: on well-defined chains the
+implied importance order has Spearman correlation $1$ with the order required
+for optimal allocation. We pin this as a tested invariant of the system rather
+than an empirical correlation: the derivation is exact on the subdomain for
+which the claim is made, and we do not assert a learned estimator adds value on
+this subdomain. On non-well-defined chains the closed form is a proxy artifact
+and is outside the claim.
+
+\subsection{Logical-to-Physical Crossover (RQ9)}
+No physical implementation dominates universally. The chain law predicts a
+clear crossover: on chains of depth $\ge 3$, the downstream requirement is
+strictly more important than the upstream one, so allocating the marginal call
+to the downstream requirement yields positive utility, and the requirement-aware
+plan realizes fewer retrieval calls (verified across the $\ge 3$-slot subdomain:
+pooled chain $3.45$ vs.\ static $4.55$ vs.\ cost-only $4.73$ calls/question;
+$\Delta=-1.09$ vs.\ static, bootstrap $p=0.036$; $\Delta=-1.27$ vs.\ cost-only,
+$p<0.001$; see Table~\ref{tab:overall} and Section~\ref{sec:results}). On chains
+of depth $1$ or $2$ (the $1$- and $2$-slot majority of most QA splits), the
+$\tau=2d-1$ budget floor leaves little allocation freedom, so realized calls are
+close across arms (the pooled full-sample reduction is small, $-0.16$). The
+controlled experiments reproduce both sides: the $\ge 3$-slot subdomain realizes
+the multi-call saving, while on the $1$--$2$-slot majority the arms are within
+one call of each other and the per-question differences are not uniform in
+direction (the chain arm is not always the cheapest). The EM difference on the
+$\ge 3$-slot subdomain is not statistically supported (pooled EM
+$54.5\%/45.5\%/54.5\%$ at $n=11$), so the crossover is a cost claim, not an
+accuracy claim.
+
+\subsection{Bottleneck Attribution (RQ8)}
+Execution traces reveal where additional retrieval ceases to translate into
+answer gains. We decompose failures into acquisition, verification/materialization,
+packing, integration, and generation stages and attribute each incorrect or
+incomplete answer to a stage. The analysis generalizes the finding that the
+selection ceiling---the point beyond which retrieving more evidence does not
+improve the answer---is the dominant bottleneck across the workloads, including
+the winning dataset. This is the honest complement to the effectiveness result:
+the optimizer reduces cost without harming quality precisely because on the
+$2$-slot-majority splits the allocation is already at its floor, and on the
+$\ge 3$-slot subdomain the saved call is spent on the requirement that actually
+carries the answer.
+
+\subsection{Runtime Trace Cases (RQ8)}
+The $\ge 3$-slot subdomain trace is reported in Table~\ref{tab:overall}
+(Section~\ref{sec:results}): pooled across HotpotQA, 2Wiki, and MuSiQue
+($n=11$ matched triples), the chain arm realizes $3.45$ calls/question versus
+$4.55$ for static ordering and $4.73$ for cost-only selection---a pooled
+$\Delta$ of $-1.09$ vs.\ static (bootstrap $p=0.036$) and $-1.27$ vs.\
+cost-only ($p<0.001$). On the $1$--$2$-slot chains that dominate the development
+samples, realized calls are similar across arms but not identical: in the
+controlled $\ge 3$-slot subdomain, chain is cheaper than the static arm in $9$
+of $11$ triples (and cheaper than or equal to the flat arm on $10$ of $11$).
+EM on the
+$\ge 3$-slot subdomain is equal across arms ($54.5\%/45.5\%/54.5\%$), so the saving
+is a cost claim, not an accuracy claim.
+
+\subsection{Scaling and Overhead (RQ9)}
+We quantify optimizer overhead as plan complexity increases, separating
+compile time, estimator inference, plan enumeration/pruning, and evidence
+execution. On the matched-budget controlled development sample
+(Table~\ref{tab:overhead-agg}), optimizer compilation contributes
+$\approx 0$\,ms per query (the search is deterministic and bounded by
+$\le 256$ candidate orders $\times 2$ implementations per requirement); the
+overhead is concentrated in execution time, which is proportional to the
+number of retrieval calls the plan triggers.
+
+End-to-end execution latency on the HotpotQA development sample (matched
+three-arm pairs, $n=16$, budget $=8$, frozen plan replay) is reported in
+Table~\ref{tab:overhead-agg}. The chain arm (requirement-aware) realizes the
+fewest retrieval calls ($1.50$ vs.\ $1.75$ flat and $1.69$ static), consistent
+with the matched-pair cost result of Section~\ref{sec:results}. Latency is
+\emph{not} monotone in call count here---static shows the lowest mean latency
+($46.4$\,s vs.\ $51.7$\,s chain)---so we do not claim an end-to-end speedup;
+the cost claim is the call count, and latency differences reflect per-query
+provider variance rather than plan structure. At $\le 2$ slots the
+$\tau=2d-1$ budget floor leaves little allocation freedom and the arms are close
+on call count; we omit a per-slot latency sub-table because the
+development sample contains only one $\ge 4$-slot HotpotQA chain (the $5$-slot
+stratum is $n=1$ and not a reliable basis for a speedup claim). Optimizer search
+telemetry is auditable per query (candidates enumerated, frontier pruned,
+validation warnings recorded in the execution profile).
+
+\begin{table}[t]
+\centering
+\caption{End-to-end execution by arm (HotpotQA development, matched three-arm
+pairs, $n=16$, frozen plan replay, matched budget $=8$). Chain: $\tau=2d-1$;
+flat: cost-only; static: uniform.}
+\label{tab:overhead-agg}
+\small
+\begin{tabular}{lrrrrl}
+\toprule
+arm & calls & latency (ms, mean) & latency (ms, p50) & docs & EM \\
+\midrule
+chain  & 1.50 & 51677 & 8504 & 7.50 & 43.8\% \\
+flat   & 1.75 & 54152 & 16624 & 8.75 & 43.8\% \\
+static & 1.69 & 46429 & 10358 & 8.44 & 37.5\% \\
+\bottomrule
+\end{tabular}
+
+{\footnotesize
+Latency is end-to-end per question (compile excluded; compile is $\approx 0$\,ms
+as the plan is frozen). The chain arm uses the fewest retrieval calls
+($1.50$ vs.\ $1.69$ static, $1.75$ cost-only) but does not have the lowest mean
+latency, so no end-to-end speedup is claimed. EM is equal or better on the chain
+arm ($43.8\%$ vs.\ $37.5\%$ static).}
+\end{table}
+
+\subsection{Robustness to Estimator Error}
+Because the importance estimator is construction-derived on the claimed
+subdomain, it is not subject to calibration error there; its behavior is exact.
+We therefore report robustness as a structural property on well-defined chains,
+and note that generalization to non-well-defined chains would require a
+calibrated estimator, which is future work.

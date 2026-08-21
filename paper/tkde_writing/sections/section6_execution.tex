@@ -1,0 +1,78 @@
+\section{Adaptive Evidence Execution}
+\label{sec:execution}
+
+% AE-P1 — Deterministic adaptive execution (honest rewrite of G4)
+A frozen logical plan and a chosen physical plan are executed by the adaptive
+executor. Under our design, execution is \emph{deterministic}: given the same
+logical plan, the same budget, and the same corpus, the physical-plan selection
+is a pure function of requirement importance and remaining budget. Runtime
+observations---a binding that is found or missing, a candidate yield that
+differs from the estimate---are recorded as evidence state and telemetry, but
+under the current chain-only execution topology they do not re-allocate the
+physical plan. We state this boundary explicitly. A strict chain admits exactly
+one legal execution order, so runtime re-optimization over alternative orders
+has nothing to decide; implementing it on this topology would be dead code. We
+therefore treat runtime re-optimization as future work under a branching
+execution model, and the contribution of this section is the deterministic
+execution semantics, budget enforcement, and provenance that make execution
+auditable rather than the re-optimization machinery.
+
+% AE-P2 — Executor state transition
+Each physical operator transforms the evidence state $S_t$ into $S_{t+1}$ while
+recording realized cost, candidate yield, verification outcome, bindings, and
+provenance. The state transition is governed by the algebra of
+Section~\ref{sec:algebra}: \code{apply\_observation} advances each requirement
+along the monotone lattice \code{unresolved} $\rightarrow$ \code{partial}
+$\rightarrow$ \code{satisfied}, and never regresses. The evidence state is a
+first-class runtime snapshot (\code{EvidenceState}) containing the requirement
+statuses, the bound evidence, the current bindings, and the realized budget
+usage. It is derived from the immutable per-slot execution traces
+(\code{derive\_evidence\_state}), so every status transition is auditable
+against the trace that produced it. This is the mechanism-level diagnostic that
+distinguishes \emph{acquisition} failure (nothing bound) from \emph{selection}
+failure (evidence retrieved but not sufficient) from \emph{integration} failure
+(evidence sufficient but the answer generator failed to use it).
+
+% AE-P3 — Re-optimization triggers → future work
+Event-driven re-optimization over alternative physical plans is not part of the
+current system. We identify the trigger design---observed selectivity or cost
+deviation beyond a threshold, a requirement changing status, a new binding
+enabling a previously infeasible operator, or a budget shock invalidating the
+current plan---as the specification for future work under a branching execution
+model, where multiple legal orders make re-optimization non-vacuous.
+
+% AE-P4 — Partial-plan preservation → future work
+In a branching execution model, re-optimization should preserve valid
+materialized evidence and completed bindings, reconsidering only the unexecuted
+suffix of the physical plan. We leave this to future work as well: on the
+current single-order topology the suffix is trivial, and we prefer to report
+the deterministic behavior we actually implemented over machinery that would
+not change any executed plan.
+
+% AE-P5 — Provenance and diagnostics (contribution)
+Provenance is a system property, not a debugging aid. Every materialized
+evidence record carries its source id; every slot execution trace records its
+retrieval candidates, binding contexts, sufficiency verdict, and materialization
+outcome; and the derived evidence state records, for each non-satisfied
+requirement, the reason it is unsatisfied (slot never materialized, no binding
+context attempted, calibrator verdict of insufficient evidence, or partial
+coverage). This lets a query be traced end-to-end from answer to the physical
+actions and sources that produced it, and lets failure attribution be
+operator-level rather than a single opaque ``wrong answer'' label. The
+distinction between retrieved, materialized, and packed evidence
+(Section~\ref{sec:algebra}) is what makes such attribution sound: a stage is
+blamed only when the evidence it was supposed to produce is genuinely absent
+from the downstream state.
+
+% AE-P6 — Budget enforcement and stopping (contribution)
+Budget enforcement is deterministic. The executor threads the global
+retrieval-call budget into the optimizer's search (\code{retrieval\_budget}),
+so the physical plan is selected under the same budget that bounds execution.
+It reserves calls for unresolved high-priority requirements, rejects plans that
+would violate hard constraints, and terminates when requirements are
+sufficiently satisfied or no admissible plan can improve utility within the
+remaining budget. This is not a learned stopping controller; it is a
+deterministic, auditable rule. Because the whole path---plan selection, budget
+threading, execution, state derivation, and stopping---is deterministic given a
+frozen logical plan, the system admits exact reproduction and per-question
+trace audits, which we exploit in the evaluation (Section~\ref{sec:experiments}).
