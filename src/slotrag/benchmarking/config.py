@@ -24,6 +24,7 @@ class StageConfig(BaseModel):
     frozen_plan_source: str | None = None
     frozen_plan_import_dir: Path | None = None
     sufficiency_calibrator_path: Path | None = None
+    parallel_questions: int | None = None
 
     @model_validator(mode="after")
     def validate_methods(self) -> "StageConfig":

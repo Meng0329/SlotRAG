@@ -29,6 +29,7 @@ stages:
   g7-sealed:
     split: evaluation
     sample_size: 100000          # ignored: fixed sample files override selection
+    parallel_questions: 8         # NVMe state/output avoids the old HDD journal deadlock; thread-local embed cache + write_lock make 8 safe; rate-limit lifted to 400 RPM/32 conc so agnes is no longer the bottleneck
     methods:
       - slotrag-g7-static
       - slotrag-g7-flat

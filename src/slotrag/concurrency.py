@@ -38,8 +38,22 @@ def exclusive_file_lock(path: str | Path) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def atomic_write_json(path: str | Path, value: Any, *, ensure_ascii: bool = False, indent: int | None = 2) -> None:
-    """Atomically replace a JSON file without sharing temporary filenames."""
+def atomic_write_json(
+    path: str | Path,
+    value: Any,
+    *,
+    ensure_ascii: bool = False,
+    indent: int | None = 2,
+    sync: bool = True,
+) -> None:
+    """Atomically replace a JSON file without sharing temporary filenames.
+
+    ``sync`` controls whether the temp file is ``fsync``'d before the atomic
+    ``os.replace``. Benchmark item snapshots are written at high frequency (one
+    per question); skipping the fsync avoids serializing every write through the
+    kernel's writeback-QoS layer (``rq_qos_wait``) at the cost of weaker crash
+    consistency. Audit artifacts (attempt files, manifests) keep ``sync=True``.
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -52,7 +66,8 @@ def atomic_write_json(path: str | Path, value: Any, *, ensure_ascii: bool = Fals
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(value, handle, ensure_ascii=ensure_ascii, indent=indent)
             handle.flush()
-            os.fsync(handle.fileno())
+            if sync:
+                os.fsync(handle.fileno())
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)

@@ -52,7 +52,27 @@ data:
   processed_dir: data/processed
 
 rate_limit:
-  provider_rpm: 30
-  operational_rpm: 20
-  max_concurrency: 4
-  state_dir: runs/.rate-limits
+  provider_rpm: 600
+  operational_rpm: 400
+  max_concurrency: 32
+  # Model (qwen3.5-9b) is fast: user benchmark proved 128-concurrent 0% failure
+  # at 3246 tok/s. The old 30/20/4 caps were the real throughput bottleneck (the
+  # FileRateLimiter used operational_rpm=20 -> 1 call/3s, plus concurrency=4),
+  # NOT the model. Raised to a safe fraction of proven capacity.
+  # NOTE: .env sets SLOTRAG_PROVIDER_RPM=200, which overrides provider_rpm below.
+  # Per-service provider ceilings MUST be set explicitly and stay >= their
+  # operational_rpm, or validate_operational_limit() aborts startup with
+  # "X_operational_rpm cannot exceed X_provider_rpm" — the run dies before
+  # executing a single question (this is what caused the relaunch death-loop).
+  agnes_provider_rpm: 3000
+  agnes_operational_rpm: 400
+  agnes_max_concurrency: 32
+  reranker_provider_rpm: 3000
+  reranker_operational_rpm: 200
+  reranker_max_concurrency: 16
+  embedding_operational_rpm: 400
+  embedding_max_concurrency: 32
+  # NVMe state dir: the per-API-call .slot writes were hitting the /data HDD
+  # jbd2 journal, which stalls behind another job's heavy writeback and wedges
+  # every benchmark call in jbd2_log_wait_commit / folio_wait_bit_common.
+  state_dir: /tmp/tkde_runs/.rate-limits

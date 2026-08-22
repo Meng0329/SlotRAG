@@ -27,6 +27,7 @@ stages:
   g7-cross:
     split: evaluation
     sample_size: 100000
+    parallel_questions: 1         # run up to 8 questions concurrently per cell
     methods:
       - slotrag-g7-static
       - slotrag-g7-flat

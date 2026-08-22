@@ -7,7 +7,9 @@ import os
 import resource
 import signal
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +31,8 @@ from .methods import METHODS, compile_slotrag_plan, run_method, slotrag_compile_
 from .metrics import score_record
 
 
-def _atomic_json(path: Path, value: Any) -> None:
-    atomic_write_json(path, value)
+def _atomic_json(path: Path, value: Any, *, sync: bool = True) -> None:
+    atomic_write_json(path, value, sync=sync)
 
 
 def _safe_id(value: str) -> str:
@@ -179,7 +181,11 @@ class _BudgetedRetriever:
 
 @contextmanager
 def _question_deadline(seconds: float) -> Any:
-    if not hasattr(signal, "setitimer"):
+    # SIGALRM-based deadlines only work on the main thread; in worker threads
+    # (parallel question execution) signal.signal raises ValueError. Degrade to
+    # a no-op context there — per-question wall-time protection is provided by
+    # the executor/join timeout at the run() level.
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
         yield
         return
     previous_handler = signal.getsignal(signal.SIGALRM)
@@ -307,6 +313,7 @@ class BenchmarkRunner:
         question: QuestionRecord,
         *,
         retrieval_backend: str = "hybrid",
+        cache: "EmbeddingCache | None" = None,
     ) -> HybridRetriever:
         from ..data import chunk_passages
 
@@ -329,7 +336,7 @@ class BenchmarkRunner:
             bm25_weight=self.app_config.retrieval.bm25_weight,
             dense_weight=self.app_config.retrieval.dense_weight,
             rerank_enabled=self.app_config.reranker.enabled and dense_enabled,
-            cache=self.embedding_cache,
+            cache=cache or self.embedding_cache,
             dense_enabled=dense_enabled,
             sparse_index_mode=self.app_config.retrieval.sparse_index_mode,
             sparse_title_weight=self.app_config.retrieval.sparse_title_weight,
@@ -645,244 +652,339 @@ class BenchmarkRunner:
                 )
         self._load_sufficiency_calibration(stage_name, selected_datasets)
         self._write_manifest(stage_name, selected_datasets, selected_methods)
+        parallel = max(1, stage.parallel_questions or self.app_config.benchmark.parallel_questions)
+        sync_items = self.app_config.benchmark.sync_items
+        # Build the full dispatch plan up front (cheap, serial) so workers only
+        # do the per-question compute + persistence.
+        plan: list[tuple[str, str, str, int, QuestionRecord]] = []
         for dataset in selected_datasets:
             questions = questions_by_dataset[dataset]
             for method in selected_methods:
                 for seed in self._method_seeds(method):
                     method_label = method if len(self._method_seeds(method)) == 1 else f"{method}@{seed}"
                     for question in questions:
-                        item_path = self.output_dir / "items" / stage_name / dataset / method_label / f"{_safe_id(question.id)}.json"
-                        attempt_dir = self.output_dir / "attempts" / stage_name / dataset / method_label / _safe_id(question.id)
-                        attempt_paths = sorted(attempt_dir.glob("attempt-*.json")) if attempt_dir.exists() else []
-                        previous: dict[str, Any] | None = None
-                        if item_path.exists():
-                            try:
-                                previous = json.loads(item_path.read_text(encoding="utf-8"))
-                                previous_status = previous.get("result", {}).get("status")
-                            except (OSError, json.JSONDecodeError):
-                                previous_status = None
-                            if previous is not None and not attempt_paths:
-                                legacy = dict(previous)
-                                legacy_result = legacy.get("result", {})
-                                legacy["schema_version"] = 2
-                                legacy["attempt_index"] = 1
-                                legacy.setdefault("failure_category", _failure_category(
-                                    str(legacy_result.get("status", "failed")),
-                                    legacy_result.get("error"),
-                                    legacy_result.get("answer"),
-                                ))
-                                legacy.setdefault("budget", self.suite.budget.model_dump(mode="json"))
-                                _atomic_json(attempt_dir / "attempt-0001.json", legacy)
-                                attempt_paths = [attempt_dir / "attempt-0001.json"]
-                            if previous_status == "ok":
-                                counts["skipped"] += 1
-                                continue
-                            counts["retried"] += 1
-                        attempt_indices = [
-                            int(path.stem.rsplit("-", 1)[-1])
-                            for path in attempt_paths
-                            if path.stem.rsplit("-", 1)[-1].isdigit()
-                        ]
-                        attempt_index = max(attempt_indices, default=0) + 1
-                        trace_path = (
-                            self.output_dir
-                            / "traces"
-                            / stage_name
-                            / dataset
-                            / method_label
-                            / _safe_id(question.id)
-                            / f"attempt-{attempt_index:04d}.jsonl"
-                        )
-                        trace_target = trace_path if self.app_config.trace.enabled else None
-                        frozen_plan: SlotPlan | None = None
-                        plan_provenance: dict[str, Any] | None = None
-                        plan_error: Exception | None = None
-                        if stage.frozen_plan_source is not None and METHODS[method].family == "slotrag":
-                            try:
-                                with provider_trace(
-                                    trace_target,
-                                    include_payloads=self.app_config.trace.include_payloads,
-                                ):
-                                    frozen_plan, plan_provenance = self._load_or_create_frozen_plan(
-                                        stage_name,
-                                        dataset,
-                                        question,
-                                        stage.frozen_plan_source,
-                                    )
-                            except FrozenPlanPreparationError as exc:
-                                plan_error = exc
-                                plan_provenance = exc.provenance
-                            except Exception as exc:
-                                plan_error = exc
-                        shared_index = self._shared_indices.get((stage_name, dataset))
-                        index_provider_before = self._provider_snapshot()
-                        index_cache_before = self.embedding_cache.snapshot()
-                        retriever: Any | None = None
-                        index_build_ms = 0.0
-                        index_bytes = 0
-                        index_error: Exception | None = None
-                        if plan_error is None and METHODS[method].family != "graphrag":
-                            if shared_index is not None:
-                                retriever = shared_index
-                                index_bytes = shared_index.manifest.index_bytes
-                            else:
-                                index_started = time.perf_counter()
-                                try:
-                                    with provider_trace(
-                                        trace_target,
-                                        include_payloads=self.app_config.trace.include_payloads,
-                                    ):
-                                        retriever = self._retriever(
-                                            question,
-                                            retrieval_backend=stage.retrieval_backend,
-                                        )
-                                        retriever.build_index()
-                                except Exception as exc:
-                                    index_error = exc
-                                index_build_ms = (time.perf_counter() - index_started) * 1000
-                                if retriever is not None:
-                                    index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
-                                    if getattr(retriever, "dense_enabled", True):
-                                        index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
-                        index_provider_after = self._provider_snapshot()
-                        index_cache_after = self.embedding_cache.snapshot()
-                        index_delta = {
-                            name: _stats_delta(index_provider_before[name], index_provider_after[name])
-                            for name in index_provider_before
-                        }
-                        index_cache_delta = (
-                            index_cache_after[0] - index_cache_before[0],
-                            index_cache_after[1] - index_cache_before[1],
-                        )
-                        before = index_provider_after
-                        cache_before = index_cache_after
-                        retrieval_before = shared_index.stats_snapshot() if shared_index is not None else None
-                        started = time.perf_counter()
-                        rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-                        if plan_error is not None:
-                            result = ExecutionResult(
-                                status="failed",
-                                error=f"{plan_error.__class__.__name__}: {plan_error}",
-                            )
-                        elif index_error is not None:
-                            result = ExecutionResult(status="failed", error=f"{index_error.__class__.__name__}: {index_error}")
-                        else:
-                            try:
-                                with provider_trace(
-                                    trace_target,
-                                    include_payloads=self.app_config.trace.include_payloads,
-                                ):
-                                    with _question_deadline(self.suite.budget.question_timeout_seconds):
-                                        result = run_method(
-                                            method,
-                                            dataset=dataset,
-                                            question=question,
-                                            retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
-                                            client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
-                                            config=self.app_config,
-                                            seed=seed,
-                                            max_steps=self.suite.budget.max_steps,
-                                            max_retrieval_calls=self.suite.budget.max_retrieval_calls,
-                                            frozen_plan=frozen_plan,
-                                            sufficiency_calibrator=(
-                                                self._sufficiency_calibrations[stage_name][0].calibrator_for(dataset)
-                                                if METHODS[method].evidence_sufficiency else None
-                                            ),
-                                        )
-                            except BenchmarkBudgetExceeded as exc:
-                                result = ExecutionResult(status="budget_exceeded", error=str(exc))
-                            except Exception as exc:
-                                result = ExecutionResult(status="failed", error=f"{exc.__class__.__name__}: {exc}")
-                        wall_ms = (time.perf_counter() - started) * 1000
-                        rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-                        result, provider_delta = self._instrument(
-                            result,
-                            before,
-                            cache_before,
-                            wall_ms,
-                            max(rss_after - rss_before, 0.0),
-                            index_build_ms,
-                            index_bytes,
-                            index_delta,
-                            index_cache_delta,
-                        )
-                        result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
-                            "llm_budget_utilization": result.metrics.llm_calls / self.suite.budget.max_llm_calls,
-                            "retrieval_budget_utilization": result.metrics.retrieval_calls / self.suite.budget.max_retrieval_calls,
-                            "step_budget_utilization": result.metrics.steps_executed / self.suite.budget.max_steps,
-                        })})
-                        if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
-                            result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
-                        if shared_index is not None and retrieval_before is not None:
-                            retrieval_after = shared_index.stats_snapshot()
-                            result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
-                                "retrieval_query_count": retrieval_after[0] - retrieval_before[0],
-                                "retrieval_query_latency_ms": retrieval_after[1] - retrieval_before[1],
-                            })})
-                        if plan_provenance is not None and result.plan is not None:
-                            plan_provenance = {
-                                **plan_provenance,
-                                "effective_plan_sha256": _plan_sha256(result.plan),
-                            }
-                        trace_info = trace_metadata(trace_target)
-                        if trace_info["enabled"]:
-                            trace_info["path"] = str(trace_path.relative_to(self.output_dir))
-                        corpus_manifest = (
-                            self._artifact_reference(shared_index.manifest_path)
-                            if shared_index is not None and shared_index.manifest_path is not None
-                            else None
-                        )
-                        execution_profile = self._execution_profile()
-                        record = {
-                            "schema_version": 32,
-                            "stage": stage_name,
-                            "dataset": dataset,
-                            "method": method,
-                            "method_label": method_label,
-                            "seed": seed,
-                            "question_id": question.id,
-                            "stratum": question.metadata.get("stratum"),
-                            "retrieval_protocol": stage.retrieval_protocol,
-                            "retrieval_backend": stage.retrieval_backend,
-                            "corpus_manifest": corpus_manifest,
-                            "attempt_index": attempt_index,
-                            "recorded_at": datetime.now(timezone.utc).isoformat(),
-                            "budget": self.suite.budget.model_dump(mode="json"),
-                            "execution_control": execution_profile["execution_control"],
-                            "execution_profile_sha256": execution_profile["sha256"],
-                            "answers": question.answers,
-                            "evidence_inventory": {
-                                "available_evidence_ids": [passage.id for passage in question.passages],
-                                "gold_evidence_ids": list(question.gold_evidence),
-                                "retrieved_evidence_ids": [item.source_id for item in result.evidence],
-                            },
-                            "result": result.model_dump(mode="json"),
-                            "scores": score_record(dataset, question, result),
-                            "provider_delta": provider_delta,
-                            "index_provider_delta": index_delta,
-                            "plan_provenance": plan_provenance,
-                            "sufficiency_calibration": (
-                                self._sufficiency_calibration_reference(stage_name, dataset)
-                                if METHODS[method].evidence_sufficiency else None
-                            ),
-                            "provider_trace": trace_info,
-                            "failure_category": _failure_category(result.status, result.error, result.answer),
-                        }
-                        _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record)
-                        _atomic_json(item_path, record)
-                        if shared_index is not None:
-                            shared_index.persist_manifest()
-                        counts["completed"] += 1
-                        if result.status in {"failed", "budget_exceeded"}:
-                            counts["failed"] += 1
-                        elif result.status == "empty":
-                            counts["empty"] += 1
-                        elif result.status == "unsupported_operation":
-                            counts["unsupported"] += 1
+                        plan.append((dataset, method, method_label, seed, question))
+        counts_lock = threading.Lock()
+        # Serialize the atomic-rename persistence step. Under ext4 the journal
+        # (jbd2) commits renames under a transaction lock; concurrent os.replace
+        # calls from N workers deadlock on wait_transaction_locked when the
+        # committing transaction stalls. Compute stays parallel (8 workers), but
+        # only one rename hits the journal at a time — preserving the CPU/network
+        # speedup without melting the filesystem journal.
+        write_lock = threading.Lock()
+        stop = threading.Event()
+
+        def worker(args: tuple[str, str, str, int, QuestionRecord]) -> dict[str, int]:
+            if stop.is_set():
+                return {"skipped": 0}
+            dataset, method, method_label, seed, question = args
+            # Thread-local embedding cache: EmbeddingCache.put/flush are not
+            # thread-safe, so each worker writes its own shard.
+            thread_cache = EmbeddingCache(self.output_dir / "cache" / f"embeddings.{threading.get_ident()}.json")
+            local_counts: dict[str, int] = {}
+            try:
+                delta = self._execute_question(
+                    stage_name,
+                    stage,
+                    dataset,
+                    method,
+                    method_label,
+                    seed,
+                    question,
+                    thread_cache,
+                    sync_items,
+                    write_lock,
+                )
+                local_counts.update(delta)
+            except Exception as exc:  # never let one question kill the pool
+                local_counts["failed"] = local_counts.get("failed", 0) + 1
+                self._log_worker_error(dataset, method_label, question.id, exc)
+            thread_cache.flush()
+            with counts_lock:
+                for key, value in local_counts.items():
+                    counts[key] = counts.get(key, 0) + value
+            return local_counts
+
+        if parallel <= 1:
+            for args in plan:
+                if stop.is_set():
+                    break
+                worker(args)
+        else:
+            with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="bench-q") as pool:
+                futures = [pool.submit(worker, args) for args in plan]
+                # Collect results in plan order so observation order (e.g. plan
+                # replay recording) stays deterministic; execution is still
+                # concurrent. A worker exception is surfaced, not swallowed.
+                for _args, fut in zip(plan, futures):
+                    fut.result()
         for shared_index in self._shared_indices.values():
             shared_index.persist_manifest()
         self.embedding_cache.flush()
         self._write_stage_progress(stage_name)
+        return counts
+
+    def _log_worker_error(self, dataset: str, method_label: str, question_id: str, exc: Exception) -> None:
+        try:
+            import sys as _sys
+
+            print(f"[bench] worker error {dataset}/{method_label}/{question_id}: {exc!r}", file=_sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    def _execute_question(
+        self,
+        stage_name: str,
+        stage: Any,
+        dataset: str,
+        method: str,
+        method_label: str,
+        seed: int,
+        question: "QuestionRecord",
+        thread_cache: "EmbeddingCache",
+        sync_items: bool,
+        write_lock: "threading.Lock",
+    ) -> dict[str, int]:
+        """Execute a single question end-to-end and persist it. Thread-safe: all
+        mutable state touched here is either per-question (retriever + thread_cache)
+        or read-only shared (shared_index, frozen plans). Returns a counts delta."""
+        counts: dict[str, int] = {}
+        item_path = self.output_dir / "items" / stage_name / dataset / method_label / f"{_safe_id(question.id)}.json"
+        attempt_dir = self.output_dir / "attempts" / stage_name / dataset / method_label / _safe_id(question.id)
+        attempt_paths = sorted(attempt_dir.glob("attempt-*.json")) if attempt_dir.exists() else []
+        previous: dict[str, Any] | None = None
+        if item_path.exists():
+            try:
+                previous = json.loads(item_path.read_text(encoding="utf-8"))
+                previous_status = previous.get("result", {}).get("status")
+            except (OSError, json.JSONDecodeError):
+                previous_status = None
+            if previous is not None and not attempt_paths:
+                legacy = dict(previous)
+                legacy_result = legacy.get("result", {})
+                legacy["schema_version"] = 2
+                legacy["attempt_index"] = 1
+                legacy.setdefault("failure_category", _failure_category(
+                    str(legacy_result.get("status", "failed")),
+                    legacy_result.get("error"),
+                    legacy_result.get("answer"),
+                ))
+                legacy.setdefault("budget", self.suite.budget.model_dump(mode="json"))
+                _atomic_json(attempt_dir / "attempt-0001.json", legacy, sync=True)
+                attempt_paths = [attempt_dir / "attempt-0001.json"]
+            if previous_status == "ok":
+                counts["skipped"] = 1
+                return counts
+            counts["retried"] = 1
+        attempt_indices = [
+            int(path.stem.rsplit("-", 1)[-1])
+            for path in attempt_paths
+            if path.stem.rsplit("-", 1)[-1].isdigit()
+        ]
+        attempt_index = max(attempt_indices, default=0) + 1
+        trace_path = (
+            self.output_dir
+            / "traces"
+            / stage_name
+            / dataset
+            / method_label
+            / _safe_id(question.id)
+            / f"attempt-{attempt_index:04d}.jsonl"
+        )
+        trace_target = trace_path if self.app_config.trace.enabled else None
+        frozen_plan: SlotPlan | None = None
+        plan_provenance: dict[str, Any] | None = None
+        plan_error: Exception | None = None
+        if stage.frozen_plan_source is not None and METHODS[method].family == "slotrag":
+            try:
+                with provider_trace(
+                    trace_target,
+                    include_payloads=self.app_config.trace.include_payloads,
+                ):
+                    frozen_plan, plan_provenance = self._load_or_create_frozen_plan(
+                        stage_name,
+                        dataset,
+                        question,
+                        stage.frozen_plan_source,
+                    )
+            except FrozenPlanPreparationError as exc:
+                plan_error = exc
+                plan_provenance = exc.provenance
+            except Exception as exc:
+                plan_error = exc
+        shared_index = self._shared_indices.get((stage_name, dataset))
+        index_provider_before = self._provider_snapshot()
+        index_cache_before = thread_cache.snapshot()
+        retriever: Any | None = None
+        index_build_ms = 0.0
+        index_bytes = 0
+        index_error: Exception | None = None
+        if plan_error is None and METHODS[method].family != "graphrag":
+            if shared_index is not None:
+                retriever = shared_index
+                index_bytes = shared_index.manifest.index_bytes
+            else:
+                index_started = time.perf_counter()
+                try:
+                    with provider_trace(
+                        trace_target,
+                        include_payloads=self.app_config.trace.include_payloads,
+                    ):
+                        retriever = self._retriever(
+                            question,
+                            retrieval_backend=stage.retrieval_backend,
+                            cache=thread_cache,
+                        )
+                        retriever.build_index()
+                except Exception as exc:
+                    index_error = exc
+                index_build_ms = (time.perf_counter() - index_started) * 1000
+                if retriever is not None:
+                    index_bytes = sum(len(passage.text.encode("utf-8")) for passage in retriever.passages)
+                    if getattr(retriever, "dense_enabled", True):
+                        index_bytes += len(retriever.passages) * self.app_config.embedding.dimension * 8
+        index_provider_after = self._provider_snapshot()
+        index_cache_after = thread_cache.snapshot()
+        index_delta = {
+            name: _stats_delta(index_provider_before[name], index_provider_after[name])
+            for name in index_provider_before
+        }
+        index_cache_delta = (
+            index_cache_after[0] - index_cache_before[0],
+            index_cache_after[1] - index_cache_before[1],
+        )
+        before = index_provider_after
+        cache_before = index_cache_after
+        retrieval_before = shared_index.stats_snapshot() if shared_index is not None else None
+        started = time.perf_counter()
+        rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        if plan_error is not None:
+            result = ExecutionResult(
+                status="failed",
+                error=f"{plan_error.__class__.__name__}: {plan_error}",
+            )
+        elif index_error is not None:
+            result = ExecutionResult(status="failed", error=f"{index_error.__class__.__name__}: {index_error}")
+        else:
+            try:
+                with provider_trace(
+                    trace_target,
+                    include_payloads=self.app_config.trace.include_payloads,
+                ):
+                    with _question_deadline(self.suite.budget.question_timeout_seconds):
+                        result = run_method(
+                            method,
+                            dataset=dataset,
+                            question=question,
+                            retriever=_BudgetedRetriever(retriever, self.suite.budget.max_retrieval_calls) if retriever else None,  # type: ignore[arg-type]
+                            client=_BudgetedAgnes(self.agnes, self.suite.budget.max_llm_calls),
+                            config=self.app_config,
+                            seed=seed,
+                            max_steps=self.suite.budget.max_steps,
+                            max_retrieval_calls=self.suite.budget.max_retrieval_calls,
+                            frozen_plan=frozen_plan,
+                            sufficiency_calibrator=(
+                                self._sufficiency_calibrations[stage_name][0].calibrator_for(dataset)
+                                if METHODS[method].evidence_sufficiency else None
+                            ),
+                        )
+            except BenchmarkBudgetExceeded as exc:
+                result = ExecutionResult(status="budget_exceeded", error=str(exc))
+            except Exception as exc:
+                result = ExecutionResult(status="failed", error=f"{exc.__class__.__name__}: {exc}")
+        wall_ms = (time.perf_counter() - started) * 1000
+        rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        result, provider_delta = self._instrument(
+            result,
+            before,
+            cache_before,
+            wall_ms,
+            max(rss_after - rss_before, 0.0),
+            index_build_ms,
+            index_bytes,
+            index_delta,
+            index_cache_delta,
+        )
+        result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
+            "llm_budget_utilization": result.metrics.llm_calls / self.suite.budget.max_llm_calls,
+            "retrieval_budget_utilization": result.metrics.retrieval_calls / self.suite.budget.max_retrieval_calls,
+            "step_budget_utilization": result.metrics.steps_executed / self.suite.budget.max_steps,
+        })})
+        if result.metrics.llm_calls > self.suite.budget.max_llm_calls or result.metrics.retrieval_calls > self.suite.budget.max_retrieval_calls or wall_ms / 1000 > self.suite.budget.question_timeout_seconds:
+            result = result.model_copy(update={"status": "budget_exceeded", "error": result.error or "benchmark budget exceeded"})
+        if shared_index is not None and retrieval_before is not None:
+            retrieval_after = shared_index.stats_snapshot()
+            result = result.model_copy(update={"metrics": result.metrics.model_copy(update={
+                "retrieval_query_count": retrieval_after[0] - retrieval_before[0],
+                "retrieval_query_latency_ms": retrieval_after[1] - retrieval_before[1],
+            })})
+        if plan_provenance is not None and result.plan is not None:
+            plan_provenance = {
+                **plan_provenance,
+                "effective_plan_sha256": _plan_sha256(result.plan),
+            }
+        trace_info = trace_metadata(trace_target)
+        if trace_info["enabled"]:
+            trace_info["path"] = str(trace_path.relative_to(self.output_dir))
+        corpus_manifest = (
+            self._artifact_reference(shared_index.manifest_path)
+            if shared_index is not None and shared_index.manifest_path is not None
+            else None
+        )
+        execution_profile = self._execution_profile()
+        record = {
+            "schema_version": 32,
+            "stage": stage_name,
+            "dataset": dataset,
+            "method": method,
+            "method_label": method_label,
+            "seed": seed,
+            "question_id": question.id,
+            "stratum": question.metadata.get("stratum"),
+            "retrieval_protocol": stage.retrieval_protocol,
+            "retrieval_backend": stage.retrieval_backend,
+            "corpus_manifest": corpus_manifest,
+            "attempt_index": attempt_index,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "budget": self.suite.budget.model_dump(mode="json"),
+            "execution_control": execution_profile["execution_control"],
+            "execution_profile_sha256": execution_profile["sha256"],
+            "answers": question.answers,
+            "evidence_inventory": {
+                "available_evidence_ids": [passage.id for passage in question.passages],
+                "gold_evidence_ids": list(question.gold_evidence),
+                "retrieved_evidence_ids": [item.source_id for item in result.evidence],
+            },
+            "result": result.model_dump(mode="json"),
+            "scores": score_record(dataset, question, result),
+            "provider_delta": provider_delta,
+            "index_provider_delta": index_delta,
+            "plan_provenance": plan_provenance,
+            "sufficiency_calibration": (
+                self._sufficiency_calibration_reference(stage_name, dataset)
+                if METHODS[method].evidence_sufficiency else None
+            ),
+            "provider_trace": trace_info,
+            "failure_category": _failure_category(result.status, result.error, result.answer),
+        }
+        # Audit attempt file keeps fsync (sync=True); the per-question latest
+        # Serialize the rename step so only one worker journals a rename at a
+        # time (ext4 journal deadlock avoidance); compute above stays parallel.
+        with write_lock:
+            _atomic_json(attempt_dir / f"attempt-{attempt_index:04d}.json", record, sync=True)
+            _atomic_json(item_path, record, sync=sync_items)
+        # NOTE: shared_index.persist_manifest() is intentionally NOT called here.
+        # Under global_corpus the shared index is read-only after build; calling
+        # its atomic-rename manifest write per-question makes 8 workers contend
+        # on the same inode (locks_lock_inode_wait / jbd2), re-serializing the
+        # run. The final persist at the end of run() captures cumulative stats.
+        counts["completed"] = 1
+        if result.status in {"failed", "budget_exceeded"}:
+            counts["failed"] = 1
+        elif result.status == "empty":
+            counts["empty"] = 1
+        elif result.status == "unsupported_operation":
+            counts["unsupported"] = 1
         return counts
 
     def _write_stage_progress(self, stage_name: str) -> dict[str, Any]:

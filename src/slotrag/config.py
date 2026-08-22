@@ -103,7 +103,11 @@ class RateLimitConfig(BaseModel):
     reranker_provider_rpm: float | None = Field(default=None, gt=0)
     reranker_operational_rpm: float | None = Field(default=None, gt=0)
     reranker_max_concurrency: int | None = Field(default=None, gt=0, le=4096)
-    state_dir: Path = Path("runs/.rate-limits")
+    # Keep the provider rate-limiter state on NVMe (/tmp), not on /data (7200 RPM
+    # HDD). The limiter writes a tiny .slot file per API call; under the HDD the
+    # ext4 jbd2 journal commit stalls behind another job's heavy writeback, wedging
+    # every benchmark call in jbd2_log_wait_commit. NVMe avoids the journal stall.
+    state_dir: Path = Path("/tmp/tkde_runs/.rate-limits")
 
     @model_validator(mode="after")
     def validate_operational_limit(self) -> "RateLimitConfig":
@@ -117,6 +121,22 @@ class RateLimitConfig(BaseModel):
         return self
 
 
+class BenchmarkRunConfig(BaseModel):
+    """Run-time throughput tuning for the benchmark runner (not a protocol field).
+
+    ``parallel_questions`` controls how many questions execute concurrently per
+    dataset×method×seed cell. ``sync_items`` controls whether per-question item
+    snapshots are fsync'd before the atomic rename (False trades crash
+    consistency for throughput — the kernel writeback-QoS layer serializes every
+    fsync, which is the dominant serial cost on a spinning-hot path).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    parallel_questions: int = Field(default=4, ge=1, le=256)
+    sync_items: bool = False
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -128,6 +148,7 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    benchmark: BenchmarkRunConfig = Field(default_factory=BenchmarkRunConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AppConfig":
@@ -169,6 +190,8 @@ class AppConfig(BaseModel):
             "SLOTRAG_RERANKER_MAX_CONCURRENCY": ("rate_limit", "reranker_max_concurrency"),
             "SLOTRAG_TRACE_ENABLED": ("trace", "enabled"),
             "SLOTRAG_TRACE_INCLUDE_PAYLOADS": ("trace", "include_payloads"),
+            "SLOTRAG_BENCHMARK_PARALLEL_QUESTIONS": ("benchmark", "parallel_questions"),
+            "SLOTRAG_BENCHMARK_SYNC_ITEMS": ("benchmark", "sync_items"),
         }
         for env_name, (section, field) in mappings.items():
             value = os.getenv(env_name)

@@ -656,7 +656,9 @@ def test_runner_compiles_one_frozen_plan_and_replays_same_hash(tmp_path, monkeyp
 
     assert runner.run("test")["completed"] == 2
     assert len(compiled) == 1
-    assert [method for method, _plan in replayed] == ["slotrag", "slotrag-typed-extraction"]
+    # Parallel question execution makes replay observation order non-deterministic;
+    # assert both methods replayed the same (single-compiled) plan regardless of order.
+    assert sorted(method for method, _plan in replayed) == ["slotrag", "slotrag-typed-extraction"]
     assert replayed[0][1] == replayed[1][1] == plan
 
     snapshots = list((tmp_path / "run" / "plans" / "test").rglob("*.json"))
