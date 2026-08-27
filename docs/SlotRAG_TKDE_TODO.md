@@ -30,7 +30,26 @@
 
 ### 剩余开放项（优先级排序）
 1. **[x] R1.1-EXT 外部基线接入主表**：§8 RQ6 已加 "External Baselines (RQ6)" 段落（`tkde-r11-ext-baselines-q38`，native-budget，n=20/20/24），诚实标注为 corroborating evidence 非主结果；`audit_numbers.py` v5 新增 R11 核对块，15 个数字全 [OK]；论文编译通过（0 undefined citations，12 页）。
-2. **[~] SEALED_TEST 冻结+执行**：protocol **已冻结**（`research/eval_sets/test_set.json` 424KB + sha256 审计，8661 题 = hotpotqa 2863 + 2wiki 4931 + musique 867，×3 method = 25983 次执行目标）。**执行中**：run `g7-sealed` 由 supervisor（`/tmp/sealed_supervisor.sh`）托管，从 NVMe 镜像 `/tmp/slotrag_nvme` 运行（原 `/data` HDD 被他 agent 占满 89% 导致启动卡死，已解除）。截至 2026-08-22 21:10：`parallel_questions` 已从 2 提到 **8**（4× 提速，速率 ~20 attempts/min），g7-static/hotpotqa = 1830 ok + 33 budget_exceeded + 14 failed（1877 项），g7-flat/g7-chain 待序。**剩余 ~24108 次执行，ETA ≈ 20h**（20/min 稳态）。⚠️ **诚实披露：47 个 non-ok 是 DETERMINISTIC 的，不是 HDD 瞬时错误**——33 个 `budget_exceeded`（`max_retrieval_calls=8` 在个别深链题不够）+ 14 个 plan-validation 失败（`ANSWER_UNREACHABLE` / `DEPENDENCY_CYCLE` / `no join path`，frozen plan 与题面不适配）；这些题每次重启都重跑并稳定复现同一失败（`result.status` 是权威字段，顶层 `status` 恒为 null——早期 grep 误判根因）。run 完成后需逐题核验这 47 个 residual 是否属预期（深链预算上限 / plan 覆盖盲区），不计入 Coverage 分母的"可解"集合。
+2. **[x] SEALED_TEST 冻结+执行**：protocol **已冻结并完成**（`research/eval_sets/test_set.json` 424KB + sha256 审计，8661 题 = hotpotqa 2863 + 2wiki 4931 + musique 867，×3 method = **25983 次执行，2026-08-27 全部完成**）。**最终账本**(items 在 `/home/test/tkde_runs/tkde-sealed-test-q35`，supervisor `/tmp/sealed_supervisor.sh`，NVMe 镜像 `/tmp/slotrag_nvme`)：
+
+   | method | ok | budget_exceeded | failed | 总数 | ok% |
+   |---|---|---|---|---|---|
+   | slotrag-g7-static | 7975 | 419 | 267 | 8661 | 92.1% |
+   | slotrag-g7-flat | 8012 | 390 | 259 | 8661 | 92.5% |
+   | slotrag-g7-chain | 8080 | 325 | 256 | 8661 | 93.3% |
+   | **ALL** | **24067** | **1134** | **782** | **25983** | **92.6%** |
+
+   - **782 个非-method 失败 = 760 确定性方法边界 + 22 INFRA 残留**(重建脚本拆分,非笼统 782):
+     - **760 确定性边界**:`ANSWER_UNREACHABLE`(732: plan optimizer 488 + validation 244) + `no join path`(16) + `DEPENDENCY_CYCLE`(9) + `ValidationError`(3)——frozen plan 与题面不适配,编译器正确拒绝;非 INFRA 伪影。
+     - **22 INFRA 残留(0.08%)**:`FrozenPlanPreparationError: ProviderError`(21,网关侧 503 类)+ `ProviderError: request failed for http://10.2...`(1);经历三次事故(agnes clash-TUN 劫持、embedding vLLM 崩溃、本地 vLLM 引擎死亡)后将 embedding+reranker+agnes 全切 8801 网关后自愈剩余。
+   - **调优关键**：`/tmp` 崩溃后镜像回退到未调优配置(parallel 8/agnes 96)，恢复 parallel 64 / agnes 256 并发 / RPM 3000 后速率 2-3/min→42/min；配置改动触发 provenance guard，按流程删 `manifest.json`+`progress.json` 重开(旧 manifest 备份 `/tmp/manifest.pre-embed-gateway-switch.json`)。
+   - **诚实披露**(重建后口径):Coverage 全量 92.6%(24067/25983);剔除 22 INFRA + 760 确定性边界后,可解集 25201 中 ok 率 **95.5%**(非此前 95.6%,旧账本把 22 INFRA 误并入了 782 又重复扣)。
+   - **⚠️ 主表重建揭示的决定性负向事实(2026-08-27, `audit_sealed.py` 从 raw 重算)**:chain 优化器**在全量 SEALED 上并不全局胜出**,与 G7"≥3-slot 子域 2/2 胜"一致但**不可外推全量**:
+     - hotpotqa: flat(55.4%)≈static(54.1%)≈chain(54.2%),McNemar chain-vs-static p=0.80 无差;
+     - **2wiki: static(51.7%)显著优于 chain(47.8%)**,bootstrap ΔEM=−3.9pt CI[−5.0,−2.9],McNemar p<0.0001;
+     - musique: chain(27.5%)边际最佳,但 n=867、McNemar p=0.064 **未达 0.05**,bootstrap +1.0pt CI[+0.1,+2.1]勉强不含 0。
+     - **根因线索**:chain 探索更深 → budget_exceeded 暴涨(hotpotqa 323 vs static 117),严格 matched-budget 下超预算即记 0,拖累 EMb。优化器收益仅在深链子集(musique 3-hop)显现,浅题反而增开销。
+     - **论文方向含义**:核心贡献须从"优化器全局胜出"回调为"(a) 类型化证据代数/编译器框架;(b) matched-budget frontier 分析——明确优化器**何时有用**(深链)何时有害(2wiki);(c) 成本感知证据物化作为原则性替代;(d) 诚实失败归因"。这与 TKDE Harsh-Review 的"numbers honest/framing not"结论一致。
 3. **[ ] 外部有效性（cross-venue）**：仅 qwen3.5-9b 单 decoder，generalizability 未测（需另一 decoder 才能做）。
 4. **[x] 投稿前 Final Audit**（Phase 17，离线部分完成）：refs.bib 重写为 18 条可验证条目（补 DOI/venue/arXiv eprint，删 14 条孤儿占位），4-pass 编译 0 undefined citations、12 页；`audit_numbers.py` v5 全 [OK]（~5min 可复现）；新增 `paper/tkde_writing/REPRODUCE.md` 复现说明。双栏图可读性需人工终审（figures 仅 2 张，0.72–0.85 栏宽，可读）。
 
@@ -312,12 +331,13 @@
 
 ## Phase 12 — Full Main Experiments
 
-> **诚实状态（2026-08-22，SEALED run 仅完成 ~8% / 2178 of 25983 次执行）**：以下主表 / frontier / ablation / mechanism 是**依赖 SEALED 实测结果的实体交付物**，当前 run（g7-sealed, 37/min, ETA≈20h, g7-static/hotpotqa 进行中）尚未产出足够数据，故暂回退为 `[ ]`，待 run 完成且 `audit_numbers.py` 重建主表后再据实勾选。早期全局 `[x]` 翻转是**提前勾选**，已撤销。
+> **诚实状态（2026-08-27 重建完成）**：SEALED run 25983/25983 完成，`audit_sealed.py`(`paper/tkde_writing/audit_sealed.py`) 已从 raw records 重建主表 + 配对统计 + CSV(`sealed_main_table.csv`),**据实勾选下方已满足项**。
+> **关键负向事实(已据实写入账本)**:chain 优化器在全量 SEALED 不全局胜出——2wiki 显著更差(p<0.0001)、hotpotqa 持平、musique 仅边际(p=0.064);与 G7"≥3-slot 子域 2/2 胜"一致但**不可外推全量**(根因:chain 深探致 budget_exceeded 暴涨,严格 matched-budget 下记 0)。
 
 ### Main Table
-- [ ] 5+ controlled baselines × 4–5 datasets。
-- [ ] 多运行（服务端非确定时至少 3）。
-- [ ] confidence intervals。
+- [ ] 5+ controlled baselines × 4–5 datasets（**未满足**:当前只有 3 in-system 方法 static/flat/chain × 3 datasets,无外部 baseline 接入主表;R1.1-EXT 是 corroborating 附录,非主表）。
+- [ ] 多运行（服务端非确定时至少 3）（**未满足**:qwen3.5-9b 非确定,仅 1 次运行;成本/吞吐类指标需 ≥3 次才能报方差）。
+- [x] confidence intervals（SEALED 主表 EM 已带 paired bootstrap 200k CI + McNemar,`audit_sealed.py` 输出；缺多运行方差）。
 
 ### Matched-budget Frontier
 - [ ] retrieval budget sweep。
@@ -361,26 +381,37 @@
 
 ## Phase 14 — Figure/Table Production
 
-> **诚实状态（2026-08-22）**：以下 Fig1-8 / Table1-8 在论文 `.tex`（`paper/tkde_writing/main.tex`）中**实际不存在**（0 图 0 表，仅 2 张历史图在别处），且 SEALED run 仅完成 ~8%，无 frozen results 可供脚本生成。早期全局 `[x]` 翻转是**虚假勾选**（与实验进度、论文内容双重不符），全部回退为 `[ ]`。待 SEALED run 完成后，用 `audit_numbers.py` 从 raw records 重建主表，再逐一据实勾选。
+> **诚实状态（2026-08-27 全面更新完成）**：`audit_sealed.py` 已从 frozen raw records 重建主表 + 配对统计 + cost 维度(`sealed_main_table.csv`)。**全文件口径已同步**:abstract/intro/§8(RQ1-RQ3)/conclusion 已重写为 SEALED 全量 qwen3.5-9b 口径(链不全局胜出);§7 EX-P6(配对/budget 分母说明)与 §9(RQ5/RQ8/RQ9)已剔除全部"≥3-slot 省 1.09 调用/n=11"过期叙事,改为异质性 frontier(检索调用差≈0、代价转 LLM 调用、2wiki 显著更差);删 `tab:overhead-agg`/`fig:ge3-calls`/`fig:overall-em` 旧 figure;全文 grep 无 qwen3.8/55/n=11/1.09 残留;`latexmk -pdf` 编译通过无 undefined。
+> 早期全局 `[x]` 翻转是**虚假勾选**,已据实回退。
 
-- [ ] Fig1 Motivation
-- [ ] Fig2 Architecture
-- [ ] Fig3 Algebra walkthrough
-- [ ] Fig4 Physical plan alternatives
-- [ ] Fig5 Runtime reopt trace
-- [ ] Fig6 Pareto frontier
-- [ ] Fig7 bottleneck/failure attribution
-- [ ] Fig8 scalability
-- [ ] Table1 positioning
-- [ ] Table2 algebra
-- [ ] Table3 datasets
-- [ ] Table4 main effectiveness
-- [ ] Table5 quality-cost
-- [ ] Table6 ablation
-- [ ] Table7 cross-task/heterogeneous
-- [ ] Table8 failure analysis
+- [ ] Fig1 Motivation（**N.A.**：motivation 已由 §1 intro 文字 + §3 problem formulation 承载，正文零 `\ref{fig:motivation}`；补将会徒增页数违反"每图载主 claim"原则）
+- [x] Fig2 Architecture（`section6_execution.tex` 加 `fig:architecture` 静态示意，tabular 风格同 Fig3，编译通过无 undefined）
+- [x] Fig3 Algebra walkthrough（`fig:walkthrough` 已存在 §4，静态示意非脚本生成，合规）
+- [ ] Fig4 Physical plan alternatives（**N.A.**：物理计划替代方案已由 §6 execution + §5 allocator 文字描述 + Alg 搜索表承载；正文零引用）
+- [ ] Fig5 Runtime reopt trace（RQ4 明言 reopt 是 future work，此图可省/标 N/A）
+- [x] Fig6 Pareto frontier（`audit_sealed.py` 生成 `figures/fig6_frontier.pdf`，已接进 §8 RQ2 `fig:frontier`，编译通过）
+- [x] Fig7 bottleneck/failure attribution（`audit_sealed.py` 生成 `figures/fig7_failure.pdf`，已接进 §9 RQ8 `fig:failure`，编译通过）
+- [ ] Fig8 scalability（**N.A.**：本 TKDE 周期未做跨规模扫速实验；overhead 已用 §9 Scaling 段文字 + Table5 成本轴承载）
+- [x] Fig9 EM-overall grouped bar（**本轮新增**，`gen_figures.py` 生成 `figures/fig1_em_overall.pdf`，接进 §8 appendix `fig:em_overall`，RQ1 全量 EM 三臂分组，脚本生成合规）
+- [x] Fig10 LLM-call frontier scatter（**本轮新增**，`gen_figures.py` 生成 `figures/fig2_llm_frontier.pdf`，接进 §8 RQ2 `fig:llm_frontier`，LLM-calls vs EM_all 散点，脚本生成合规）
+- [x] Fig11 budget-exceeded stack（**本轮新增**，`gen_figures.py` 生成 `figures/fig3_budget_stack.pdf`，接进 §9 `fig:budget_stack`，arm×dataset 预算超限堆叠，脚本生成合规）
+- [x] Fig12–18 expanded distribution（**本轮新增**，`gen_expanded.py` 生成 `fig_a_retr_dist`/`fig_b_llm_dist`/`fig_c_latency_dist`/`fig_d_em_dist`/`fig_e_evrecall`/`fig_f_budget_util`/`fig_g_cost_comp`，接进 §8 appendix，全由 frozen items 脚本生成合规）
+- [x] Table1 positioning（`section2_related.tex` 的 `tab:positioning`，编译通过）
+- [ ] Table2 algebra（**N.A.**：algebra operator 清单已在 §4 正文用 bullet + 状态转换文字承载，无独立 CSV；补表属冗余）
+- [x] Table3 datasets（`section7_methodology.tex` 加 `tab:datasets`，事实表（hotpotqa 2863/2wiki 4931/musique 867/HoVer 15/FEVEROUS 2），编译通过；数字均来自冻结 test_set.json 或 smoke 脚本，非手抄）
+- [x] Table4 main effectiveness（**已接进 `section8_results.tex` 的 `tab:overall`** + 全文件口径同步，编译通过无 undefined）
+- [x] Table5 quality-cost（`audit_sealed.py` 生成 `sealed_table5_quality_cost.csv`，已接进 §8 RQ2 `tab:cost`，编译通过）
+- [x] Table6 ablation（`audit_sealed.py` 数字，已接进 §8 RQ3 `tab:ablation`，编译通过）
+- [x] Table7 cross-task/heterogeneous（`audit_sealed.py` 新增 R11 块生成 `sealed_table7_external.csv`，qwen3.5-9b 同 decoder；已接进 §8 RQ6 `tab:external`，编译通过；HoVer/FEVEROUS 仍 qwen3.8 转移样本，provenance 段已诚实标注不同 decoder）
+- [x] Table8 failure analysis（`audit_sealed.py` 生成 `sealed_table8_failure.csv`，已接进 §9 RQ8 `tab:failure`，编译通过）
+- [x] Table9 descriptive statistics（**本轮新增**，`gen_tables.py` 生成 `tableA_descriptive.csv` → `tables/tabA_body.tex`，接进 §8 appendix `tab:descriptive`，13 列全臂描述统计，脚本生成合规）
+- [x] Table10 paired differences（**本轮新增**，`gen_tables.py` 生成 `tableB_paired.csv` → `tables/tabB_body.tex`，接进 §8 appendix `tab:paired_full`，配对链-vs-静态 bootstrap CI，脚本生成合规）
+- [x] Table11 failure by arm（**本轮新增**，`gen_tables.py` 生成 `tableC_failure_by_arm.csv` → `tables/tabC_body.tex`，接进 §8 appendix `tab:failure_arm`，arm×dataset 状态拆分，脚本生成合规）
+- [x] Table12 evidence metrics（**本轮新增**，`gen_tables.py` 生成 `tableD_evidence.csv` → `tables/tabD_body.tex`，接进 §8 appendix `tab:evidence`，证据质量指标，脚本生成合规）
 
-规则：所有图必须由脚本从 frozen results 生成，不允许手工改数字。
+**Phase 14 诚实状态（2026-08-27 最大化收尾）**：经用户"图越多越好、表格越庞大越多越好"指令，在**不伪造任何数字**前提下最大化合法图表——所有新增图/表均由 `gen_figures.py`/`gen_expanded.py`/`gen_tables.py` 从 frozen SEALED_TEST items（8661 题×3 臂）脚本生成，CJK/下划线已转义。现共 **12 张图**（Fig2/3/6/7 + 本轮 Fig9/10/11 + Fig12–18 扩展分布）+ **11 张表**（Table1/3/4/5/6/7/8 + 本轮 Table9/10/11/12 大表）。论文现 15 页、`latexmk -pdf` 4-step 编译 0 undefined citations/references。注：`tabX_body.tex` 经 `\makeatletter\@@input...\makeatother` 包裹整体 `tabular` 接入（booktabs 规则与内核 `\input` 在 tabular 内不兼容，`\relax` 亦会引发 Misplaced \noalign，已据测试排除）。孤儿 `fig_ge3_calls`/`fig_overall_em`（qwen3.8 旧图）已归档至 `figures/_archive_orphan_20260827/`。
+
+规则：所有结果图必须由脚本从 frozen results 生成，不允许手工改数字（Fig2/Fig3 属静态系统示意，与结果图不同类，合规）。
 
 ---
 

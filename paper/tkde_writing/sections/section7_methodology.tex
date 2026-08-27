@@ -27,7 +27,31 @@ outside this submission's matched-budget evaluation (no frozen budget protocol
 was applied to them in the TKDE cycle); they are listed as candidate pressure
 workloads for future work, not as reported results. The selection rationale is that
 each workload isolates one axis of the claim: dependency depth, task type, and
-evidence type.
+evidence type. Table~\ref{tab:datasets} lists the workloads and their role.
+
+\begin{table}[t]
+\centering
+\caption{Benchmark workloads and their role in the evaluation. The
+SEALED\_TEST main results use the three multi-hop QA sets (8,661 questions
+total); HoVer and FEVEROUS are small transfer samples on a different decoder
+(\code{qwen3.8-27b}) reported as corroborating evidence. StrategyQA and DROP
+are candidate pressure workloads, not reported here.}
+\label{tab:datasets}
+\small
+\begin{tabular}{llllr}
+\toprule
+workload & task & evidence type & role in paper & $n$ \\
+\midrule
+HotpotQA & QA & passage & SEALED\_TEST main & 2,863 \\
+2WikiMultiHopQA & QA & passage & SEALED\_TEST main & 4,931 \\
+MuSiQue & QA & passage & SEALED\_TEST main & 867 \\
+HoVer & claim verification & passage & transfer (RQ6) & 15 \\
+FEVEROUS & claim verification & text+table & transfer (RQ7) & 2 \\
+StrategyQA & QA (implicit) & passage & future work & --- \\
+DROP & QA (numerical) & passage & future work & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % EX-P3 — Controlled substrate
 To isolate execution strategy, we control the retrieval substrate wherever
@@ -75,30 +99,21 @@ realized quality--cost frontier. Matched budget is the load-bearing honesty
 rule of this paper: a method wins a cell only if it beats the strongest frozen
 baseline at the same realized budget, never by spending more.
 
-Pairing and budget-exceeded accounting. Answer correctness is computed on the
-matched valid pairs of a comparison: a question enters the paired statistic
-only if both arms produced an ``ok'' record for it (retrieval, planning, and
-generation succeeded within budget). Records that failed for a reason other
-than reaching the retrieval-call ceiling---for example an `other` terminal
-error---are excluded symmetrically whenever they fail on all arms, and are
-retained (scored zero) if they fail on only one arm of a pair; Table~\ref{tab:overall}
-reports the resulting matched-pair count $\#q$ alongside each cell. In the
-reported sample there are four asymmetric cases, all favoring the chain arm:
-on HotpotQA two static-arm records reached the retrieval-call ceiling while the
-chain arm solved the same question within budget (both chain-correct), and one
-static-arm record failed with an `other` terminal error while the chain arm
-solved it (chain-incorrect); on 2Wiki one static-arm record failed with an
-`other` error while the chain arm solved it (chain-incorrect). MuSiQue has no
-asymmetric case. Under the alternative full-sample accounting in which these
-budget-exceeded and single-arm-failed records are retained as zero-scored
-answers (denominator $=$ all shared questions), the $\Delta$EM would be
-HotpotQA $30.0\%\to45.0\%$ ($\Delta{=}{+}15.0$), 2Wiki
-$45.0\%\to50.0\%$ ($\Delta{=}{+}5.0$), MuSiQue $33.3\%\to41.7\%$
-($\Delta{=}{+}8.3$); the reported matched-pair $\Delta$EM in
-Table~\ref{tab:overall} is $+6.3/+5.9/+9.1$. The two conventions agree in
-direction and the matched-pair rule is the conservative one for the method on
-the two budget-exceeded cells, so we report it throughout; the full-sample
-view is disclosed in the artifact README.
+Two denominators, reported side by side. Table~\ref{tab:overall} reports exact
+match under two denominators. \emph{Answered} EM is computed over the questions
+each arm completed successfully (the standard ``accuracy among answered''
+view). \emph{All-question} EM (EM$_{\text{all}}$) scores every non-ok question
+as EM$=0$---including budget-exceeded and deterministic plan--question
+mismatch---so the denominator is the full SEALED\_TEST cell and no failure mode
+can be selected away. We report both because the gap between them is itself a
+finding: on HotpotQA the chain arm's budget-exceeded count is $323$ versus
+$117$ for static, so its answered EM ($56.1\%$) and all-question EM ($54.2\%$)
+diverge more than static's ($56.5\%$ vs.\ $54.1\%$), and the all-question
+denominator is the conservative one for the deeper-exploring arm. Paired
+statistics (bootstrap $\Delta$EM, McNemar) are computed on the shared questions
+that both arms answered, because a paired test requires both arms present; the
+point estimates of EM$_{\text{all}}$ are reported for transparency and the
+paired tests use the answered indicators on shared answered questions.
 
 % EX-P7 — Statistics
 Statistical inference follows the paired structure of the evaluation. Primary

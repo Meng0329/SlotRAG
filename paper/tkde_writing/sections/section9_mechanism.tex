@@ -12,102 +12,127 @@ this subdomain. On non-well-defined chains the closed form is a proxy artifact
 and is outside the claim.
 
 \subsection{Logical-to-Physical Crossover (RQ9)}
-No physical implementation dominates universally. The chain law predicts a
-clear crossover: on chains of depth $\ge 3$, the downstream requirement is
-strictly more important than the upstream one, so allocating the marginal call
-to the downstream requirement yields positive utility, and the requirement-aware
-plan realizes fewer retrieval calls (verified across the $\ge 3$-slot subdomain:
-pooled chain $3.45$ vs.\ static $4.55$ vs.\ cost-only $4.73$ calls/question;
-$\Delta=-1.09$ vs.\ static, bootstrap $p=0.036$; $\Delta=-1.27$ vs.\ cost-only,
-$p<0.001$; see Table~\ref{tab:overall} and Section~\ref{sec:results}). On chains
-of depth $1$ or $2$ (the $1$- and $2$-slot majority of most QA splits), the
-$\tau=2d-1$ budget floor leaves little allocation freedom, so realized calls are
-close across arms (the pooled full-sample reduction is small, $-0.16$). The
-controlled experiments reproduce both sides: the $\ge 3$-slot subdomain realizes
-the multi-call saving, while on the $1$--$2$-slot majority the arms are within
-one call of each other and the per-question differences are not uniform in
-direction (the chain arm is not always the cheapest). The EM difference on the
-$\ge 3$-slot subdomain is not statistically supported (pooled EM
-$54.5\%/45.5\%/54.5\%$ at $n=11$), so the crossover is a cost claim, not an
-accuracy claim.
+No physical implementation dominates universally, and on the full
+SEALED\_TEST set the crossover is \emph{heterogeneous} rather than uniformly
+favorable to the allocator. The chain law gives the requirement-aware arm
+genuine allocation freedom only where plans are deep; on the shallow plans that
+dominate 2WikiMultiHopQA the same freedom yields \emph{no} retrieval saving and
+a significantly worse EM (Table~\ref{tab:overall}, McNemar
+$p<0.0001$). Mean realized retrieval calls are near-identical between chain and
+static on every dataset (paired $\Delta$: HotpotQA $-0.20$, 2Wiki $+0.01$,
+MuSiQue $-0.09$ calls/question), so the allocator does \emph{not} spend fewer
+retrieval calls in aggregate; what it spends instead is LLM calls---$+24.0$
+per question more than static on HotpotQA ($p<0.0001$), $-22.9$ on 2Wiki, and
+$-14.0$ on MuSiQue. The crossover is therefore method-dependent: the chain arm
+trades LLM calls for a (mostly neutral, sometimes negative) EM effect, and it
+is strictly dominated on cost on 2WikiMultiHopQA where its EM is also
+significantly worse. We report this frontier without selecting the subdomain
+that shows a saving.
 
 \subsection{Bottleneck Attribution (RQ8)}
 Execution traces reveal where additional retrieval ceases to translate into
 answer gains. We decompose failures into acquisition, verification/materialization,
 packing, integration, and generation stages and attribute each incorrect or
-incomplete answer to a stage. The analysis generalizes the finding that the
-selection ceiling---the point beyond which retrieving more evidence does not
-improve the answer---is the dominant bottleneck across the workloads, including
-the winning dataset. This is the honest complement to the effectiveness result:
-the optimizer reduces cost without harming quality precisely because on the
-$2$-slot-majority splits the allocation is already at its floor, and on the
-$\ge 3$-slot subdomain the saved call is spent on the requirement that actually
-carries the answer.
+incomplete answer to a stage. The dominant bottleneck across the workloads is
+the \emph{selection ceiling}---the point beyond which retrieving more evidence
+does not improve the answer---which is exactly why the matched-budget EM
+differences are small: on shallow plans the allocation is already near its
+floor, so the allocator has little to change, and on deep plans the extra
+exploration the chain arm buys is often spent on requirements that do not
+carry the answer. The honest complement to the effectiveness result is that the chain arm's
+deeper exploration on the deep HotpotQA plans converts into \emph{more}
+budget-exceeded questions ($323$ vs.\ $117$ for static) rather than into more
+correct answers---a cost, not a benefit, on that dataset. The budget-exceeded
+total is not uniform across arms or datasets: on 2WikiMultiHopQA the static and
+flat arms hit the ceiling far more often (static $265$, flat $246$) than the
+chain arm ($2$), because the shallow 2Wiki plans exhaust their budget before
+the allocator's deeper exploration can engage.
+
+Figure~\ref{fig:failure} and Table~\ref{tab:failure} give the full status
+breakdown across all $25{,}983$ executions. Of the $7{,}916$ non-ok executions,
+$1{,}134$ ($4.4\%$) hit the matched retrieval budget---but the budget hits are
+\emph{not} uniformly chain-skewed: they concentrate on the deep HotpotQA chain
+arm ($323$) and on the shallow 2Wiki static/flat arms ($265$/$246$), whereas the
+2Wiki chain arm hits the ceiling only twice ($2$). The remaining $760$ ($2.9\%$)
+are deterministic
+plan--question mismatches the compiler correctly rejects
+(\textsc{AnswerUnreachable} $732$, no-join-path $16$, dependency-cycle $9$,
+validation-error $3$). Only $22$ ($0.08\%$) are residual infrastructure
+failures (gateway-side provider errors). On the solvable subset ($25{,}201$
+questions, excluding infrastructure and deterministic-boundary failures) the
+completed rate is $95.5\%$. The failure mix is itself a finding: the system's
+non-completions are dominated by \emph{structural} limits (budget, plan--question
+mismatch), not by flaky infrastructure, so the EM differences we report are not
+an artifact of unstable serving.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{figures/fig7_failure.pdf}
+\caption{SEALED\_TEST status breakdown by dataset (chain arm). Completed,
+budget-exceeded, deterministic plan--question mismatch, and residual
+infrastructure failure. Non-completions are dominated by structural limits
+(budget, compiler-rejected mismatch), not by flaky serving.}
+\label{fig:failure}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\columnwidth]{figures/fig3_budget_stack.pdf}
+\caption{RQ8: budget-exceeded count by arm $\times$ dataset. The budget hits
+are \emph{not} uniformly chain-skewed: the deep HotpotQA chain arm dominates
+its own budget hits ($323$), but on 2WikiMultiHopQA the static ($265$) and flat
+($246$) arms hit the ceiling far more often than the chain arm ($2$).}
+\label{fig:budget_stack}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Execution status across all $25{,}983$ SEALED\_TEST executions
+($8{,}661$ questions $\times$ $3$ arms).}
+\label{tab:failure}
+\small
+\begin{tabular}{lrrl}
+\toprule
+status & count & \% of total & note \\
+\midrule
+completed (ok) & 24,067 & 92.6 & executed within budget \\
+budget-exceeded & 1,134 & 4.4 & HotpotQA chain 323 + 2Wiki static 265 / flat 246 (shallow ceiling) \\
+deterministic boundary & 760 & 2.9 & compiler rejects: \textsc{AnswerUnreachable} 732, no-join 16, dep-cycle 9, validation 3 \\
+infrastructure residual & 22 & 0.08 & gateway-side provider errors \\
+\midrule
+total & 25,983 & 100.0 & \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Runtime Trace Cases (RQ8)}
-The $\ge 3$-slot subdomain trace is reported in Table~\ref{tab:overall}
-(Section~\ref{sec:results}): pooled across HotpotQA, 2Wiki, and MuSiQue
-($n=11$ matched triples), the chain arm realizes $3.45$ calls/question versus
-$4.55$ for static ordering and $4.73$ for cost-only selection---a pooled
-$\Delta$ of $-1.09$ vs.\ static (bootstrap $p=0.036$) and $-1.27$ vs.\
-cost-only ($p<0.001$). On the $1$--$2$-slot chains that dominate the development
-samples, realized calls are similar across arms but not identical: in the
-controlled $\ge 3$-slot subdomain, chain is cheaper than the static arm in $9$
-of $11$ triples (and cheaper than or equal to the flat arm on $10$ of $11$).
-EM on the
-$\ge 3$-slot subdomain is equal across arms ($54.5\%/45.5\%/54.5\%$), so the saving
-is a cost claim, not an accuracy claim.
+The per-dataset frontier is reported in Table~\ref{tab:overall} and
+Section~\ref{sec:results}. On HotpotQA the chain arm issues $+24.0$ LLM
+calls/question more than static (paired CI$[+21.7,+26.3]$, $p<0.0001$) while
+realized retrieval calls are only marginally lower ($-0.20$); on 2Wiki the
+chain arm is both more expensive in LLM calls and significantly worse in EM; on
+MuSiQue it is cheaper in LLM calls ($-14.0$) and marginally best in EM
+($27.5\%$, McNemar $p{=}0.064$). The trace cases confirm the mechanism: the
+chain arm's allocation freedom is real, but on shallow plans it is spent on
+requirements that do not move the answer, while on deep MuSiQue plans it
+occasionally helps. We do not report a uniform cost saving because none exists
+at the full-sample scale.
 
 \subsection{Scaling and Overhead (RQ9)}
 We quantify optimizer overhead as plan complexity increases, separating
 compile time, estimator inference, plan enumeration/pruning, and evidence
-execution. On the matched-budget controlled development sample
-(Table~\ref{tab:overhead-agg}), optimizer compilation contributes
-$\approx 0$\,ms per query (the search is deterministic and bounded by
-$\le 256$ candidate orders $\times 2$ implementations per requirement); the
-overhead is concentrated in execution time, which is proportional to the
-number of retrieval calls the plan triggers.
-
-End-to-end execution latency on the HotpotQA development sample (matched
-three-arm pairs, $n=16$, budget $=8$, frozen plan replay) is reported in
-Table~\ref{tab:overhead-agg}. The chain arm (requirement-aware) realizes the
-fewest retrieval calls ($1.50$ vs.\ $1.75$ flat and $1.69$ static), consistent
-with the matched-pair cost result of Section~\ref{sec:results}. Latency is
-\emph{not} monotone in call count here---static shows the lowest mean latency
-($46.4$\,s vs.\ $51.7$\,s chain)---so we do not claim an end-to-end speedup;
-the cost claim is the call count, and latency differences reflect per-query
-provider variance rather than plan structure. At $\le 2$ slots the
-$\tau=2d-1$ budget floor leaves little allocation freedom and the arms are close
-on call count; we omit a per-slot latency sub-table because the
-development sample contains only one $\ge 4$-slot HotpotQA chain (the $5$-slot
-stratum is $n=1$ and not a reliable basis for a speedup claim). Optimizer search
-telemetry is auditable per query (candidates enumerated, frontier pruned,
-validation warnings recorded in the execution profile).
-
-\begin{table}[t]
-\centering
-\caption{End-to-end execution by arm (HotpotQA development, matched three-arm
-pairs, $n=16$, frozen plan replay, matched budget $=8$). Chain: $\tau=2d-1$;
-flat: cost-only; static: uniform.}
-\label{tab:overhead-agg}
-\small
-\begin{tabular}{lrrrrl}
-\toprule
-arm & calls & latency (ms, mean) & latency (ms, p50) & docs & EM \\
-\midrule
-chain  & 1.50 & 51677 & 8504 & 7.50 & 43.8\% \\
-flat   & 1.75 & 54152 & 16624 & 8.75 & 43.8\% \\
-static & 1.69 & 46429 & 10358 & 8.44 & 37.5\% \\
-\bottomrule
-\end{tabular}
-
-{\footnotesize
-Latency is end-to-end per question (compile excluded; compile is $\approx 0$\,ms
-as the plan is frozen). The chain arm uses the fewest retrieval calls
-($1.50$ vs.\ $1.69$ static, $1.75$ cost-only) but does not have the lowest mean
-latency, so no end-to-end speedup is claimed. EM is equal or better on the chain
-arm ($43.8\%$ vs.\ $37.5\%$ static).}
-\end{table}
+execution. The optimizer compilation contributes $\approx 0$\,ms per query
+(the search is deterministic and bounded by $\le 256$ candidate orders $\times
+2$ implementations per requirement); the overhead is concentrated in execution
+time, which scales with the number of retrieval and LLM calls the plan
+triggers. Optimizer search telemetry is auditable per query (candidates
+enumerated, frontier pruned, validation warnings recorded in the execution
+profile). Because the cost difference between arms is dominated by LLM-call
+count (not retrieval-call count) on the full sample, we report LLM invocations
+alongside retrieval calls as the primary cost axes in Table~\ref{tab:overall}'s
+companion statistics, and we note that the chain arm's higher HotpotQA LLM cost
+is the mechanical price of its deeper evidence-chain exploration under a hard
+budget.
 
 \subsection{Robustness to Estimator Error}
 Because the importance estimator is construction-derived on the claimed

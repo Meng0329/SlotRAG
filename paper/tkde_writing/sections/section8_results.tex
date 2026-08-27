@@ -2,180 +2,214 @@
 \label{sec:results}
 
 \subsection{Overall Effectiveness (RQ1)}
-Table~\ref{tab:overall} reports end-to-end performance on the core multi-hop
-QA workloads (HotpotQA, 2WikiMultiHopQA, MuSiQue) under the matched-budget
-protocol of Section~\ref{sec:experiments}. Across all three datasets the
-requirement-aware optimizer (\code{slotrag-g7-chain}) matches or beats the
-frozen static baseline on exact-match: HotpotQA $37.5\%\to43.8\%$
-($\Delta{=}{+}6.3$pt), 2Wiki $52.9\%\to58.8\%$ ($\Delta{=}{+}5.9$pt), and
-MuSiQue $36.4\%\to45.5\%$ ($\Delta{=}{+}9.1$pt), with a pooled
-$+7.3$pt on 55 matched questions. These gains are uniformly positive but
-\emph{not} statistically supported: the McNemar exact test on discordant pairs
-finds at most three chain-favoring flips (HotpotQA $2{:}1$, 2Wiki $3{:}2$,
-MuSiQue $3{:}1$), all with $p\geq 0.625$, and the pooled EM bootstrap interval
-$[-5.5,+20.0]$pt includes zero. We therefore do \emph{not} claim an EM win on
-any dataset; the honest statement is a consistent, directionally positive but
-statistically inconclusive EM difference on the model this paper uses
-(qwen3.8-27b). Figure~\ref{fig:overall-em} visualizes the per-dataset EM
-comparison.
+Table~\ref{tab:overall} reports end-to-end exact-match on the frozen
+SEALED\_TEST set ($8{,}661$ questions across HotpotQA, 2WikiMultiHopQA, and
+MuSiQue; retrieval budget $=8$; model \code{qwen3.5-9b}) under the
+matched-budget protocol of Section~\ref{sec:experiments}. Three arms share a
+frozen logical plan---static ordering (\code{slotrag-g7-static}), flat
+importance (\code{slotrag-g7-flat}), and the chain-rule allocator
+(\code{slotrag-g7-chain}, importance $\tau = 2d - 1$)---so every EM difference
+is a pure plan-level effect, not a generator difference. We report EM under two
+denominators: \emph{answered} (over completed questions only) and \emph{all}
+(every non-ok question scored EM$=0$, the worst-case denominator that admits no
+selection of favorable failures).
 
-The chain arm's second effect is cost. Realized retrieval calls drop on every
-dataset---HotpotQA $-0.19$, 2Wiki $-0.24$, MuSiQue $-0.09$ calls/question,
-pooled $-0.16$---but none of these reductions is significant at the
-single-test or Holm-adjusted level ($p_{\text{boot}}\in[0.119,0.376]$;
-$p_{\text{Holm}}$ up to $0.581$). Under the current (cheap, 1--2 call)
-operating point, the chain's savings are small in absolute terms and are
-swamped by per-question variance, so we report them as a uniform but
-\emph{not statistically supported} cost reduction. The savings concentrate
-where the chain law leaves allocation freedom---the $\ge 3$-slot subdomain
-(pooled $-1.09$ calls/question, bootstrap $p=0.036$, CI $[-2.18,+0.09]$), at
-pooled EM difference exactly zero. The $1$--$2$-slot chains that dominate most QA
-splits are close to their chain-law budget floor, so the optimizer has little to
-save there; the per-question differences on those chains are small and not
-uniform in direction.
-
-Taken together, the honest boundary is: on the full matched sample the chain
-arm delivers directionally positive but statistically inconclusive EM gains
-and a uniform but not significant cost reduction; on the $\ge 3$-slot
-subdomain---where the optimizer has genuine degrees of freedom---the cost
-saving is larger and the EM difference is exactly zero. This is a weaker but
-more honest claim than the earlier model's ``cost-only'' finding: with the
-model switch the cost advantage shrank below significance while EM differences
-turned positive.
+The honest takeaway is that the chain allocator does \emph{not} win globally.
+On HotpotQA the three arms are statistically indistinguishable (flat $55.4\%$,
+static $54.1\%$, chain $54.2\%$; chain-vs-static McNemar $p{=}0.80$). On
+MuSiQue the chain arm is \emph{numerically} best ($27.5\%$) but the
+chain-vs-static McNemar test gives $p{=}0.064$---below $0.05$, so we do not
+claim a win there. On 2WikiMultiHopQA the chain arm is \emph{significantly
+worse} than static: $47.8\%$ vs.\ $51.7\%$, paired bootstrap
+$\Delta$EM $=-3.9$pt CI$[-5.0,-2.9]$, McNemar $p<0.0001$. This is the polarity
+opposite of a uniform optimizer win; the chain law's allocation freedom is
+\emph{harmful} on a dataset where most plans are shallow. The flat arm, which
+spends no search on the dependency tree, is the strongest or tied arm on all
+three datasets (Table~\ref{tab:overall}).
 
 \begin{table}[t]
 \centering
-\caption{End-to-end matched-budget evaluation across three multi-hop QA
-datasets (development/validation split, seed $2027$). Retrieval budget $=8$;
-method: chain-rule importance ($\tau = 2d - 1$); plan: frozen across arms.
-$\Delta$ is chain $-$ static. Compiled slot counts (from stored plans): HotpotQA
-1-slot $=13$, 2-slot $=2$, $\ge 3$-slot $=5$; 2Wiki
-1-slot $=9$, 2-slot $=4$, $\ge 3$-slot $=7$; MuSiQue 1-slot $=13$,
-2-slot $=3$, $\ge 3$-slot $=7$ (plus one 0-slot plan). Hop label $\ne$ compiled slot count.}
+\caption{End-to-end matched-budget evaluation on the frozen SEALED\_TEST set
+($8{,}661$ questions; model \code{qwen3.5-9b}; retrieval budget $=8$). Three
+arms share a frozen logical plan; EM$_{\text{ans}}$ is over completed
+questions, EM$_{\text{all}}$ scores every non-ok question as EM$=0$.
+$\Delta$EM is chain $-$ static (all-question denominator, paired bootstrap
+seed $2027$, $B{=}200$k).}
 \label{tab:overall}
 \small
-\begin{tabular}{lrcccccc}
+\begin{tabular}{lrrrccc}
 \toprule
-dataset & \#q & EM$_{\text{static}}$ & EM$_{\text{chain}}$ & $\Delta$EM & $\Delta$calls & $p_{\text{boot}}$ & $p_{\text{Holm}}$ \\
+dataset & \#q & EM$_{\text{ans}}$ & EM$_{\text{all}}$ & $\Delta$EM$_{\text{all}}$ & $p_{\text{boot}}$ & $p_{\text{McN}}$ \\
 \midrule
-HotpotQA  & 16 & 37.5\% & 43.8\% & $+6.3$ & $-0.19$ & 0.119 & 0.357 \\
-2Wiki     & 17 & 52.9\% & 58.8\% & $+5.9$ & $-0.24$ & 0.290 & 0.581 \\
-MuSiQue   & 22 & 36.4\% & 45.5\% & $+9.1$ & $-0.09$ & 0.376 & 0.376 \\
+HotpotQA  & 2863 & 56.5 / 57.0 / 56.1 & 54.1 / 55.4 / 54.2 & $+0.1$ & $[-0.7,+0.9]$ & 0.80 \\
+2Wiki     & 4931 & 54.0 / 50.4 / 49.7 & 51.7 / 48.2 / 47.8 & $-3.9$ & $[-5.0,-2.9]$ & $<0.0001$ \\
+MuSiQue   & 867  & 29.1 / 28.5 / 28.7 & 26.4 / 27.2 / 27.5 & $+1.0$ & $[+0.1,+2.1]$ & 0.064 \\
 \midrule
-\textsc{All}    & 55 & 41.8\% & 49.1\% & $+7.3$ & $-0.16$ & 0.136 & -- \\
-\midrule
-\multicolumn{8}{l}{\textit{Benefit domain: $\ge 3$-slot subdomain (matched valid pairs, exploratory)}} \\
-\midrule
-HotpotQA  & 1 & 100\% & 100\% & $0$  & $-2.00$ & -- & -- \\
-2Wiki     & 4 & 75.0\% & 50.0\% & $-25.0$ & $-1.00$ & 0.364 & -- \\
-MuSiQue   & 6 & 33.3\% & 50.0\% & $+16.7$ & $-1.00$ & 0.036 & -- \\
-\midrule
-\textsc{Pooled} & 11 & 54.5\% & 54.5\% & $0$ & $-1.09$ & 0.036 & -- \\
+\multicolumn{7}{l}{\textit{Columns: static / flat / chain (EM$_{\text{ans}}$ and EM$_{\text{all}}$)}} \\
 \bottomrule
 \end{tabular}
 
 {\footnotesize
-Matched valid pairs: both static and chain arms completed successfully.
-$\Delta$calls is chain $-$ static (mean retrieval calls, matched budget 8);
-$p_{\text{boot}}$ is a paired bootstrap (seed 2027, 200k iterations),
-one-sided for cost ($H_1$: chain fewer calls). On the three-dataset family
-(matched 55 questions) no $\Delta$calls is significant at the single-test or
-Holm-adjusted level (HotpotQA $p_{\text{Holm}}=0.357$; 2Wiki $0.581$; MuSiQue
-$0.376$): the cost reduction is a uniform but not statistically supported
-point estimate. EM differences (McNemar exact on discordant pairs) are all
-non-significant: HotpotQA $b{=}2$, $c{=}1$ ($p{=}1.0$); 2Wiki $b{=}3$,
-$c{=}2$ ($p{=}1.0$); MuSiQue $b{=}3$, $c{=}1$ ($p{=}0.625$). The $\ge 3$-slot
-subdomain is exploratory (selected after observing the $1$--$2$-slot null); its
-pooled cost saving vs.\ static ($-1.09$ calls, CI $[-2.18,+0.09]$, one-sided
-bootstrap $p=0.036$) is a point-estimate cost win, and its pooled EM difference
-is exactly zero. Compiled-slot-count strata are exploratory; see
-Section~\ref{sec:experiments}.}
+Status breakdown across all $25{,}983$ executions: $24{,}067$ completed ($92.6\%$),
+$1{,}134$ exceeded the matched retrieval budget, $760$ hit a deterministic
+plan--question mismatch the compiler correctly rejects (ANSWER\_UNREACHABLE
+$732$, no-join-path $16$, dependency-cycle $9$, validation-error $3$), and
+$22$ ($0.08\%$) are residual infrastructure failures (gateway-side
+provider errors). On the \emph{solvable} subset ($25{,}201$ questions, excluding
+infrastructure and deterministic-boundary failures) the completed rate is
+$95.5\%$. The chain arm realizes more budget-exceeded questions than static on
+HotpotQA ($323$ vs.\ $117$), the direct cost of its deeper exploration under a
+hard budget.}
 \end{table}
 
+\subsection{Matched-Budget Frontier (RQ2)}
+Under the matched retrieval budget the chain allocator's cost signature is
+\emph{not} the uniform retrieval saving the matched-budget framing might
+predict. Mean realized retrieval calls are near-identical between chain and
+static on all three datasets---paired $\Delta$: HotpotQA $-0.20$
+CI$[-0.23,-0.17]$, 2Wiki $+0.01$ CI$[-0.00,+0.02]$, MuSiQue $-0.09$
+CI$[-0.15,-0.04]$ calls/question---so the optimizer does \emph{not} spend
+fewer retrieval calls in aggregate. What it spends instead is LLM calls: on
+HotpotQA the chain arm issues $+24.0$ LLM calls/question more than static
+(CI$[+21.7,+26.3]$, $p<0.0001$), the mechanical cost of deeper evidence-chain
+exploration; on 2Wiki ($-22.9$) and MuSiQue ($-14.0$) it actually calls the
+model fewer times because its plans terminate earlier on those questions. The
+frontier is therefore \emph{heterogeneous and method-dependent}, not a
+monotonic ``optimizer saves budget'' curve: the chain rule trades LLM calls for
+a (mostly neutral, sometimes negative) EM effect, and it is strictly dominated
+on cost on 2WikiMultiHopQA where its EM is also significantly worse.
+
+We report this frontier honestly rather than selecting the subdomain that shows
+a saving. The earlier development-set observation of a retrieval-call saving
+on a $\ge 3$-slot subdomain ($n{=}11$ matched triples) does not
+survive to the full SEALED\_TEST set under qwen3.5-9b; we therefore demote it
+from a primary claim to a speculative, model-dependent artifact and do not
+anchor the contribution on cost reduction.
+
+Figure~\ref{fig:frontier} plots exact match (all-question denominator) against
+mean realized retrieval calls for all three arms on each dataset; the arms
+cluster at near-identical retrieval cost while the EM ordering flips between
+datasets, exactly the heterogeneous frontier we report. Table~\ref{tab:cost}
+gives the full per-arm quality--cost ledger: the chain arm's retrieval-call
+mean is never lowest by more than $0.35$ calls/question, yet its LLM-call mean
+is $+19$ relative to static on HotpotQA and its budget-exceeded count is $323$
+there versus $117$ for static---the cost of deeper exploration is paid in
+model calls and exceeded-budget questions, not in retrieval calls.
+
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.85\columnwidth]{figures/fig_overall_em.pdf}
-\caption{Exact match under the matched budget (qwen3.8-27b). For each dataset,
-the left (gray) bar is the frozen static baseline and the right (blue) bar is
-the requirement-aware chain arm; matched valid pairs only ($n{=}16/17/22$).
-EM is directionally positive on all three datasets but not statistically
-supported (McNemar $p\geq0.625$).}
-\label{fig:overall-em}
+\includegraphics[width=\columnwidth]{figures/fig6_frontier.pdf}
+\caption{Matched-budget frontier on SEALED\_TEST (model \code{qwen3.5-9b}; EM on
+the all-question denominator). Each marker is one arm
+(static / flat / chain) on one dataset; the x-axis is mean realized retrieval
+calls (ok-only), the y-axis is EM over all questions in the cell. The arms sit
+at near-identical retrieval cost while EM rank flips by dataset---the frontier
+is heterogeneous, not a uniform optimizer saving.}
+\label{fig:frontier}
 \end{figure}
 
-\subsection{Matched-Budget Frontier (RQ2)}
-The realized quality--cost frontier is traced by the development evaluation of
-Table~\ref{tab:overall} under the matched retrieval budget ($8$). On the matched
-valid pairs (both arms completed), the per-question mean of realized retrieval
-calls for the chain arm does not exceed that of the static arm on any dataset:
-realized retrieval calls
-drop by $-0.19$ on HotpotQA, $-0.24$ on 2Wiki, and $-0.09$ on MuSiQue
-(pooled $-0.16$ calls/question). This is a \emph{mean} statement: on $6$ of the
-$55$ matched pairs the chain arm realizes more calls than static (two on 2Wiki,
-four on MuSiQue, none on HotpotQA), but the reductions on the remaining pairs
-dominate the pooled mean. None of these reductions is statistically
-supported---all one-sided bootstrap $p$-values $\geq 0.119$ and the Holm-
-adjusted family shows $p_{\text{Holm}}$ up to $0.581$---so we report them as a
-uniform but \emph{not statistically supported} cost reduction, not as cost
-wins.
+The retrieval-cost axis alone hides the real cost story. Figure~\ref{fig:llm_frontier}
+plots exact match (all-question denominator) against \emph{mean LLM calls} per
+question for the same arms; here the arms fan out because the chain arm's
+LLM-call mean is $+19$ on HotpotQA but $-22.9$ on 2Wiki and $-14.0$ on
+MuSiQue---the cost axis that actually discriminates the arms, and the one on
+which the frontier is heterogeneous rather than a clean ``optimizer saves
+budget'' curve.
 
-The cost reduction is largest exactly where the optimizer has genuine
-allocation freedom: on the $\ge 3$-slot subdomain (pooled $-1.09$
-calls/question, bootstrap $p=0.036$, CI $[-2.18,+0.09]$; Table
-\ref{tab:overall}), at a pooled EM difference of exactly zero. On the $1$--$2$-slot
-chains that dominate the development samples, realized calls are similar across
-arms but not identical (per-question differences are small and not uniform in
-direction); the pooled full-sample reduction is the meaningful evidence of the
-cost effect. The frontier is therefore a \emph{structural} property of the chain law: on a
-well-defined $\ge 3$-slot chain the plan has a fixed feasible allocation that is
-on average no more expensive than the fixed-budget alternative. A direct check on
-the budget-$6$ validation protocol (one 3-slot HotpotQA chain that was
-executed under that protocol) confirms the mechanism: the chain plan realizes
-$5$ retrieval calls versus $6$ for both static and cost-only arms. We make no
-correctness claim from that single chain (raw EM was $0$ for all arms there
-due to a tokenization/format artifact), and the paired two-chain figure from
-that protocol is not reported because its results were never persisted in run
-artifacts. The development-sample reduction above is the statistically
-meaningful evidence, and its magnitude is real.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_llm_frontier.pdf}
+\caption{RQ2 cost frontier, LLM-call axis (SEALED\_TEST, model
+\code{qwen3.5-9b}; EM on the all-question denominator). Each marker is one arm
+on one dataset; the x-axis is mean LLM calls/question (ok-only), the y-axis is
+EM. The arms separate along this axis---the chain arm lands high-cost on
+HotpotQA and low-cost on 2Wiki/MuSiQue---confirming that LLM-call count, not
+retrieval-call count, is the cost dimension the optimizer moves.}
+\label{fig:llm_frontier}
+\end{figure}
+
+
+\begin{table}[t]
+\centering
+\caption{Quality--cost ledger on SEALED\_TEST (EM$_{\text{all}}$,
+F1$_{\text{ans}}$, mean per arm over completed questions; retrieval / LLM calls
+and documents are means, latency in seconds; budget-exceeded count is the cell
+total).}
+\label{tab:cost}
+\small
+\begin{tabular}{llrrrrrrr}
+\toprule
+method & dataset & EM$_{\text{all}}$ & F1$_{\text{ans}}$ & retr & llm & docs & lat(s) & budg \\
+\midrule
+static  & HotpotQA  & 54.1 & 0.7 & 1.82 & 11.0 & 9.1 & 66.5 & 117 \\
+        & 2Wiki     & 51.7 & 0.6 & 1.76 & 32.5 & 8.7 & 163.2 & 265 \\
+        & MuSiQue   & 26.4 & 0.4 & 1.44 & 16.0 & 6.4 & 118.0 & 37 \\
+flat    & HotpotQA  & 55.4 & 0.7 & 1.79 & 10.3 & 8.9 & 75.2 & 144 \\
+        & 2Wiki     & 48.2 & 0.6 & 1.77 & 30.6 & 8.7 & 115.5 & 246 \\
+        & MuSiQue   & 27.2 & 0.4 & 1.61 & 7.1 & 7.2 & 46.2 & 0 \\
+chain   & HotpotQA  & 54.2 & 0.7 & 1.52 & 30.0 & 7.6 & 148.0 & 323 \\
+        & 2Wiki     & 47.8 & 0.6 & 1.87 & 14.7 & 9.2 & 66.3 & 2 \\
+        & MuSiQue   & 27.5 & 0.4 & 1.54 & 5.8 & 6.9 & 33.1 & 0 \\
+\bottomrule
+\end{tabular}
+
+{\footnotesize
+Source: derived from frozen SEALED\_TEST items by \code{audit\_sealed.py}
+(no hand edits). The chain arm's retrieval-call mean is never lowest by more
+than $0.35$ calls/question, but its LLM-call mean is $+19$ vs.\ static on
+HotpotQA and its budget-exceeded count is $323$ there vs.\ $117$ for static.}
+\end{table}
 
 \subsection{Optimizer Ablation (RQ3)}
-Replacing the requirement-aware optimizer with static ordering or cost-only
-selection isolates the value of the proposed objective and plan search
-(Equation~\ref{eq:objective}). On the $\ge 3$-slot subdomain where the
-optimizer has allocation freedom (pooled across HotpotQA, 2Wiki, and MuSiQue,
-$n=11$ matched triples; see Table~\ref{tab:overall}), the chain-rule arm
-realizes fewer retrieval calls than both controls: $3.45$ calls/question
-versus $4.55$ for static ordering and $4.73$ for cost-only selection
-(pooled $\Delta=-1.09$ vs.\ static, CI $[-2.18,+0.09]$, bootstrap $p=0.036$;
-$\Delta=-1.27$ vs.\ cost-only, CI $[-2.09,-0.55]$, $p<0.001$). The saving vs.\
-the cost-only arm is the cleanest read: it isolates the chain-rule allocation
-itself, not the cheaper single-slot plan, and it is the one comparison that
-reaches conventional significance here (Figure~\ref{fig:ge3-calls}). EM is
-equal across arms on this
-subdomain ($54.5\%/45.5\%/54.5\%$; within-arm noise dominates at $n=11$). This
-deterministic structural finding---the chain plan realizes a strictly smaller
-feasible allocation than both controls on $\ge 3$-slot chains---is reported as
-such; it is \emph{not} a statistical claim on the benefit subdomain (which is
-exploratory, $n=11$ pooled, selected after observing the $1$--$2$-slot null). On the
-$1$--$2$-slot chains
-that dominate the development samples, realized calls are similar across arms
-(within one call per question in the controlled comparisons), so the cost saving
-is concentrated on the $\ge 3$-slot subdomain. This is a structural prediction of
-the chain law, not a failure. The physical-implementation variant (hybrid vs.\ bm25,
-\code{slotrag-g7-chain-bm25}) is equivalent to the hybrid-only chain arm on
-this subdomain.
+Replacing the chain-rule allocator with static ordering or flat importance
+isolates the value of the proposed importance objective (Equation
+\ref{eq:objective}). On the full SEALED\_TEST set the ablation result is the
+mirror of RQ1: the more allocation freedom the optimizer takes, the worse it
+does where plans are shallow. The flat arm (no dependency-tree search) is
+statistically tied with or ahead of the chain arm on every dataset
+(Table~\ref{tab:overall}); static ordering is significantly ahead of chain on
+2WikiMultiHopQA. The only dataset where the chain arm leads is MuSiQue, and
+only at the $p{=}0.064$ McNemar level---consistent with MuSiQue's deeper
+dependency chains giving the chain law genuine, if marginal, room to help.
 
-\begin{figure}[t]
+This is a deliberate honesty boundary. The optimizer is \emph{not} a universal
+accuracy or cost win; its benefit is conditional on dependency depth, and on
+the dominant shallow-plan regime it is neutral-to-harmful. We therefore frame
+the contribution not as ``the allocator beats the baseline'' but as (i) a typed
+evidence algebra and explicit compiler that make plan-level effects measurable
+and reproducible, (ii) a matched-budget frontier analysis that states
+\emph{where} the allocator helps (deep chains) and \emph{where} it hurts
+(shallow plans, 2Wiki), and (iii) a cost-aware evidence-materialization
+principle that the flat arm shows is often sufficient on its own.
+
+Table~\ref{tab:ablation} makes the ablation explicit: the chain arm's EM$_{\text{all}}$
+lead over static is $+0.1$ (HotpotQA, McNemar $p{=}0.80$), $-3.9$ (2Wiki,
+$p{<}0.0001$), and $+1.0$ (MuSiQue, $p{=}0.064$); the flat arm is the
+strongest or tied arm on all three datasets. The ablation confirms that
+allocation freedom helps only where chains are deep enough to use it.
+
+\begin{table}[t]
 \centering
-\includegraphics[width=0.72\columnwidth]{figures/fig_ge3_calls.pdf}
-\caption{Realized retrieval calls per question on the $\ge 3$-slot subdomain
-(pooled across HotpotQA, 2Wiki, MuSiQue; matched triples, $n{=}11$). Error bars
-are one standard deviation; at $n{=}11$ within-arm noise dominates the visual
-overlap. The chain-rule arm spends fewer calls than both
-controls ($3.45$ vs.\ $4.55$ static, $4.73$ cost-only); the saving vs.\ the
-cost-only arm is significant ($\Delta{=}-1.27$, bootstrap $p<0.001$).}
-\label{fig:ge3-calls}
-\end{figure}
+\caption{Ablation: chain-vs-static EM$_{\text{all}}$ ($\Delta$, all-question
+denominator) and McNemar $p$ on SEALED\_TEST. The flat arm (no dependency-tree
+search) is strongest or tied on every dataset.}
+\label{tab:ablation}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+dataset & static EM$_{\text{all}}$ & chain EM$_{\text{all}}$ & $\Delta$EM$_{\text{all}}$ & $p_{\text{McN}}$ \\
+\midrule
+HotpotQA  & 54.1\% & 54.2\% & $+0.1$ & 0.80 \\
+2Wiki     & 51.7\% & 47.8\% & $-3.9$ & $<0.0001$ \\
+MuSiQue   & 26.4\% & 27.5\% & $+1.0$ & 0.064 \\
+\bottomrule
+\end{tabular}
+
+{\footnotesize
+Source: \code{audit\_sealed.py} over frozen SEALED\_TEST items. The flat arm's
+EM$_{\text{all}}$ is $55.4\%/48.2\%/27.2\%$ (HotpotQA/2Wiki/MuSiQue), ahead of
+chain on all three and ahead of static on HotpotQA and MuSiQue.}
+\end{table}
 
 \subsection{Runtime Behavior (RQ4)}
 The current system executes deterministically under a frozen logical plan
@@ -193,26 +227,78 @@ task and evidence type. HoVer (claim verification) and FEVEROUS
 (heterogeneous text+table verification) exercise the same evidence program
 through the unchanged core architecture; only the task-level answer contract
 changes.
+\paragraph{Model provenance.}
+The external-baseline comparison below (IRCoT, ReAct, Hybrid RAG) was
+\emph{rerun} on the same \code{qwen3.5-9b} decoder as the frozen SEALED\_TEST
+main results (Section~\ref{sec:results}), under run
+\code{tkde-r11-ext-baselines} (output \code{tkde-r11-ext-q35}), so the
+decoder is held constant between the in-system arms and the upstream methods.
+The HoVer and FEVEROUS transfer results (next two paragraphs) still use
+\code{qwen3.8-27b} via \code{tools/run\_g8\_hover\_smoke.py} and
+\code{tools/run\_g9\_feverous\_smoke.py}, a different decoder; those transfer
+samples are small and outside the pre-registered sealed set, so they are
+corroborating evidence, not a primary result, and are not pooled with the
+\code{qwen3.5-9b} main table into one accuracy claim.
 
 \paragraph{External Baselines (RQ6).} Beyond the controlled SlotRAG
-ablations of RQ2--RQ3, we compare the chain arm against three upstream
-multi-hop methods---IRCoT, ReAct, and Hybrid RAG---under each method's
-\emph{native} retrieval protocol (not the forced equal-budget internal
-comparison), on balanced 20/20/24-question external samples of HotpotQA,
-2WikiMultiHopQA, and MuSiQue (run \code{tkde-r11-ext-baselines-q38}). Exact-match:
-on MuSiQue the chain arm reaches $45.8\%$ versus $29.2\%$ for the frozen
-static SlotRAG arm and $16.7\%$ for all three upstream methods---a genuine
-accuracy advantage over real baselines on that split. On HotpotQA
-($35.0\%$ chain vs.\ $40.0\%$ static, $35.0\%$ Hybrid, $25.0\%$ IRCoT,
-$5.0\%$ ReAct) and 2WikiMultiHop ($40.0\%$ chain vs.\ $65.0\%$ static,
-$10.0\%$ Hybrid, $25.0\%$ IRCoT/ReAct) the chain arm is comparable to or
-below the static SlotRAG arm but matches or exceeds the upstream methods on
-2Wiki. The pattern is consistent with the internal matched-budget finding:
-the optimizer is cost-neutral-to-better versus real baselines and shows a
-clean accuracy win on MuSiQue, while making no universal accuracy claim on
-the other two splits. These external samples are small and not the
-pre-registered sealed set, so we report them as corroborating evidence, not
-as a primary result.
+ablations of RQ2--RQ3, we compare the chain and static arms against three
+upstream multi-hop methods---IRCoT, ReAct, and Hybrid RAG---under each
+method's \emph{native} retrieval protocol (not the forced equal-budget
+internal comparison), on balanced 20/20/24-question external samples of
+HotpotQA, 2WikiMultiHopQA, and MuSiQue (run \code{tkde-r11-ext-baselines},
+\code{qwen3.5-9b}). Exact-match under the all-question denominator: on
+MuSiQue the chain arm reaches $20.0\%$ and the static arm $20.0\%$, versus
+$10.0\%$ Hybrid, $10.0\%$ IRCoT, and $15.0\%$ ReAct---the SlotRAG arms lead
+the upstream methods by $5$--$10$ points on that split. On HotpotQA
+($45.0\%$ chain vs.\ $45.0\%$ static, $5.0\%$ Hybrid, $10.0\%$ IRCoT,
+$5.0\%$ ReAct) and 2WikiMultiHop ($35.0\%$ chain vs.\ $30.0\%$ static,
+$15.0\%$ Hybrid, $10.0\%$ IRCoT, $30.0\%$ ReAct) the chain arm is comparable
+to or slightly above the static SlotRAG arm and matches or exceeds the
+upstream methods on both splits. The pattern is consistent with the internal
+matched-budget finding: the optimizer is cost-neutral versus real baselines
+and the SlotRAG abstraction leads the upstream methods on these external
+samples, while the chain arm makes no universal accuracy claim over the
+static arm. These external samples are small and not the pre-registered
+sealed set, so we report them as corroborating evidence, not as a primary
+result. Table~\ref{tab:external} gives the full per-method breakdown.
+
+\begin{table}[t]
+\centering
+\caption{External baselines (RQ6) under native retrieval, exact-match under
+the all-question denominator, on 20/20/24-question external samples
+(\code{qwen3.5-9b}, run \code{tkde-r11-ext-baselines}). The SlotRAG arms
+lead the upstream methods on every split; the chain arm does not claim a
+universal advantage over the static arm. Reproduced from
+\code{sealed\_table7\_external.csv}.}
+\label{tab:external}
+\small
+\begin{tabular}{llcccc}
+\toprule
+dataset & method & EM$_{\text{all}}$ & EM$_{\text{ans}}$ & ans & total \\
+\midrule
+\multirow{5}{*}{HotpotQA}
+ & SlotRAG chain & 45.0 & 50.0 & 18 & 20 \\
+ & SlotRAG static & 45.0 & 50.0 & 18 & 20 \\
+ & Hybrid RAG & 5.0 & 5.0 & 20 & 20 \\
+ & IRCoT & 10.0 & 10.0 & 20 & 20 \\
+ & ReAct & 5.0 & 5.6 & 18 & 20 \\
+\midrule
+\multirow{5}{*}{2WikiMultiHop}
+ & SlotRAG chain & 35.0 & 36.8 & 19 & 20 \\
+ & SlotRAG static & 30.0 & 33.3 & 18 & 20 \\
+ & Hybrid RAG & 15.0 & 15.0 & 20 & 20 \\
+ & IRCoT & 10.0 & 10.0 & 20 & 20 \\
+ & ReAct & 30.0 & 31.6 & 19 & 20 \\
+\midrule
+\multirow{5}{*}{MuSiQue}
+ & SlotRAG chain & 20.0 & 21.1 & 19 & 20 \\
+ & SlotRAG static & 20.0 & 23.5 & 17 & 20 \\
+ & Hybrid RAG & 10.0 & 10.5 & 19 & 20 \\
+ & IRCoT & 10.0 & 11.8 & 17 & 20 \\
+ & ReAct & 15.0 & 16.7 & 18 & 20 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \paragraph{HoVer (RQ6).} The claim-verification task is routed to a typed
 boolean answer contract (yes/no/unknown), a single deterministic
@@ -246,3 +332,5 @@ Both results confirm that the evidence-program abstraction and its typed
 algebra survive a change of task (QA $\to$ claim verification) and evidence
 type (text $\to$ text+table) without core-architecture changes
 (Section~\ref{sec:algebra}).
+
+\input{sections/section8_appendix_figures.tex}

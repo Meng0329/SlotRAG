@@ -12,27 +12,27 @@ progress first-class and auditable, and we derived a chain law pinning
 requirement importance to dependency depth ($\tau = 2d-1$) on well-defined
 chains, so the estimator is construction-derived rather than learned.
 
-The evaluation establishes a cost, not an accuracy, claim, and we are
-deliberate about that boundary. Under the matched-budget protocol, on the
-matched valid pairs the requirement-aware optimizer does not spend more on
-average than the frozen static baseline:
-realized retrieval calls fall on every dataset ($-0.19$ on HotpotQA, $-0.24$
-on 2Wiki, $-0.09$ on MuSiQue; pooled $-0.16$ calls/question), though none of
-these reductions is statistically supported (bootstrap $p \in [0.119,0.376]$;
-Holm-adjusted $p$ up to $0.581$). EM differences are directionally positive
-but equally non-significant ($\Delta$EM $+6.3/+5.9/+9.1$pt; McNemar
-$p\geq 0.625$; pooled $+7.3$pt on 55 matched questions). On the $\ge 3$-slot
-subdomain the cost saving is larger and statistically supported in the cleanest
-comparison: pooled chain $3.45$ vs.\ cost-only $4.73$ calls/question
-($\Delta=-1.27$, bootstrap $p<0.001$; vs.\ static $-1.09$, $p=0.036$) at pooled
-EM that is equal across arms ($54.5\%/45.5\%/54.5\%$). No quality claim is made on
-EM. The $1$--$2$-slot chains---which dominate most QA splits---leave the
-optimizer little allocation freedom, so the cost saving is concentrated on the
-$\ge 3$-slot subdomain.
-We report the point-estimate quality difference as a point estimate, and we treat
-runtime re-optimization over alternative physical plans as future work under a
-branching execution model, because on the chain-only topology this system runs
-today it is vacuous.
+The evaluation does \emph{not} establish a universal accuracy or cost win, and
+we are deliberate about that boundary. On the frozen SEALED\_TEST set (8,661
+questions; model \code{qwen3.5-9b}; matched retrieval budget $=8$) the
+chain-rule allocator is significantly \emph{worse} than static on
+2WikiMultiHopQA (EM $47.8\%$ vs.\ $51.7\%$, paired bootstrap $\Delta$EM
+$-3.9$pt CI$[-5.0,-2.9]$, McNemar $p<0.0001$), statistically tied on HotpotQA
+(flat $55.4\%$ / static $54.1\%$ / chain $54.2\%$; chain-vs-static McNemar
+$p{=}0.80$), and only marginally best on MuSiQue (chain $27.5\%$, McNemar
+$p{=}0.064$). The flat arm---which performs no dependency-tree search---is
+strongest or tied on every dataset. The matched-budget frontier is similarly
+heterogeneous: mean retrieval calls are near-identical between chain and static
+(HotpotQA $-0.20$, 2Wiki $+0.01$, MuSiQue $-0.09$ calls/question), while the
+chain arm spends more LLM calls on HotpotQA ($+24.0$ per question,
+$p<0.0001$). The honest statement is that allocator benefit is conditional on
+dependency depth: it helps on the deep chains of MuSiQue and is
+neutral-to-harmful on the shallow plans that dominate 2WikiMultiHopQA, where
+the chain law leaves little allocation freedom. We report the absence of a
+global win with the same rigor as a win would demand.
+We treat runtime re-optimization over alternative physical plans as future work
+under a branching execution model, because on the chain-only topology this
+system runs today it is vacuous.
 
 More broadly, this study suggests that complex retrieval can be treated as an
 execution problem in which evidence goals remain stable while physical
@@ -43,20 +43,24 @@ to evaluate every claim---including the absence of a benefit---against a
 matched budget with the same rigor as the presence of one.
 
 \paragraph{Limitations}
-The matched-budget headline numbers rest on a \emph{development-split} sample
-of matched valid pairs $n=16/17/22$ (HotpotQA / 2WikiMultiHop / MuSiQue,
-pooled $n=55$); the $\ge 3$-slot subdomain cost finding is exploratory at
-$n=11$ (pooled $1{+}4{+}6$). None of these numbers is validated on a held-out
-sealed set, and the pre-registered TKDE protocol for that set is not yet
-frozen. All results use a single frozen decoder (qwen3.8-27b at temperature 0)
-through a shared provider; generalizability to other decoders is untested.
-Evidence corpora are
-the public HotpotQA/2Wiki/MuSiQue passage indices; the heterogeneous-evidence
-result (HoVer/FEVEROUS pilot) is a small transfer proof-of-concept, not a
-Wikipedia-scale retrieval benchmark. The chain law $\tau = 2d - 1$ is exact on
-well-defined \emph{chains} where the compiled requirement order respects
-topological dependencies; on general (branching) graphs the enumerate-index
-proxy is a heuristic and is outside the claim's scope. Cost accounting covers
-realized retrieval calls and LLM calls under the matched budget; latency and
-monetary cost are reported for the optimizer overhead but are not the primary
-comparison axis.
+The matched-budget headline numbers rest on the frozen SEALED\_TEST set
+($n{=}2{,}863/4{,}931/867$ HotpotQA / 2WikiMultiHop / MuSiQue, pooled
+$n{=}8{,}661$) under one decoder (\code{qwen3.5-9b} at temperature $0$) through
+a shared provider; generalizability to other decoders is untested. Of the
+$25{,}983$ executions, $24{,}067$ completed ($92.6\%$); on the solvable subset
+($25{,}201$, excluding $22$ residual infrastructure failures and $760$
+deterministic plan--question mismatches the compiler correctly rejects) the
+completed rate is $95.5\%$, and $1{,}134$ questions exceeded the matched
+retrieval budget. The budget hits are not uniformly chain-skewed: they
+concentrate on the deep HotpotQA chain arm ($323$) and on the shallow 2Wiki
+static/flat arms ($265$/$246$), whereas the 2Wiki chain arm hits the ceiling
+only twice ($2$).
+Evidence corpora are the public HotpotQA/2Wiki/MuSiQue passage indices; the
+heterogeneous-evidence result (HoVer/FEVEROUS pilot) is a small transfer
+proof-of-concept, not a Wikipedia-scale retrieval benchmark. The chain law
+$\tau = 2d - 1$ is exact on well-defined \emph{chains} where the compiled
+requirement order respects topological dependencies; on general (branching)
+graphs the enumerate-index proxy is a heuristic and is outside the claim's
+scope. Cost accounting covers realized retrieval and LLM calls under the
+matched budget; latency and monetary cost are reported for the optimizer
+overhead but are not the primary comparison axis.

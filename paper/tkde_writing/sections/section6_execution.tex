@@ -1,9 +1,43 @@
 \section{Adaptive Evidence Execution}
 \label{sec:execution}
 
+% AE-FIG — System architecture (static schematic; same tabular style as Fig3)
+\begin{figure}[t]
+\centering
+\small
+\begin{tabular}{@{}c@{}}
+\framebox{\parbox{0.92\columnwidth}{\centering
+\textbf{Question} $\to$ \textbf{Slot Compiler} (LLM) \\
+$\downarrow$ typed evidence requirements + dependency edges}} \\
+$\downarrow$ \\
+\framebox{\parbox{0.92\columnwidth}{\centering
+\textbf{Declarative Evidence Algebra} (Section~\ref{sec:algebra}) \\
+states, types, operators, logical/physical plan split}} \\
+$\downarrow$ \\
+\framebox{\parbox{0.92\columnwidth}{\centering
+\textbf{Requirement-Aware Allocator} (Section~\ref{sec:optimizer}) \\
+importance $\tau{=}2d{-}1$, budgeted allocation, Pareto search}} \\
+$\downarrow$ \\
+\framebox{\parbox{0.92\columnwidth}{\centering
+\textbf{Adaptive Executor} (Section~\ref{sec:execution}) \\
+retrieval $\to$ join $\to$ materialize $\to$ generate, under hard budget}} \\
+$\downarrow$ \\
+\framebox{\parbox{0.92\columnwidth}{\centering
+\textbf{Structured Answer Contract} $\to$ evidence-typed answer + provenance}} \\
+\end{tabular}
+\caption{End-to-end SlotRAG pipeline. The declarative evidence program is the
+interface between the compiler and the requirement-aware allocator; the
+adaptive executor realizes the chosen physical plan under an explicit
+retrieval budget. This is a static schematic of the system, not a result
+plot.}
+\label{fig:architecture}
+\end{figure}
+
+Figure~\ref{fig:architecture} shows the end-to-end pipeline. A frozen logical
+plan and a chosen physical plan are executed by the adaptive executor.
+
 % AE-P1 — Deterministic adaptive execution (honest rewrite of G4)
-A frozen logical plan and a chosen physical plan are executed by the adaptive
-executor. Under our design, execution is \emph{deterministic}: given the same
+Under our design, execution is \emph{deterministic}: given the same
 logical plan, the same budget, and the same corpus, the physical-plan selection
 is a pure function of requirement importance and remaining budget. Runtime
 observations---a binding that is found or missing, a candidate yield that
