@@ -1,5 +1,7 @@
 # DEPTH_STRATIFIED_MECHANISM_REPORT.md
 
+> **⚠ EXPLORATORY MECHANISM DISCOVERY SET** — This document reports findings from exploratory analysis on 25,983 sealed items (hotpotqa/2wikimultihop/musique, test_set, 3-arm). Terminology corrected per STRUCTURAL_DEPTH_CORRECTION_REPORT.md. No confirmatory claims may be drawn from this analysis without an independent holdout. See H_STRUCT_1_PRE_REGISTRATION.md for the confirmatory follow-up.
+
 > Depth-Stratified Mechanism Audit — Full Report
 > RQ-D1: Does the effect of dependency-aware chain allocation systematically interact with the true dependency depth of the frozen logical plan?
 > Audit date: 2026-08-31

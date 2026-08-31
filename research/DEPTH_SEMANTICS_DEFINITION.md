@@ -1,5 +1,7 @@
 # DEPENDENCY_DEPTH_DEFINITION.md — Formal Definition
 
+> **⚠ EXPLORATORY MECHANISM DISCOVERY SET** — This document reports findings from exploratory analysis on 25,983 sealed items (hotpotqa/2wikimultihop/musique, test_set, 3-arm). Terminology corrected per STRUCTURAL_DEPTH_CORRECTION_REPORT.md. No confirmatory claims may be drawn from this analysis without an independent holdout.
+
 > Phase 1 deliverable of the Depth-Stratified Mechanism Audit
 
 ## 1. Formal Definition

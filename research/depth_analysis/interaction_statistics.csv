@@ -1,0 +1,10 @@
+dataset,test,tau,observed_diff,deep_n,deep_mean,shallow_n,shallow_mean,permutation_p,n_perms,intercept,intercept_se,hops_coef,hops_se,chain_topo_coef,chain_topo_se,n,r_squared
+hotpotqa,depth_interaction,2,0.155,260,0.1423,2601,-0.0127,0.0,10000,,,,,,,,
+hotpotqa,topology_interaction,chain,-0.0418,747,-0.0295,2114,0.0123,1.0,10000,,,,,,,,
+2wikimultihop,depth_interaction,2,0.0092,229,-0.0306,4701,-0.0398,0.3982,10000,,,,,,,,
+2wikimultihop,topology_interaction,chain,0.0267,1941,-0.0232,2989,-0.0498,0.0074,10000,,,,,,,,
+musique,depth_interaction,2,0.053,58,0.0517,784,-0.0013,0.0065,10000,,,,,,,,
+musique,topology_interaction,chain,0.0289,154,0.026,688,-0.0029,0.0104,10000,,,,,,,,
+pooled,depth_interaction,2,0.0877,547,0.0603,8086,-0.0273,0.0,10000,,,,,,,,
+pooled,topology_interaction,chain,-0.0006,2842,-0.0222,5791,-0.0216,0.5483,10000,,,,,,,,
+pooled,clustered_ols,,,,,,,,,-0.0256,0.0178,0.0767,0.0444,-0.0916,0.0749,8633,0.0146
