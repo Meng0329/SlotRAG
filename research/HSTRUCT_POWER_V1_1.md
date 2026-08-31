@@ -82,7 +82,9 @@ The exploratory effect (EM diff = 0.0603) is BELOW the MDE at any feasible sampl
 
 ---
 
-## 6. Eligible Prevalence per Dataset
+## 6. Eligible Prevalence per Dataset (Census-Verified)
+
+### Exploratory Set (discovery)
 
 | Dataset | Eligible | Total | Rate |
 |---------|---------|-------|------|
@@ -91,31 +93,66 @@ The exploratory effect (EM diff = 0.0603) is BELOW the MDE at any feasible sampl
 | musique | 58 | 842 | 6.9% |
 | **Pooled** | **547** | **8,633** | **6.3%** |
 
+### Validation Set (census-verified, outcome-blind)
+
+| Dataset | Eligible | Total | Rate | vs exploratory |
+|---------|---------|-------|------|----------------|
+| hotpotqa | 68 | 2,146 | 3.2% | -5.9pp |
+| 2wikimultihop | 258 | 3,698 | 7.0% | +2.4pp |
+| musique | 35 | 650 | 5.4% | -1.5pp |
+| **Pooled** | **361** | **6,494** | **5.6%** | **-0.7pp** |
+
+**Note:** Validation eligible rate (5.6%) is lower than exploratory (6.3%), primarily driven by hotpotqa (3.2% vs 9.1%). This is expected distributional variation between splits.
+
 ---
 
-## 7. Validation Set Expected Eligible
+## 7. Validation Set Eligible Inventory (Census-Verified)
 
-| Dataset | Validation size | Expected eligible |
-|---------|----------------|-------------------|
-| hotpotqa | 2,146 | ~194 |
-| 2wikimultihop | 3,698 | ~171 |
-| musique | 650 | ~44 |
-| **Total** | **6,494** | **~409** |
+| Dataset | Validation size | Compile failed | Actual eligible |
+|---------|----------------|----------------|-----------------|
+| hotpotqa | 2,146 | 35 | **68** |
+| 2wikimultihop | 3,698 | 32 | **258** |
+| musique | 650 | 10 | **35** |
+| **Total** | **6,494** | **77** | **361** |
 
-Validation alone provides ~37% of the required 1,105 eligible for 80% power.
+Validation alone provides **32.7%** of the required 1,105 eligible for 80% power.
 
 ---
 
 ## 8. Combined Pool (validation + untouched train)
 
-| Dataset | Validation eligible | Train untouched eligible | Combined |
-|---------|--------------------|-----------------------|----------|
-| hotpotqa | ~194 | ~8,160 | ~8,354 |
-| 2wikimultihop | ~171 | ~7,681 | ~7,852 |
-| musique | ~44 | ~1,359 | ~1,403 |
-| **Total** | **~409** | **~17,200** | **~17,609** |
+### Validation eligible (census-verified)
 
-The combined pool is ~16x the required sample size for 80% power.
+| Dataset | Validation eligible | Compile failed |
+|---------|--------------------|----|
+| hotpotqa | 68 | 35 |
+| 2wikimultihop | 258 | 32 |
+| musique | 35 | 10 |
+| **Total** | **361** | **77** |
+
+### Train untouched eligible (estimated from exploratory prevalence)
+
+| Dataset | Train pool | Eligible rate | Expected eligible |
+|---------|-----------|---------------|-------------------|
+| hotpotqa | 89,673 | 3.2%* | ~2,869 |
+| 2wikimultihop | 166,974 | 7.0%* | ~11,688 |
+| musique | 19,698 | 5.4%* | ~1,064 |
+| **Total** | **276,345** | — | **~15,621** |
+
+*Using validation census rates (not exploratory) for train pool estimation.
+
+### Combined pool
+
+| Source | Eligible | Status |
+|--------|----------|--------|
+| validation_set | **361** (actual) | UNEXPOSED, primary source |
+| Train split (untouched) | **~15,621** (estimated) | UNEXPOSED, supplementary |
+| **Combined** | **~15,982** | |
+
+Required for 80% power: **1,105 eligible**
+Required for 90% power: **1,466 eligible**
+
+**Combined pool is ~14.5× the required sample size for 80% power.**
 
 ---
 

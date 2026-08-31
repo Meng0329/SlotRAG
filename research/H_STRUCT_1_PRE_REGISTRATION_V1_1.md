@@ -151,25 +151,27 @@ From exploratory data (n_eligible = 547):
 | 80% power | McNemar two-sided, α=0.05 | **1,105** |
 | 90% power | McNemar two-sided, α=0.05 | **1,466** |
 
-### 4.3 Validation Set Eligible Inventory
+### 4.3 Validation Set Eligible Inventory (Census-Verified)
 
-Expected eligible per dataset (at exploratory prevalence):
+Actual eligible per dataset (Phase 5 compile census, outcome-blind):
 
-| Dataset | validation_set | Eligible rate | Expected eligible |
-|---------|---------------|---------------|-------------------|
-| hotpotqa | 2,146 | 9.1% | ~194 |
-| 2wikimultihop | 3,698 | 4.6% | ~171 |
-| musique | 650 | 6.9% | ~44 |
-| **Total** | **6,494** | **6.3%** | **~409** |
+| Dataset | validation_set | Eligible | Eligible rate | Census-verified |
+|---------|---------------|----------|---------------|-----------------|
+| hotpotqa | 2,146 | 68 | 3.2% | YES |
+| 2wikimultihop | 3,698 | 258 | 7.0% | YES |
+| musique | 650 | 35 | 5.4% | YES |
+| **Total** | **6,494** | **361** | **5.6%** | **YES** |
 
-### 4.4 Gap Analysis
+Compile failures: 77 (1.2%) — excluded from eligible count.
+
+### 4.4 Gap Analysis (Census-Verified)
 
 | | Required (80%) | Required (90%) | Validation available |
 |---|---|---|---|
-| n_eligible | 1,105 | 1,466 | ~409 |
-| Gap | -696 | -1,057 | — |
+| n_eligible | 1,105 | 1,466 | **361** |
+| Gap | -744 | -1,105 | — |
 
-**Validation alone provides ~37% of the required sample for 80% power.**
+**Validation alone provides 32.7% of the required sample for 80% power — INSUFFICIENT.**
 
 ### 4.5 Additional Data Sources
 

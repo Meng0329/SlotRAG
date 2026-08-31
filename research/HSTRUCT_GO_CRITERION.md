@@ -27,8 +27,10 @@ All 6 gates must be satisfied BEFORE confirmatory answer execution begins.
 H_STRUCT_1_PRE_REGISTRATION_V1_1.md is written and frozen at timestamp 2026-08-31.
 
 ### G2: Census outcome-blind
-**STATUS: IN PROGRESS**
-Census running (PID 1134266). Expected completion ~2h.
+**STATUS: PASS**
+Census complete: 6,494 questions, 361 eligible (5.6%), 77 compile failures.
+Output: `research/hstruct_validation_census/` (CSV + manifest + summary).
+Firewall audit: verified outcome-blind (no retrieval, no generation, no EM/F1).
 
 ### G3: Power analysis
 **STATUS: PASS**
@@ -38,27 +40,24 @@ HSTRUCT_POWER_V1_1.md completed.
 - Monte Carlo validated (seed=2027)
 
 ### G4: Eligible sample adequacy
-**STATUS: PENDING** (depends on G2)
+**STATUS: CONDITIONAL PASS (train supplement required)**
 
-Expected from census:
-- Validation eligible: ~409 (from exploratory prevalence rates)
+Census result:
+- Validation eligible: **361** (actual, not estimated)
 - Required: 1,105 (80% power) or 1,466 (90% power)
+- Gap: -744
 
-If validation provides ~409: **underpowered at 80% target**
+**Validation alone is INSUFFICIENT at 32.7% of required.**
 
-Remediation options:
-1. Supplement from untouched train pool (17,200 eligible available)
-2. Label as "underpowered confirmatory study" and report honestly
+Remediation: Supplement from untouched train pool (~17,200 eligible available, Phase 9 audit confirmed zero contamination).
 
-V1.1 allows option 2.
+**GO condition:** Train supplement provides adequate pool. Final confirmatory n = 1,105 (validation 361 + train ~744).
 
 ### G5: Question IDs frozen
-**STATUS: PENDING** (depends on G2)
-
-After census completes:
-- All validation question_ids are known
-- All plan_hashes are known
-- These become the frozen confirmatory set
+**STATUS: PASS (census complete)**
+- 361 validation eligible question_ids known
+- 361 plan_hashes frozen in `validation_plan_manifest.jsonl`
+- Additional ~744 train eligible to be drawn stratified, frozen before execution
 
 ### G6: Execution frozen
 **STATUS: PASS**
@@ -87,28 +86,37 @@ Execution must NOT proceed if any of the following are true:
 
 ```
 G2 complete?
-  |-- YES --> G4: eligible >= 1,105?
-  |             |-- YES --> GO (full power confirmatory)
-  |             |-- NO --> G4 alt: eligible >= 600?
-  |                         |-- YES --> GO (underpowered, label as such)
+  |-- YES --> G4: eligible >= 1,105 (validation only)?
+  |             |-- YES --> GO (full power, validation-only confirmatory)
+  |             |-- NO --> G4 alt: eligible >= 361 (validation)?
+  |                         |-- YES --> Supplement from train pool
+  |                         |           |-- Train pool >= 744 eligible? --> GO (combined confirmatory)
+  |                         |           |-- Train pool < 744 eligible? --> GO (underpowered, label as such)
   |                         |-- NO --> STOP (insufficient even for feasibility check)
   |-- NO --> WAIT
 ```
 
 ---
 
-## 5. Expected Outcome
+## 5. Actual Outcome (Census-Verified)
 
-Based on exploratory eligible rates (6.3%):
-- Validation eligible: ~409
-- Gap to 80% power: -696
-- Available from train: ~17,200
+**Validation eligible: 361 (5.6% of 6,494)**
 
-**Most likely path:** validation ~409 is below threshold, supplement from train pool to reach ~1,105.
+| Dataset | Validation eligible | Required share | Available from train |
+|---------|--------------------|----|----|
+| hotpotqa | 68 | — | ~8,160 |
+| 2wikimultihop | 258 | — | ~7,681 |
+| musique | 35 | — | ~1,359 |
+| **Total** | **361** | **32.7% of 1,105** | **~17,200** |
 
-**Alternative path:** label as underpowered confirmatory study (V1.1 allows this).
+**Decision: GO (with train supplement)**
 
-Either path requires:
-1. Census completion (G2)
-2. Source disclosure in the paper
-3. Stratified analysis by source split
+Final confirmatory design:
+- Validation: 361 eligible (all used)
+- Train supplement: 744 eligible (stratified draw)
+- Total confirmatory: 1,105 eligible (80% power)
+- Source disclosure: required in paper (stratified by split)
+
+**Most likely path:** validation 361 + train 744 = 1,105 eligible → full power confirmatory.
+
+**Alternative path:** validation-only (361 eligible) → underpowered label, report with honesty.

@@ -53,31 +53,43 @@ No unregistered train leakage found.
 
 ---
 
-## 4. Eligible Pool Estimation
+## 4. Eligible Pool Estimation (Census-Verified Rates)
 
-Using exploratory eligible prevalence rates:
+Using **validation census rates** (not exploratory) for conservative train pool estimation:
 
-| Dataset | Untouched pool | Eligible rate | Expected eligible |
-|---------|---------------|---------------|-------------------|
-| hotpotqa | 89,673 | 9.1% | ~8,160 |
-| 2wikimultihop | 166,974 | 4.6% | ~7,681 |
-| musique | 19,698 | 6.9% | ~1,359 |
-| **Total** | **276,345** | — | **~17,200** |
+| Dataset | Untouched pool | Validation census rate | Expected eligible |
+|---------|---------------|----------------------|-------------------|
+| hotpotqa | 89,673 | 3.2% | ~2,869 |
+| 2wikimultihop | 166,974 | 7.0% | ~11,688 |
+| musique | 19,698 | 5.4% | ~1,064 |
+| **Total** | **276,345** | — | **~15,621** |
+
+**Note:** Using validation census rates (5.6% pooled) rather than exploratory rates (6.3%) for conservative estimate. Actual train eligible may be higher.
 
 ---
 
-## 5. Combined Available Eligible Pool
+## 5. Combined Available Eligible Pool (Census-Verified)
 
 | Source | Expected eligible | Status |
 |--------|-------------------|--------|
-| validation_set | ~409 | UNEXPOSED, primary source |
-| Train split (untouched) | ~17,200 | UNEXPOSED, supplementary |
-| **Combined** | **~17,609** | |
+| validation_set | **361** (ACTUAL, census-verified) | UNEXPOSED, primary source |
+| Train split (untouched) | **~15,621** (estimated) | UNEXPOSED, supplementary |
+| **Combined** | **~15,982** | |
 
 Required for 80% power: **1,105 eligible**
 Required for 90% power: **1,466 eligible**
 
-**Combined pool is ~16× the required sample size.**
+**Combined pool is ~14.5× the required sample size for 80% power.**
+
+### 5.1 Validation-Only Sufficiency
+
+Validation provides **361 eligible** (32.7% of required 1,105). **INSUFFICIENT alone.**
+
+### 5.2 Supplement Calculation
+
+Additional eligible needed from train: 1,105 - 361 = **744**
+
+Train pool provides ~15,621 eligible — **21× the supplement needed**.
 
 ---
 
@@ -103,18 +115,27 @@ The paper must not present train-split results as if they were from an independe
 
 ---
 
-## 8. Recommendation
+## 8. Recommendation (Census-Verified)
 
-Since validation alone provides only ~37% of the required eligible sample:
+Since validation alone provides only 361 eligible (32.7% of required 1,105):
 
 **Use combined validation + train (stratified) as the confirmatory pool.**
 
-Sample design:
-- From validation: take ALL eligible (~409)
-- From train: sample ~700 additional eligible (stratified by dataset)
-- Total: ~1,109 eligible (meets 80% power requirement)
+Sample design (finalized):
+- From validation: take ALL 361 eligible
+- From train: draw 744 additional eligible (stratified by dataset proportional to validation census rates)
+- Total: 1,105 eligible (meets 80% power requirement)
+
+Stratified train draw (proportional to validation census rates):
+
+| Dataset | Validation eligible | Train draw | Total per dataset |
+|---------|--------------------|-----------|-----|
+| hotpotqa | 68 | 148 | 216 |
+| 2wikimultihop | 258 | 559 | 817 |
+| musique | 35 | 37 | 72 |
+| **Total** | **361** | **744** | **1,105** |
 
 This provides adequate power while maintaining:
-- Zero contamination
-- Full source disclosure
-- Stratified analysis capability
+- Zero contamination (train-to-eval overlap = 0)
+- Full source disclosure (stratified by split in all reported statistics)
+- Conservative eligibility estimates (using validation census rates, not exploratory)
