@@ -2,7 +2,8 @@
 
 > **Protocol version:** 1.0
 > **Date:** 2026-08-31
-> **Status:** PRE-REGISTERED (pending confirmatory execution)
+> **Status:** ⛔ SUPERSEDED BEFORE DATA COLLECTION (replaced by V1_1, power-analysis correction)
+> **Superseded by:** H_STRUCT_1_PRE_REGISTRATION_V1_1.md
 > **Triggered by:** STRUCTURE_GATE_OFFLINE_REPLAY.md → CONDITIONAL GO (all 4 gates passed)
 
 ---
