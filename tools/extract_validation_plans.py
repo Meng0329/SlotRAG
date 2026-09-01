@@ -29,8 +29,8 @@ sys.path.insert(0, str(REPO))
 
 from slotrag.config import AppConfig
 from slotrag.models import SlotPlan
-from slotrag.providers import provider_clients
-from slotrag.benchmarking.datasets import DATASETS, iter_jsonl
+from slotrag.providers import AgnesClient
+from slotrag.benchmarking.datasets import DATASETS, adapt_record, iter_jsonl
 from slotrag.planner import SlotCompiler
 
 # ── Graph utilities (inlined from validation_compile_census.py) ──────────
@@ -130,78 +130,75 @@ def load_validation_ids():
 
 
 def load_validation_questions(dataset_name, target_ids):
-    """Load specific validation questions from benchmark files."""
+    """Load specific validation questions from benchmark files, normalized via adapt_record."""
     spec = DATASETS[dataset_name]
     eval_path = REPO / "benchmark" / spec.evaluation_file
     questions = []
     for idx, rec in iter_jsonl(eval_path):
         if rec["id"] in target_ids:
-            questions.append(rec)
+            questions.append(adapt_record(spec, rec, idx, split="validation"))
     return questions
 
 
 def compile_question(question, config, agnes_client):
     """Compile a question using SlotCompiler (firewall: compile only)."""
     compiler = SlotCompiler(client=agnes_client)
-    plan, metrics = compiler.compile(question["question"])
+    plan, metrics = compiler.compile(question.question)
     plan_json = json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     plan_hash = hashlib.sha256(plan_json.encode()).hexdigest()[:16]
     return plan, plan_json, plan_hash
 
 
 def main():
-    print("=== Extract Validation Plans (Phase 5) ===", flush=True)
+    import sys as _sys
+    log = lambda msg: _sys.stderr.write(msg + "\n") or _sys.stderr.flush()
+
+    log("=== Extract Validation Plans (Phase 5) ===")
 
     # Load eligible IDs
     eligible_ids = load_eligible_ids()
-    print(f"Eligible validation questions: {len(eligible_ids)}", flush=True)
+    log(f"Eligible validation questions: {len(eligible_ids)}")
 
     # Load validation IDs
     val_ids = load_validation_ids()
-    print(f"Validation set IDs: {len(val_ids)}", flush=True)
+    log(f"Validation set IDs: {len(val_ids)}")
 
     # Organize by dataset
     by_dataset = {}
     for ds, ids in val_ids.items():
         overlap = [qid for qid in ids if qid in eligible_ids]
         by_dataset[ds] = overlap
-        print(f"  {ds}: {len(overlap)} eligible", flush=True)
+        log(f"  {ds}: {len(overlap)} eligible")
 
     # Initialize shared infrastructure
-    print("\n[Initializing services]", flush=True)
-    print("  Loading config...", flush=True)
+    log("\n[Initializing services]")
     config = AppConfig.from_yaml(REPO / "configs/default.yaml")
-    print("  Config loaded.", flush=True)
-
-    # Bypass rate limiter — extraction is one-off, not production traffic.
-    # The census holds 8 concurrency slots; sharing rate limiter would deadlock.
     from slotrag.providers import AgnesClient
-    print("  Creating AgnesClient...", flush=True)
     agnes = AgnesClient(config.agnes)
-    print("  AgnesClient created.", flush=True)
+    log("  AgnesClient created.")
 
-    # Compile each eligible question
-    results = []
+    # Compile each eligible question — write results incrementally to JSONL
     t0 = time.time()
     total = len(eligible_ids)
     done = 0
     errors = 0
-    print(f"\n[Compiling {total} eligible questions]", flush=True)
+    log(f"\n[Compiling {total} eligible questions]")
+
+    out_f = open(MANIFEST_OUT, "w")
 
     for ds in ["hotpotqa", "2wikimultihop", "musique"]:
         qids = by_dataset.get(ds, [])
         if not qids:
             continue
 
-        # Load questions for this dataset
         questions = load_validation_questions(ds, set(qids))
-        q_by_id = {q["id"]: q for q in questions}
+        q_by_id = {q.id: q for q in questions}
 
         for qid in qids:
             done += 1
             q = q_by_id.get(qid)
             if q is None:
-                print(f"  [{done}/{total}] {ds}/{qid} NOT FOUND", flush=True)
+                log(f"  [{done}/{total}] {ds}/{qid} NOT FOUND")
                 errors += 1
                 continue
 
@@ -210,7 +207,7 @@ def main():
                 adj, edge_types, n_operator_edges = derive_structural_evidence_graph(plan)
                 slot_ids = [s.id for s in plan.slots]
                 structural_hops, structural_nodes = exact_longest_simple_path(adj, slot_ids)
-                topology = classify_topology(slot_ids, adj, edge_types)
+                topology = classify_topology(adj, slot_ids, edge_types)
 
                 rec = {
                     "dataset": ds,
@@ -226,14 +223,16 @@ def main():
                     "eligible": True,
                     "error": None,
                 }
-                results.append(rec)
-                if done % 50 == 0 or done == total:
+                out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                out_f.flush()
+                if done % 10 == 0 or done == total:
                     elapsed = time.time() - t0
                     rate = done / elapsed if elapsed > 0 else 0
                     eta = (total - done) / rate if rate > 0 else 0
-                    print(f"  [{done}/{total}] {ds}/{qid} OK (hops={structural_hops}) | {elapsed:.0f}s elapsed, ETA {eta:.0f}s", flush=True)
+                    log(f"  [{done}/{total}] {ds}/{qid} OK hops={structural_hops} | {elapsed:.0f}s elapsed ETA {eta:.0f}s")
 
             except Exception as e:
+                import traceback
                 errors += 1
                 rec = {
                     "dataset": ds,
@@ -249,24 +248,19 @@ def main():
                     "eligible": False,
                     "error": str(e)[:200],
                 }
-                results.append(rec)
-                if done % 100 == 0:
-                    print(f"  [{done}/{total}] {ds}/{qid} ERROR: {e}", flush=True)
+                out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                out_f.flush()
+                log(f"  [{done}/{total}] {ds}/{qid} ERROR: {e}")
+                log(traceback.format_exc())
 
-    # Write output
+    out_f.close()
     elapsed = time.time() - t0
-    with open(MANIFEST_OUT, "w") as f:
-        for r in results:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-    n_ok = sum(1 for r in results if r["plan_json"] is not None)
-    n_err = sum(1 for r in results if r["error"] is not None)
-
-    print(f"\n{'='*60}", flush=True)
-    print(f"Complete: {len(results)} questions, {n_ok} OK, {n_err} errors", flush=True)
-    print(f"Time: {elapsed:.0f}s ({elapsed/len(results):.1f}s/question)", flush=True)
-    print(f"Output: {MANIFEST_OUT}", flush=True)
-    print(f"\nNext: Run freeze_confirmatory_manifest.py to merge with train plans.", flush=True)
+    n_ok = done - errors
+    log(f"\n{'='*60}")
+    log(f"Complete: {done} questions, {n_ok} OK, {errors} errors")
+    log(f"Time: {elapsed:.0f}s ({elapsed/done:.1f}s/question)")
+    log(f"Output: {MANIFEST_OUT}")
+    log(f"\nNext: Run freeze_confirmatory_manifest.py to merge with train plans.")
 
 
 if __name__ == "__main__":
