@@ -2,106 +2,169 @@
 """
 draw_train_supplement.py — Draw eligible questions from untouched train pool
 
-Phase 10-11: Train supplement for H-STRUCT-1 confirmatory sample
-- Draws 744 eligible questions from train splits (stratified by dataset)
-- Uses validation census rates for proportional allocation
-- Freezes question_ids + plan_hashes to manifest
+Phase 3-4: Proper train filtering + deterministic sequential census
+
+Filtering sources:
+1. EXPOSED_SAMPLE_REGISTRY.csv — all contamination statuses
+2. Development set — all 5 questions
+3. Historical run items — none found (runs/ empty)
+
+Exclusion criteria (ANY hit = exclude):
+- TRAIN_EXPOSED
+- CONTAMINATED
+- EXPOSED_NOT_SCORED
+- EXPOSED_VIA_ABLATION*
+- UNKNOWN (split unknown, conservative)
+- Development set IDs
+
+Output: UNTOUCHED_TRAIN_POOL per dataset
 
 Usage:
     python tools/draw_train_supplement.py --config configs/default.yaml
 
-Output:
-    research/hstruct_validation_census/train_supplement_sample.jsonl
-    research/hstruct_validation_census/confirmatory_manifest.jsonl (validation + train)
+Next step after drawing: SlotCompiler census on drawn questions (Phase 4-5).
 """
 
 import argparse
+import csv
 import json
 import random
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 # ---- Repo setup ----
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
 
-from slotrag.benchmarking.datasets import DATASET_SPECS, load_questions
+from slotrag.benchmarking.datasets import DATASETS, iter_jsonl
 
-# ---- Constants ----
-VALIDATION_CENSUS = REPO / "research" / "hstruct_validation_census" / "validation_structural_census.csv"
-TRAIN_SUPPLEMENT_PATH = REPO / "research" / "hstruct_validation_census" / "train_supplement_sample.jsonl"
-CONFIRMATORY_MANIFEST_PATH = REPO / "research" / "hstruct_validation_census" / "confirmatory_manifest.jsonl"
+# ---- Paths ----
+EXPOSURE_REGISTRY = REPO / "research" / "EXPOSED_SAMPLE_REGISTRY.csv"
+DEVELOPMENT_SET = REPO / "research" / "eval_sets" / "development_set.json"
+TRAIN_SUPPLEMENT_PATH = REPO / "research" / "hstruct_confirmatory" / "train_supplement_draw.jsonl"
 
-# Target supplement per dataset (proportional to validation census rates)
-# Validation: hotpotqa 68, 2wikimultihop 258, musique 35 = 361 total
-# Train supplement: 744 total, proportional
+# ---- Targets (frozen) ----
 SUPPLEMENT_TARGETS = {
-    "hotpotqa": 148,      # 68/361 × 744 ≈ 148
-    "2wikimultihop": 559,  # 258/361 × 744 ≈ 559
-    "musique": 37,         # 35/361 × 744 ≈ 37
+    "hotpotqa": 148,
+    "2wikimultihop": 559,
+    "musique": 37,
 }
 
 SEED = 2027
 
+# All contamination statuses that require exclusion
+EXCLUDED_STATUSES = {
+    "TRAIN_EXPOSED",
+    "CONTAMINATED",
+    "EXPOSED_NOT_SCORED",
+    "UNKNOWN",  # split unknown, conservative
+}
+# Also exclude any status containing "ABLATION"
+EXCLUDE_PATTERN = "ABLATION"
 
-def load_validation_eligible_ids():
-    """Load validation eligible question_ids (to exclude from train draw)."""
-    import csv
-    val_ids = set()
-    with open(VALIDATION_CENSUS, "r") as f:
+
+def load_exposed_ids():
+    """Load all exposed question IDs from EXPOSED_SAMPLE_REGISTRY.csv."""
+    exposed = defaultdict(set)  # dataset -> set of question_ids
+    status_counts = defaultdict(lambda: defaultdict(int))
+
+    with open(EXPOSURE_REGISTRY, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if row["eligible"] == "True" or row["eligible"] == "1":
-                val_ids.add(row["question_id"])
-    print(f"  Validation eligible IDs loaded: {len(val_ids)}")
-    return val_ids
+            dataset = row["dataset"]
+            qid = row["sample_id"]
+            status = row["contamination_status"]
+
+            # Exclude if status matches any excluded category
+            if status in EXCLUDED_STATUSES or EXCLUDE_PATTERN in status:
+                exposed[dataset].add(qid)
+                status_counts[dataset][status] += 1
+
+    return exposed, status_counts
 
 
-def load_train_questions(dataset_name: str):
+def load_development_ids():
+    """Load development set question IDs."""
+    with open(DEVELOPMENT_SET, "r") as f:
+        dev = json.load(f)
+
+    dev_ids = defaultdict(set)
+    if isinstance(dev, list):
+        for q in dev:
+            if isinstance(q, dict):
+                ds = q.get("dataset", "unknown")
+                qid = q.get("id", q.get("question_id", ""))
+                if qid:
+                    dev_ids[ds].add(qid)
+    return dev_ids
+
+
+def load_train_questions(dataset_name):
     """Load train split questions for a dataset."""
-    spec = DATASET_SPECS[dataset_name]
-    train_path = REPO / "benchmark" / spec["train_file"]
-    questions = load_questions(train_path)
+    spec = DATASETS[dataset_name]
+    train_path = REPO / "benchmark" / spec.train_file
+    questions = []
+    for idx, rec in iter_jsonl(train_path):
+        questions.append({"id": rec["id"], "question": rec.get("question", ""), "record": rec})
     return questions
 
 
-def draw_stratified_supplement(val_ids: set, rng: random.Random):
-    """Draw 744 eligible from train splits, stratified by dataset."""
-    all_drawn = []
+def build_untouched_pool(dataset, train_questions, exposed_ids, dev_ids):
+    """Build untouched train pool for a dataset."""
+    exposed_for_ds = exposed_ids.get(dataset, set())
+    dev_for_ds = dev_ids.get(dataset, set())
+
+    all_excluded = exposed_for_ds | dev_for_ds
+
+    untouched = [q for q in train_questions if q["id"] not in all_excluded]
+    return untouched, len(exposed_for_ds), len(dev_for_ds)
+
+
+def draw_stratified_supplement(exposed_ids, dev_ids, rng, seed):
+    """Draw full shuffled pools from train splits with proper filtering.
+
+    Returns the FULL shuffled untouched pool per dataset (not just target).
+    The compile census script iterates through and stops at target.
+    """
+    all_pools = {}
 
     for dataset, target in SUPPLEMENT_TARGETS.items():
-        print(f"\n  Drawing {target} from {dataset} train...")
+        print(f"\n{'='*50}")
+        print(f"Dataset: {dataset}")
+        print(f"{'='*50}")
 
-        # Load train questions
+        # Load raw train questions
         train_questions = load_train_questions(dataset)
-        print(f"    Train pool: {len(train_questions)} questions")
+        raw_count = len(train_questions)
+        print(f"  Raw train pool: {raw_count}")
 
-        # Filter out validation eligible IDs (avoid any overlap)
-        train_filtered = [q for q in train_questions if q["id"] not in val_ids]
-        print(f"    After excluding validation IDs: {len(train_filtered)} questions")
+        # Build untouched pool
+        untouched, n_exposed, n_dev = build_untouched_pool(
+            dataset, train_questions, exposed_ids, dev_ids
+        )
+        print(f"  Exposed removed: {n_exposed}")
+        print(f"  Dev removed: {n_dev}")
+        print(f"  Untouched pool: {len(untouched)}")
+        print(f"  Target eligible: {target}")
 
-        # Random sample (we'll compile later to determine eligibility)
-        # Over-sample by 3x to account for compile failures (~1.2% from census)
-        over_sample_factor = 3
-        n_draw = min(target * over_sample_factor, len(train_filtered))
-        drawn = rng.sample(train_filtered, n_draw)
-        print(f"    Over-sampled: {len(drawn)} questions (target: {target})")
+        if len(untouched) < target:
+            print(f"  WARNING: Untouched pool ({len(untouched)}) < target ({target})")
+            print(f"  Will draw all available questions")
 
-        for q in drawn:
-            all_drawn.append({
-                "dataset": dataset,
-                "question_id": q["id"],
-                "question_text": q.get("question", ""),
-                "target_eligible": target,
-            })
+        # Deterministic shuffle with seed=2027
+        rng.shuffle(untouched)
 
-    return all_drawn
+        # Output FULL shuffled pool (compile census stops at target)
+        all_pools[dataset] = untouched
+        print(f"  Shuffled pool: {len(untouched)} (full pool for sequential census)")
+
+    return all_pools
 
 
 def main():
     parser = argparse.ArgumentParser(description="Draw train supplement for H-STRUCT-1")
-    parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--dry-run", action="store_true", help="Show plan without writing")
     args = parser.parse_args()
@@ -109,41 +172,61 @@ def main():
     rng = random.Random(args.seed)
 
     print("=" * 60)
-    print("H-STRUCT-1 Train Supplement Drawing")
+    print("H-STRUCT-1 Train Supplement Drawing (Corrected)")
     print("=" * 60)
     print(f"Seed: {args.seed}")
     print(f"Target supplement: {sum(SUPPLEMENT_TARGETS.values())} eligible")
     print(f"Per dataset: {SUPPLEMENT_TARGETS}")
 
-    # Step 1: Load validation eligible IDs
-    print("\n[1/4] Loading validation eligible IDs...")
-    val_ids = load_validation_eligible_ids()
+    # Step 1: Load exposure registry
+    print("\n[1/3] Loading exposure registry...")
+    exposed_ids, status_counts = load_exposed_ids()
+    total_exposed = sum(len(v) for v in exposed_ids.values())
+    print(f"  Total exposed IDs: {total_exposed}")
+    for ds in sorted(status_counts.keys()):
+        print(f"  {ds}:")
+        for status, count in sorted(status_counts[ds].items()):
+            print(f"    {status}: {count}")
 
-    # Step 2: Draw from train splits
-    print("\n[2/4] Drawing from train splits (over-sampled)...")
-    drawn = draw_stratified_supplement(val_ids, rng)
+    # Step 2: Load development set IDs
+    print("\n[2/3] Loading development set IDs...")
+    dev_ids = load_development_ids()
+    total_dev = sum(len(v) for v in dev_ids.values())
+    print(f"  Development set IDs: {total_dev}")
 
-    # Step 3: Write train supplement sample
-    print(f"\n[3/4] Writing train supplement sample: {TRAIN_SUPPLEMENT_PATH}")
+    # Step 3: Draw from train splits
+    print("\n[3/3] Building shuffled pools from train splits...")
+    all_pools = draw_stratified_supplement(exposed_ids, dev_ids, rng, args.seed)
+
+    # Write output — full shuffled pools per dataset
     if not args.dry_run:
+        TRAIN_SUPPLEMENT_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(TRAIN_SUPPLEMENT_PATH, "w") as f:
-            for item in drawn:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        print(f"  Written: {len(drawn)} items")
+            for dataset in ["hotpotqa", "2wikimultihop", "musique"]:
+                pool = all_pools.get(dataset, [])
+                for item in pool:
+                    f.write(json.dumps({
+                        "dataset": dataset,
+                        "question_id": item["id"],
+                        "question_text": item.get("question", ""),
+                    }, ensure_ascii=False) + "\n")
+        total_written = sum(len(v) for v in all_pools.values())
+        print(f"\nWritten: {TRAIN_SUPPLEMENT_PATH}")
+        print(f"Total pool: {total_written}")
 
-    # Step 4: Summary
-    print(f"\n[4/4] Summary:")
-    print(f"  Total over-sampled: {len(drawn)}")
+    # Summary
+    print(f"\n{'='*60}")
+    print("Summary")
+    print(f"{'='*60}")
     for dataset in SUPPLEMENT_TARGETS:
-        count = sum(1 for d in drawn if d["dataset"] == dataset)
-        print(f"    {dataset}: {count} drawn (target: {SUPPLEMENT_TARGETS[dataset]})")
+        pool_size = len(all_pools.get(dataset, []))
+        print(f"  {dataset}: pool={pool_size} (target={SUPPLEMENT_TARGETS[dataset]} eligible)")
+    total_pool = sum(len(v) for v in all_pools.values())
+    print(f"  Total pool: {total_pool}")
 
-    print(f"\n  Note: Over-sampled by 3x to account for compile failures.")
-    print(f"  After SlotCompiler census on drawn questions,")
-    print(f"  filter to eligible (hops >= 2) and take first {sum(SUPPLEMENT_TARGETS.values())}.")
-    print(f"\n{'=' * 60}")
-    print("Next step: Run SlotCompiler on drawn questions to determine eligibility.")
-    print(f"{'=' * 60}")
+    print(f"\nNext step: Run train_compile_census.py to compile questions sequentially.")
+    print(f"  The census iterates through each shuffled pool and accepts")
+    print(f"  questions with structural_hops >= 2 until target is reached.")
 
 
 if __name__ == "__main__":

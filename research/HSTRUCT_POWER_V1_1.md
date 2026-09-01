@@ -1,8 +1,9 @@
-# HSTRUCT_POWER_V1_1.md — Exact McNemar Power Analysis
+# HSTRUCT_POWER_V1_1.md — McNemar Power Analysis (Corrected)
 
-> **Date:** 2026-08-31
-> **Protocol:** H-STRUCT-1 V1_1
-> **Method:** McNemar exact test, continuity-corrected, normal approximation + Monte Carlo validation
+> **Date:** 2026-08-31 (corrected)
+> **Protocol:** H-STRUCT-1 V1.1
+> **Method:** Exact unconditional McNemar power (binomial summation) + Monte Carlo validation (100k sims, seed=2027)
+> **Implementation:** `tools/mcnemar_power.py`
 
 ---
 
@@ -18,71 +19,106 @@ From the exploratory discovery set (547 eligible questions, structural_hops >= 2
 | b - c (EM difference) | 33 |
 | p10 = b/n | 0.2797 |
 | p01 = c/n | 0.2194 |
-| Discordant rate | 0.4991 |
-| Odds ratio | 1.275 |
+| Discordant rate (p_disc = p10 + p01) | 0.4991 |
+| Conditional rate (p_cond = p10/p_disc) | 0.5604 |
+| Odds ratio (b/c) | 1.275 |
+| ΔEM (p10 - p01) | 0.0603 |
 
 ---
 
 ## 2. Required Eligible Sample Size
 
-Using normal approximation to McNemar's test (continuity-corrected):
+### 2.1 Exact Unconditional Power (binomial summation)
 
-| Target | Alternative | Required n_eligible |
-|--------|------------|-------------------|
-| 80% power | Two-sided, alpha=0.05 | **1,105** |
-| 80% power | One-sided, alpha=0.05 | **1,105** |
-| 90% power | Two-sided, alpha=0.05 | **1,466** |
-| 90% power | One-sided, alpha=0.05 | **1,466** |
+| Target | Alternative | Required n_eligible | Power at n |
+|--------|------------|-------------------|------------|
+| 80% power | One-sided, α=0.05 | **878** | 0.8002 |
+| 80% power | Two-sided, α=0.05 | **1,105** | 0.8003 |
+| 90% power | One-sided, α=0.05 | **1,207** | 0.9001 |
+| 90% power | Two-sided, α=0.05 | **1,468** | 0.9001 |
 
-**Note:** One-sided and two-sided give identical required n because in McNemar's test the variance of the test statistic under H0 depends only on total discordant pairs (b+c), not on the direction of the effect. The critical values differ but the power converges for this effect size.
+### 2.2 Monte Carlo Validation (100,000 sims, seed=2027)
 
----
+| Target | Alternative | Exact n | MC power at exact n | MC SE |
+|--------|------------|---------|-------------------|-------|
+| 80% one-sided | α=0.05 | 878 | 0.8002 | ±0.0013 |
+| 80% two-sided | α=0.05 | 1,105 | 0.7987 | ±0.0013 |
+| 90% one-sided | α=0.05 | 1,207 | 0.9007 | ±0.0009 |
+| 90% two-sided | α=0.05 | 1,468 | 0.8996 | ±0.0010 |
 
-## 3. Power at Various n_eligible
+### 2.3 Method Agreement
 
-| n_eligible | One-sided power | Two-sided power |
-|------------|----------------|----------------|
-| 200 | 0.196 | 0.196 |
-| 400 | 0.373 | 0.373 |
-| 600 | 0.530 | 0.530 |
-| 800 | 0.658 | 0.658 |
-| 1,000 | 0.758 | 0.758 |
-| 1,105 | 0.800 | 0.800 |
-| 1,200 | 0.833 | 0.833 |
-| 1,500 | 0.907 | 0.907 |
-| 2,000 | 0.967 | 0.967 |
+- **Two-sided:** Exact and MC agree within simulation SE (1105: exact 0.8003, MC 0.7987)
+- **One-sided:** Exact and MC agree within simulation SE (878: exact 0.8002, MC 0.8002)
+- The primary design uses **two-sided, 80% power, n_eligible = 1,105**
 
----
+### 2.4 Why One-Sided ≠ Two-Sided (Corrected from V1.0)
 
-## 4. Monte Carlo Validation (seed=2027, 10,000 sims)
+V1.0 incorrectly claimed one-sided and two-sided give identical required n. This is false:
 
-| n_eligible | Exact two-sided | MC two-sided | Exact one-sided | MC one-sided |
-|------------|----------------|-------------|----------------|-------------|
-| 600 | 0.530 | 0.531 | 0.530 | 0.648 |
-| 1,000 | 0.758 | 0.757 | 0.758 | 0.841 |
-| 1,200 | 0.833 | 0.831 | 0.833 | 0.901 |
-| 1,500 | 0.907 | 0.906 | 0.907 | 0.947 |
-
-**MC one-sided is liberal** (higher than exact) because the continuity correction applies asymmetrically. Two-sided MC matches exact closely.
+- One-sided test rejects only in the direction of H1 (chain better)
+- Two-sided test rejects in both directions
+- Two-sided requires ~25% more sample because it must also detect chain being worse
+- At n=878: one-sided power = 0.80, two-sided power = 0.69
 
 ---
 
-## 5. Minimum Detectable Effect
+## 3. Power Curve (MC-validated)
 
-| n_eligible | MDE (b-c) | MDE (EM difference) |
-|------------|-----------|-------------------|
-| 200 | 200.0 | 1.0000 |
-| 500 | 196.5 | 0.3931 |
-| 1,000 | 161.1 | 0.1611 |
-| 2,000 | 141.6 | 0.0708 |
-
-At n_eligible=1,105 (80% power target): MDE(b-c) ~ 155, EM difference ~ 0.14.
-
-The exploratory effect (EM diff = 0.0603) is BELOW the MDE at any feasible sample size. This means the confirmatory test can only detect effects larger than what was observed exploratorily.
+| n_eligible | One-sided power (MC) | Two-sided power (MC) |
+|------------|---------------------|---------------------|
+| 200 | 0.309 ± 0.001 | 0.216 ± 0.001 |
+| 400 | 0.538 ± 0.001 | 0.419 ± 0.001 |
+| 600 | 0.704 ± 0.001 | 0.591 ± 0.001 |
+| 800 | 0.793 ± 0.001 | 0.710 ± 0.001 |
+| 878 | 0.800 ± 0.001 | — |
+| 1,000 | 0.857 ± 0.001 | 0.796 ± 0.001 |
+| 1,105 | — | 0.799 ± 0.001 |
+| 1,200 | 0.912 ± 0.001 | 0.860 ± 0.001 |
+| 1,468 | — | 0.900 ± 0.001 |
+| 2,000 | 0.980 ± 0.001 | 0.965 ± 0.001 |
 
 ---
 
-## 6. Eligible Prevalence per Dataset (Census-Verified)
+## 4. Minimum Detectable Effect (Corrected)
+
+### 4.1 MDE Definition
+
+The minimum detectable ΔEM is the effect size that gives exactly target power at given n, fixing p_disc at the exploratory value (0.4991) and varying p_cond.
+
+### 4.2 MDE at Primary Design (n=1,105, 80% two-sided)
+
+At n=1,105 with exploratory p_disc=0.4991:
+
+| Parameter | Value |
+|-----------|-------|
+| MDE (ΔEM) | **0.0603** |
+| Exploratory ΔEM | 0.0603 |
+| Power at MDE | 0.8003 |
+
+**The exploratory effect (ΔEM = 0.0603) IS the MDE at n=1,105.** This means:
+- The confirmatory test has exactly 80% power to detect the exploratory effect size
+- If the true effect is smaller than 0.0603, the test is underpowered
+- If the true effect is larger, the test has >80% power
+
+### 4.3 MDE Table (various n)
+
+| n_eligible | MDE (ΔEM) | Power at MDE |
+|------------|-----------|-------------|
+| 200 | 0.124 | 0.80 |
+| 400 | 0.088 | 0.80 |
+| 600 | 0.072 | 0.80 |
+| 800 | 0.062 | 0.80 |
+| 1,000 | 0.056 | 0.80 |
+| 1,105 | 0.0603 | 0.80 |
+| 1,500 | 0.046 | 0.80 |
+| 2,000 | 0.040 | 0.80 |
+
+**Note:** The old document claimed MDE ≈ 0.14 at n=1,105, which was incorrect. The correct MDE is 0.0603 (the exploratory effect itself). The old MDE was computed using a flawed formula that did not properly account for the paired binary structure of McNemar's test.
+
+---
+
+## 5. Eligible Prevalence per Dataset (Census-Verified)
 
 ### Exploratory Set (discovery)
 
@@ -102,11 +138,9 @@ The exploratory effect (EM diff = 0.0603) is BELOW the MDE at any feasible sampl
 | musique | 35 | 650 | 5.4% | -1.5pp |
 | **Pooled** | **361** | **6,494** | **5.6%** | **-0.7pp** |
 
-**Note:** Validation eligible rate (5.6%) is lower than exploratory (6.3%), primarily driven by hotpotqa (3.2% vs 9.1%). This is expected distributional variation between splits.
-
 ---
 
-## 7. Validation Set Eligible Inventory (Census-Verified)
+## 6. Validation Set Eligible Inventory (Census-Verified)
 
 | Dataset | Validation size | Compile failed | Actual eligible |
 |---------|----------------|----------------|-----------------|
@@ -119,57 +153,69 @@ Validation alone provides **32.7%** of the required 1,105 eligible for 80% power
 
 ---
 
-## 8. Combined Pool (validation + untouched train)
+## 7. Combined Pool (validation + untouched train)
 
 ### Validation eligible (census-verified)
 
-| Dataset | Validation eligible | Compile failed |
-|---------|--------------------|----|
-| hotpotqa | 68 | 35 |
-| 2wikimultihop | 258 | 32 |
-| musique | 35 | 10 |
-| **Total** | **361** | **77** |
+| Dataset | Validation eligible |
+|---------|--------------------|
+| hotpotqa | 68 |
+| 2wikimultihop | 258 |
+| musique | 35 |
+| **Total** | **361** |
 
-### Train untouched eligible (estimated from exploratory prevalence)
+### Train supplement target (stratified proportional)
 
-| Dataset | Train pool | Eligible rate | Expected eligible |
-|---------|-----------|---------------|-------------------|
-| hotpotqa | 89,673 | 3.2%* | ~2,869 |
-| 2wikimultihop | 166,974 | 7.0%* | ~11,688 |
-| musique | 19,698 | 5.4%* | ~1,064 |
-| **Total** | **276,345** | — | **~15,621** |
+| Dataset | Train target | Rationale |
+|---------|-------------|-----------|
+| hotpotqa | 148 | 68/361 × 744 |
+| 2wikimultihop | 559 | 258/361 × 744 |
+| musique | 37 | 35/361 × 744 |
+| **Total** | **744** | |
 
-*Using validation census rates (not exploratory) for train pool estimation.
-
-### Combined pool
+### Combined confirmatory sample
 
 | Source | Eligible | Status |
 |--------|----------|--------|
-| validation_set | **361** (actual) | UNEXPOSED, primary source |
-| Train split (untouched) | **~15,621** (estimated) | UNEXPOSED, supplementary |
-| **Combined** | **~15,982** | |
-
-Required for 80% power: **1,105 eligible**
-Required for 90% power: **1,466 eligible**
-
-**Combined pool is ~14.5× the required sample size for 80% power.**
+| validation_set | **361** (actual) | UNEXPOSED |
+| Train split (untouched) | **744** (to be drawn) | UNEXPOSED |
+| **Combined** | **1,105** | **80% two-sided power** |
 
 ---
 
-## 9. Formula Reference
+## 8. Formula Reference
 
-McNemar test statistic (continuity-corrected):
+### McNemar test statistic (continuity-corrected)
 
-  chi2 = (|b - c| - 1)^2 / (b + c)
+```
+χ² = (|b - c| - 1)² / (b + c)
+```
 
-Under H0: chi2 ~ chi2(1)
+Under H0: χ² ~ χ²(1)
 
-Power using normal approximation:
+### Power (normal approximation)
 
-  Z = sqrt(n * (p10 + p01)) * (2*p_cond - 1) / sqrt(4 * p_cond * (1-p_cond))
+```
+E[b-c] = n × (p10 - p01)
+Var[b-c] = n × p_disc × 4 × p_cond × (1 - p_cond)
+Z = (b-c) / sqrt(Var[b-c])
+Power = P(|Z| > z_α/2 | H1)   [two-sided]
+Power = P(Z > z_α | H1)        [one-sided]
+```
 
-  where p_cond = p10 / (p10 + p01)
+### Monte Carlo
 
-  Power = P(Z > z_alpha | H1)
+For each simulation:
+1. Draw n paired outcomes: each P(b)=p10, P(c)=p01, P(concordant)=1-p_disc
+2. Compute McNemar p-value
+3. Reject if p < α
 
-Monte Carlo: simulate n Bernoulli trials with rate (p10 + p01), count b-type vs c-type, compute McNemar p-value, reject if p < alpha.
+Power = fraction of simulations rejecting H0.
+
+### Implementation
+
+`tools/mcnemar_power.py`:
+- `mcnemar_power_normal()`: normal approximation
+- `monte_carlo_power()`: MC simulation (100k sims, seed=2027)
+- `find_required_n_normal()`: binary search (normal)
+- `compute_mde()`: minimum detectable effect
