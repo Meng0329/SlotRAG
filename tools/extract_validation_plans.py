@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO))
 
 from slotrag.config import AppConfig
 from slotrag.models import SlotPlan
-from slotrag.benchmarking.methods import METHODS, _run_slotrag
+from slotrag.providers import provider_clients
 from slotrag.benchmarking.datasets import DATASETS, iter_jsonl
 from slotrag.planner import SlotCompiler
 
@@ -140,13 +140,9 @@ def load_validation_questions(dataset_name, target_ids):
     return questions
 
 
-def compile_question(question, config, retriever=None, client=None):
+def compile_question(question, config, agnes_client):
     """Compile a question using SlotCompiler (firewall: compile only)."""
-    compiler = SlotCompiler(
-        retriever=retriever,
-        agnes_client=client,
-        config=config,
-    )
+    compiler = SlotCompiler(client=agnes_client)
     plan, metrics = compiler.compile(question["question"])
     plan_json = json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     plan_hash = hashlib.sha256(plan_json.encode()).hexdigest()[:16]
@@ -154,33 +150,35 @@ def compile_question(question, config, retriever=None, client=None):
 
 
 def main():
-    print("=== Extract Validation Plans (Phase 5) ===")
-
-    # Load config
-    config = AppConfig.from_yaml(REPO / "configs/default.yaml")
+    print("=== Extract Validation Plans (Phase 5) ===", flush=True)
 
     # Load eligible IDs
     eligible_ids = load_eligible_ids()
-    print(f"Eligible validation questions: {len(eligible_ids)}")
+    print(f"Eligible validation questions: {len(eligible_ids)}", flush=True)
 
     # Load validation IDs
     val_ids = load_validation_ids()
-    print(f"Validation set IDs: {len(val_ids)}")
+    print(f"Validation set IDs: {len(val_ids)}", flush=True)
 
     # Organize by dataset
     by_dataset = {}
     for ds, ids in val_ids.items():
         overlap = [qid for qid in ids if qid in eligible_ids]
         by_dataset[ds] = overlap
-        print(f"  {ds}: {len(overlap)} eligible")
+        print(f"  {ds}: {len(overlap)} eligible", flush=True)
 
     # Initialize shared infrastructure
-    print("\n[Initializing services]")
-    from slotrag.retrieval import HybridRetriever
-    from slotrag.providers import AgnesClient
+    print("\n[Initializing services]", flush=True)
+    print("  Loading config...", flush=True)
+    config = AppConfig.from_yaml(REPO / "configs/default.yaml")
+    print("  Config loaded.", flush=True)
 
-    retriever = HybridRetriever(config=config)
-    client = AgnesClient(config=config)
+    # Bypass rate limiter — extraction is one-off, not production traffic.
+    # The census holds 8 concurrency slots; sharing rate limiter would deadlock.
+    from slotrag.providers import AgnesClient
+    print("  Creating AgnesClient...", flush=True)
+    agnes = AgnesClient(config.agnes)
+    print("  AgnesClient created.", flush=True)
 
     # Compile each eligible question
     results = []
@@ -188,6 +186,7 @@ def main():
     total = len(eligible_ids)
     done = 0
     errors = 0
+    print(f"\n[Compiling {total} eligible questions]", flush=True)
 
     for ds in ["hotpotqa", "2wikimultihop", "musique"]:
         qids = by_dataset.get(ds, [])
@@ -202,13 +201,12 @@ def main():
             done += 1
             q = q_by_id.get(qid)
             if q is None:
-                print(f"  [{done}/{total}] {ds}/{qid} NOT FOUND")
+                print(f"  [{done}/{total}] {ds}/{qid} NOT FOUND", flush=True)
                 errors += 1
                 continue
 
             try:
-                plan, plan_json, plan_hash = compile_question(q, config, retriever, client)
-                from slotrag.planner import derive_structural_evidence_graph, exact_longest_simple_path, classify_topology
+                plan, plan_json, plan_hash = compile_question(q, config, agnes)
                 adj, edge_types, n_operator_edges = derive_structural_evidence_graph(plan)
                 slot_ids = [s.id for s in plan.slots]
                 structural_hops, structural_nodes = exact_longest_simple_path(adj, slot_ids)
@@ -233,7 +231,7 @@ def main():
                     elapsed = time.time() - t0
                     rate = done / elapsed if elapsed > 0 else 0
                     eta = (total - done) / rate if rate > 0 else 0
-                    print(f"  [{done}/{total}] {ds}/{qid} OK (hops={structural_hops}) | {elapsed:.0f}s elapsed, ETA {eta:.0f}s")
+                    print(f"  [{done}/{total}] {ds}/{qid} OK (hops={structural_hops}) | {elapsed:.0f}s elapsed, ETA {eta:.0f}s", flush=True)
 
             except Exception as e:
                 errors += 1
@@ -253,7 +251,7 @@ def main():
                 }
                 results.append(rec)
                 if done % 100 == 0:
-                    print(f"  [{done}/{total}] {ds}/{qid} ERROR: {e}")
+                    print(f"  [{done}/{total}] {ds}/{qid} ERROR: {e}", flush=True)
 
     # Write output
     elapsed = time.time() - t0
@@ -264,11 +262,11 @@ def main():
     n_ok = sum(1 for r in results if r["plan_json"] is not None)
     n_err = sum(1 for r in results if r["error"] is not None)
 
-    print(f"\n{'='*60}")
-    print(f"Complete: {len(results)} questions, {n_ok} OK, {n_err} errors")
-    print(f"Time: {elapsed:.0f}s ({elapsed/len(results):.1f}s/question)")
-    print(f"Output: {MANIFEST_OUT}")
-    print(f"\nNext: Run freeze_confirmatory_manifest.py to merge with train plans.")
+    print(f"\n{'='*60}", flush=True)
+    print(f"Complete: {len(results)} questions, {n_ok} OK, {n_err} errors", flush=True)
+    print(f"Time: {elapsed:.0f}s ({elapsed/len(results):.1f}s/question)", flush=True)
+    print(f"Output: {MANIFEST_OUT}", flush=True)
+    print(f"\nNext: Run freeze_confirmatory_manifest.py to merge with train plans.", flush=True)
 
 
 if __name__ == "__main__":
