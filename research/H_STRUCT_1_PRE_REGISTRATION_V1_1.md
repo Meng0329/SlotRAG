@@ -321,16 +321,22 @@ If G4 fails (validation insufficient + no additional data): the study is labeled
 
 ## 10. Timeline
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 5 | Validation compile census | **DONE** (6,494 questions, 361 eligible, 12,080s) |
-| 6 | Exposure firewall audit | **DONE** (outcome-blind verified) |
-| 7 | Power analysis | **DONE** (HSTRUCT_POWER_V1_1.md) |
-| 8 | Eligible inventory comparison | **DONE** (361 validation, gap -744) |
-| 9 | Additional untouched-data audit | **DONE** (~15,621 train eligible available) |
-| 10-11 | Confirmatory design + cost endpoints | PENDING (after GO decision) |
-| 15 | GO decision | **CONDITIONAL GO** (train supplement required) |
-| Execution | Confirmatory answers | PENDING (after train sample drawn) |
+| Phase | Description | Status | Commit |
+|-------|-------------|--------|--------|
+| 5 | Validation compile census | **DONE** | `20bd616` |
+| 6 | Exposure firewall audit | **DONE** | `e81e3c6` |
+| 7 | Power analysis | **DONE** | `20bd616` |
+| 8 | Eligible inventory comparison | **DONE** | `20bd616` |
+| 9 | Additional untouched-data audit | **DONE** | `20bd616` |
+| 10 | Two-layer confirmatory design | **DONE** | `0bd67d4` |
+| 11 | Cost endpoints | **DONE** | `0bd67d4` |
+| 12 | Natural-prevalence execution plan | **DONE** | `0bd67d4` |
+| 13 | Primary baseline selection | **DONE** | `0bd67d4` |
+| 14 | Report framework | **DONE** (in V1.1 §8) | — |
+| 15 | GO criterion | **DONE** | `20bd616` |
+| 16 | Positioning statement | **DONE** | `20bd616` |
+| — | Draw train supplement | PENDING | — |
+| — | Execute confirmatory answers | PENDING (after GO) | — |
 
 ---
 
