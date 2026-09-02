@@ -70,6 +70,10 @@ class LogicalPlan(StrictModel):
     answer_variable: str = Field(min_length=1)
     answer_type: VariableType = "string"
     semantic_constraints: dict[str, Any] = Field(default_factory=dict)
+    # Slots that implicitly produce the answer variable via an operator
+    # (field_argmin/field_argmax).  Computed by logical_plan_from_slot_plan;
+    # used by the validator for ANSWER_UNREACHABLE.
+    operator_answer_slot_ids: set[str] = Field(default_factory=set)
 
 
 class BudgetAllocation(StrictModel):
@@ -188,7 +192,83 @@ def logical_plan_from_slot_plan(
         )
         for join in plan.joins
     ]
+
+    # Operator-bridge edges: when a field_argmin/field_argmax operator references
+    # fields across two disconnected join components, add a synthetic dependency
+    # edge to ensure the logical plan graph is connected (required by the
+    # topological sort validator).  The executor already handles operator-bridged
+    # components via _operator_connects_branches + _cross_join_rows.
+    if plan.slots and len(plan.slots) >= 2:
+        slot_fields: dict[str, list[str]] = {s.id: list(s.variables) for s in plan.slots}
+        join_adj: dict[str, set[str]] = {s.id: set() for s in plan.slots}
+        for join in plan.joins:
+            if join.left_slot in join_adj and join.right_slot in join_adj:
+                join_adj[join.left_slot].add(join.right_slot)
+                join_adj[join.right_slot].add(join.left_slot)
+        # Compute join-connected components
+        visited: set[str] = set()
+        components: list[set[str]] = []
+        for sid in join_adj:
+            if sid not in visited:
+                comp: set[str] = set()
+                stack = [sid]
+                while stack:
+                    cur = stack.pop()
+                    if cur in visited:
+                        continue
+                    visited.add(cur)
+                    comp.add(cur)
+                    stack.extend(join_adj[cur] - visited)
+                components.append(comp)
+        if len(components) > 1:
+            # Map each slot to its component index
+            slot_to_comp: dict[str, int] = {}
+            for idx, comp in enumerate(components):
+                for sid in comp:
+                    slot_to_comp[sid] = idx
+            added_operator_deps: set[tuple[str, str]] = set()
+            for operator in plan.operators:
+                if operator.kind not in {"field_argmin", "field_argmax"}:
+                    continue
+                # Find which slots contribute fields to this operator
+                comp_ids: set[int] = set()
+                for field in operator.fields:
+                    for sid, fields in slot_fields.items():
+                        if field in fields:
+                            comp_ids.add(slot_to_comp[sid])
+                if len(comp_ids) < 2:
+                    continue
+                # Add a bridge dependency edge between the first two distinct
+                # components found (bidirectional: both orders need to work)
+                comp_list = sorted(comp_ids)
+                for ci in range(len(comp_list) - 1):
+                    c1, c2 = comp_list[ci], comp_list[ci + 1]
+                    # Pick representative slots: last in each component
+                    rep1 = sorted(components[c1])[-1]
+                    rep2 = sorted(components[c2])[-1]
+                    pair = (rep1, rep2)
+                    if pair not in added_operator_deps:
+                        added_operator_deps.add(pair)
+                        dependencies.append(DependencyEdge(
+                            source_slot=rep1,
+                            target_slot=rep2,
+                            variables=[f"_op_bridge_{operator.id}"],
+                        ))
+
     answer_variable = _strip_variable(plan.outputs[0])
+    # Pre-compute operator-answer info while we still have the SlotPlan
+    # (LogicalPlan doesn't carry operators).
+    operator_answer_slot_ids: set[str] = set()
+    if plan.operators:
+        slot_field_map: dict[str, set[str]] = {s.id: set(s.variables) for s in plan.slots}
+        for operator in plan.operators:
+            op_out = _strip_variable(str(getattr(operator, "output", "")))
+            if op_out != answer_variable:
+                continue
+            op_fields = getattr(operator, "fields", None) or []
+            for slot_id, fields in slot_field_map.items():
+                if fields & set(op_fields):
+                    operator_answer_slot_ids.add(slot_id)
     inferred_type = _answer_type(answer_variable, variables, [operator.model_dump(mode="python") for operator in plan.operators])
     return LogicalPlan(
         variables=variables,
@@ -198,6 +278,7 @@ def logical_plan_from_slot_plan(
         answer_variable=answer_variable,
         answer_type=answer_type or inferred_type,
         semantic_constraints=dict(semantic_constraints or {}),
+        operator_answer_slot_ids=operator_answer_slot_ids,
     )
 
 
@@ -319,12 +400,45 @@ def _validation_telemetry(plan: LogicalPlan, started: float) -> PlanTelemetry:
         errors.append(f"DEPENDENCY_CYCLE: {', '.join(detected_cycles)}")
 
     if plan.answer_variable not in declared_variables or not occurrences.get(plan.answer_variable):
-        unreachable_variables.append(plan.answer_variable)
-        errors.append(f"ANSWER_UNREACHABLE: {plan.answer_variable}")
+        # Check if the answer variable is produced by an operator (e.g.
+        # field_argmin/field_argmax output).  If so, the operator's
+        # contributing slots are implicit sources of the answer variable.
+        if plan.operator_answer_slot_ids:
+            occurrences.setdefault(plan.answer_variable, set()).update(plan.operator_answer_slot_ids)
+        else:
+            unreachable_variables.append(plan.answer_variable)
+            errors.append(f"ANSWER_UNREACHABLE: {plan.answer_variable}")
     components = _connected_components(plan, unique_slot_ids)
     answer_sources = occurrences.get(plan.answer_variable, set())
     if len(unique_slot_ids) > 1 and len(components) > 1:
-        errors.append("JOIN_GRAPH_DISCONNECTED")
+        # Join graph is disconnected.  Check if operator-bridge dependency
+        # edges (edges in dependency_edges but NOT in join_edges, with
+        # variable names matching the _op_bridge_ pattern) connect the
+        # components.  This is the case for plans where an operator
+        # (field_argmin/field_argmax) bridges two independent join chains.
+        join_dep_pairs: set[tuple[str, str]] = {
+            (edge.left_slot, edge.right_slot) for edge in plan.join_edges
+        } | {(edge.right_slot, edge.left_slot) for edge in plan.join_edges}
+        operator_bridge_adj: dict[str, set[str]] = {sid: set() for sid in unique_slot_ids}
+        for edge in plan.dependency_edges:
+            if (edge.source_slot, edge.target_slot) in join_dep_pairs:
+                continue
+            if not any(v.startswith("_op_bridge_") for v in edge.variables):
+                continue
+            if edge.source_slot in operator_bridge_adj and edge.target_slot in operator_bridge_adj:
+                operator_bridge_adj[edge.source_slot].add(edge.target_slot)
+                operator_bridge_adj[edge.target_slot].add(edge.source_slot)
+        # Check if operator bridges connect the disconnected components
+        comp_ids = {sid: idx for idx, comp in enumerate(components) for sid in comp}
+        bridge_connected: set[int] = set()
+        for sid in operator_bridge_adj:
+            for nb in operator_bridge_adj[sid]:
+                c1, c2 = comp_ids[sid], comp_ids[nb]
+                if c1 != c2:
+                    bridge_connected.add(c1)
+                    bridge_connected.add(c2)
+        if len(bridge_connected) < len(components):
+            errors.append("JOIN_GRAPH_DISCONNECTED")
     if answer_sources and not any(answer_sources & component for component in components):
         errors.append(f"ANSWER_COMPONENT_MISSING: {plan.answer_variable}")
 
@@ -406,6 +520,47 @@ def compile_physical_plan(
             if incoming[target] == 0:
                 ready.append(subgoals_by_id[target])
     slot_ids = [subgoal.id for subgoal in ordered]
+
+    # Materializer-join-adjacency: every slot after the first must have at
+    # least one join-neighbor already in the prefix, or the execution fails
+    # with "no join path".  Unidirectional dependency edges make Kahn's sort
+    # able to place slot2 before slot4 when slot2 only joins slot4.  When
+    # the Kahn order is not join-adjacent, rebuild via frontier expansion:
+    # greedy from the first slot, always try join-adjacent candidates first.
+    _join_adj: dict[str, set[str]] = {sid: set() for sid in slot_ids}
+    for join in canonicalized.join_edges:
+        if join.left_slot in _join_adj and join.right_slot in _join_adj:
+            _join_adj[join.left_slot].add(join.right_slot)
+            _join_adj[join.right_slot].add(join.left_slot)
+
+    _prefix: set[str] = set()
+    _adjacent = True
+    for sid in slot_ids:
+        if _prefix and not (_prefix & _join_adj[sid]):
+            _adjacent = False
+            break
+        _prefix.add(sid)
+    if not _adjacent:
+        # Frontier expansion: next slot prefers join-neighbors of visited.
+        _reordered_by_priority: dict[str, LogicalSubgoal] = {
+            sg.id: sg for sg in ordered
+        }
+        _result: list[str] = [slot_ids[0]]
+        _visited: set[str] = {slot_ids[0]}
+        while len(_result) < len(slot_ids):
+            remaining_ids = [sid for sid in slot_ids if sid not in _visited]
+            # find any remaining slot adjacent to the visited frontier
+            _next = None
+            for cand in remaining_ids:
+                if cand in _join_adj and _visited & _join_adj[cand]:
+                    _next = cand
+                    break
+            if _next is None:
+                # disconnected/operator-only branch: take lowest priority
+                _next = min(remaining_ids, key=lambda x: _reordered_by_priority[x].id)
+            _result.append(_next)
+            _visited.add(_next)
+        slot_ids = _result
     query_formulation = {
         subgoal.id: " ".join(
             part
