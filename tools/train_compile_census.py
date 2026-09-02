@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-train_compile_census.py — V1.2: Deterministic sequential census for train supplement
+train_compile_census.py — V1.3: PARALLEL census for train supplement
 
-V1.2 FIX: Uses full QuestionRecord from load_questions() (same path as validation census).
-No MinimalQR. Passages, metadata, gold_evidence all present.
+V1.3: ThreadPoolExecutor parallel compilation (~16 workers).
+Resume support: skips questions already in existing CSV.
+Thread-safe: Lock-protected CSV writes + counters.
 
 compile_slotrag_plan(METHODS["slotrag"], dataset, full_question_record, agnes_client)
 compiler_options match real execution path exactly.
@@ -20,7 +21,9 @@ import hashlib
 import json
 import random
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -57,6 +60,7 @@ TARGETS = {
 }
 
 SEED = 2027
+MAX_WORKERS = 16
 
 
 def _plan_sha256(plan: SlotPlan) -> str:
@@ -218,16 +222,34 @@ def compile_one(dataset, question, agnes_client):
     return result, snapshot, compile_input
 
 
+def load_processed_ids(csv_path: Path) -> set:
+    """Load already-processed (dataset, question_id) pairs from existing CSV.
+
+    Only rows WITHOUT an error count as processed — an error row means the
+    compile failed and must be retried on resume (otherwise a batch launched
+    without env would mark every question as done-with-0-eligible)."""
+    processed = set()
+    if not csv_path.exists():
+        return processed
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("error"):
+                continue
+            processed.add((row["dataset"], row["question_id"]))
+    return processed
+
+
 def main():
-    print("=== Train Compile Census (V1.2 — FULL QuestionRecord) ===")
+    print("=== Train Compile Census (V1.3 — PARALLEL, 16 workers) ===")
     print("FIREWALL: SlotCompiler ONLY. No retrieval, no generation, no EM/F1.")
     print(f"Compile path: compile_slotrag_plan(METHODS['{METHOD_NAME}'], dataset, full_question_record, agnes)")
     print(f"Targets: {TARGETS}")
     print(f"Seed: {SEED}")
+    print(f"Workers: {MAX_WORKERS}")
     print()
 
     config = AppConfig.from_yaml(REPO / "configs" / "default.yaml")
-    agnes, embedding, reranker = provider_clients(config)
 
     # Load full QuestionRecords from train benchmark files
     BENCHMARK_ROOT = REPO / "benchmark"
@@ -251,103 +273,257 @@ def main():
         rng.shuffle(ids)
         ds_questions[ds] = {qid: ds_questions[ds][qid] for qid in ids}
 
+    # Resume: skip already-processed questions
+    processed = load_processed_ids(CENSUS_CSV)
+    if processed:
+        print(f"  RESUME: {len(processed)} questions already processed, skipping them")
+
     csv_fields = [
         "dataset", "question_id", "plan_hash", "n_slots", "n_edges",
         "n_operator_edges", "structural_hops", "structural_nodes",
         "topology", "eligible", "error",
     ]
 
+    # Build work queue per dataset: (dataset, question_id, question) for
+    # unprocessed questions, ordered by deterministic shuffle.  Only enqueue
+    # until the dataset's eligible target is projected to be reached; a
+    # sliding in-flight window (see execution below) enforces the hard stop.
+    eligible_done = {ds: sum(1 for (d, _) in processed if d == ds) for ds in TARGETS}
+    work = []
+    for dataset in ["hotpotqa", "2wikimultihop", "musique"]:
+        if dataset not in ds_questions:
+            continue
+        target = TARGETS[dataset]
+        questions = ds_questions[dataset]
+        print(f"--- {dataset}: target={target} eligible, pool={len(questions)}, "
+              f"already_eligible={eligible_done[dataset]}, already_processed="
+              f"{sum(1 for (ds, _) in processed if ds == dataset)} ---")
+        for qid, question in questions.items():
+            if (dataset, qid) in processed:
+                continue
+            work.append((dataset, qid, question))
+
+    total_work = len(work)
+    total_all = sum(len(q) for q in ds_questions.values())
+    print(f"\n  Total questions: {total_all}, already processed: {len(processed)}, "
+          f"remaining: {total_work}")
+    print(f"  Estimated time: ~{total_work * 14 / MAX_WORKERS / 60:.0f} min "
+          f"(vs ~{total_work * 14 / 60:.0f} min serial)")
+    print()
+
+    # Create agnes client (file-based rate limiters are thread-safe)
+    agnes, embedding, reranker = provider_clients(config)
+
+    # Thread-safe state
+    csv_lock = threading.Lock()
+    counter_lock = threading.Lock()
     eligible_by_ds = {ds: [] for ds in TARGETS}
     failures_by_ds = {ds: [] for ds in TARGETS}
-    compiled_by_ds = {ds: 0 for ds in TARGETS}
+    compiled_count = 0
+    eligible_count = 0
+    error_count = 0
     start_time = time.time()
 
-    with open(CENSUS_CSV, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=csv_fields)
+    # Append to existing CSV (or create new)
+    csv_file = open(CENSUS_CSV, "a", newline="")
+    writer = csv.DictWriter(csv_file, fieldnames=csv_fields)
+    if not processed:
         writer.writeheader()
+        csv_file.flush()
 
-        for dataset in ["hotpotqa", "2wikimultihop", "musique"]:
-            if dataset not in ds_questions:
+    def do_one(item):
+        dataset, qid, question = item
+        result, snapshot, compile_input = compile_one(dataset, question, agnes)
+
+        # Thread-safe CSV write
+        with csv_lock:
+            csv_row = {k: result[k] for k in csv_fields}
+            writer.writerow(csv_row)
+            csv_file.flush()
+
+        # Thread-safe snapshot save (if eligible)
+        if snapshot and result["eligible"]:
+            snap_dir = FROZEN_DIR / dataset
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            snap_path = snap_dir / f"{qid}.json"
+            with open(snap_path, "w") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+
+        return result
+
+    # Execute in parallel with a sliding in-flight window.  Preserve the
+    # serial "stop when target reached" semantics: once a dataset reaches its
+    # eligible target (counting already-completed eligible from resume), no
+    # further items of that dataset are submitted.
+    dataset_target_left = {ds: max(0, TARGETS[ds] - eligible_done[ds]) for ds in TARGETS}
+
+    def dataset_done(item_ds: str) -> bool:
+        return dataset_target_left[item_ds] <= 0
+
+    # Drop datasets already at/above their resume-eligible target from work,
+    # and memorize a stable mapping for futures -> items.
+    work = [item for item in work if not dataset_done(item[0])]
+    futures_map: dict = {}
+    work_iter = iter(work)
+    submitted = 0
+
+    def maybe_fill(pool, in_flight):
+        nonlocal submitted
+        # submit up to the window, skipping items whose dataset target is met
+        while len(in_flight) < MAX_WORKERS * 2:
+            try:
+                item = next(work_iter)
+            except StopIteration:
+                break
+            if dataset_done(item[0]):
                 continue
+            submitted += 1
+            future = pool.submit(do_one, item)
+            futures_map[future] = item
+            in_flight.add(future)
 
-            target = TARGETS[dataset]
-            questions = ds_questions[dataset]
-            print(f"\n--- {dataset}: target={target} eligible, pool={len(questions)} ---")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        in_flight: set = set()
+        maybe_fill(pool, in_flight)
+        i = 0
+        while in_flight:
+            snapshot = tuple(in_flight)
+            for future in as_completed(snapshot):
+                in_flight.discard(future)
+                item = futures_map.get(future)
+                try:
+                    result = future.result()
+                except Exception as e:
+                    print(f"  FATAL: {item[0]}/{item[1] if item else '?'} {e}")
+                    with counter_lock:
+                        error_count += 1
+                    i += 1
+                    maybe_fill(pool, in_flight)
+                    continue
 
-            for i, (qid, question) in enumerate(questions.items()):
-                if len(eligible_by_ds[dataset]) >= target:
-                    print(f"  TARGET REACHED: {len(eligible_by_ds[dataset])}/{target}")
-                    break
+                with counter_lock:
+                    compiled_count += 1
+                    if result["error"]:
+                        error_count += 1
+                        with csv_lock:
+                            failures_by_ds[result["dataset"]].append(result)
+                    elif result["eligible"]:
+                        eligible_count += 1
+                        with csv_lock:
+                            eligible_by_ds[result["dataset"]].append(result)
+                        ds = result["dataset"]
+                        if dataset_target_left[ds] > 0:
+                            dataset_target_left[ds] -= 1
+                            if dataset_target_left[ds] == 0:
+                                print(f"  TARGET REACHED: {ds} "
+                                      f"(eligible+resume={sum(len(v) for v in eligible_by_ds.values()) + sum(v for v in eligible_done.values())})")
 
-                result, snapshot, compile_input = compile_one(dataset, question, agnes)
-                compiled_by_ds[dataset] += 1
+                i += 1
+                total_done = len(processed) + compiled_count
+                if i % 100 == 0 or i == len(work):
+                    elapsed = time.time() - start_time
+                    rate = compiled_count / elapsed if elapsed > 0 else 0
+                    eta = (max(len(work) - submitted, 0) + len(in_flight)) / rate if rate > 0 else 0
+                    print(f"  [{total_done}/{len(work)+len(processed)}] compiled={compiled_count} "
+                          f"eligible={eligible_count} errors={error_count} "
+                          f"| {elapsed:.0f}s elapsed, ETA {eta:.0f}s "
+                          f"| {rate:.1f} q/s")
+                maybe_fill(pool, in_flight)
 
-                csv_row = {k: result[k] for k in csv_fields}
-                writer.writerow(csv_row)
-                csvfile.flush()
+    csv_file.close()
 
-                if result["error"]:
-                    failures_by_ds[dataset].append(result)
-                    status = f"FAIL({result['error'][:50]})"
-                elif result["eligible"]:
-                    eligible_by_ds[dataset].append(result)
-                    # Save frozen snapshot
-                    snap_dir = FROZEN_DIR / dataset
-                    snap_dir.mkdir(parents=True, exist_ok=True)
-                    snap_path = snap_dir / f"{qid}.json"
-                    with open(snap_path, "w") as f:
-                        json.dump(snapshot, f, indent=2, ensure_ascii=False)
-                    status = f"ELIGIBLE(hops={result['structural_hops']})"
-                else:
-                    status = f"not_eligible(hops={result['structural_hops']})"
+    # Build eligible manifest deterministically from the census CSV.  The
+    # manifest must reflect the FIRST `target` eligible questions per dataset
+    # in the deterministic shuffle order (completion order in the parallel
+    # run is not shuffle order, so it cannot be used).  Rebuilt fresh from
+    # the CSV on every resume so the manifest never duplicates rows.
+    csv_rows: dict[tuple[str, str], dict] = {}
+    with open(CENSUS_CSV) as f:
+        for row in csv.DictReader(f):
+            csv_rows[(row["dataset"], row["question_id"])] = row
 
-                elapsed = time.time() - start_time
-                total_compiled = sum(compiled_by_ds.values())
-                total_eligible = sum(len(v) for v in eligible_by_ds.values())
-                if total_compiled % 20 == 0 or total_compiled <= 3:
-                    print(f"  [{total_compiled}] {dataset}/{qid[:12]}... {status} "
-                          f"| eligible={total_eligible}/{sum(TARGETS.values())} "
-                          f"| {elapsed:.0f}s")
+    selected: list[dict] = []
+    missing_plan = 0
+    for ds in ["hotpotqa", "2wikimultihop", "musique"]:
+        if ds not in ds_questions:
+            continue
+        target = TARGETS[ds]
+        count = 0
+        for qid, question in ds_questions[ds].items():
+            if count >= target:
+                break
+            row = csv_rows.get((ds, qid))
+            if row is None or row["eligible"] != "True":
+                continue
+            snap_path = FROZEN_DIR / ds / f"{qid}.json"
+            if not snap_path.exists():
+                missing_plan += 1
+                continue
+            snap = json.load(open(snap_path))
+            plan = snap["plan"]
+            selected.append({
+                "dataset": ds,
+                "question_id": qid,
+                "source_split": "train",
+                "plan_json": json.dumps(plan, sort_keys=True, separators=(",", ":")),
+            })
+            count += 1
 
-            print(f"  {dataset} done: {len(eligible_by_ds[dataset])}/{target} eligible, "
-                  f"{compiled_by_ds[dataset]} compiled, "
-                  f"{len(failures_by_ds[dataset])} failures")
-
-    # Write eligible manifest
     with open(ELIGIBLE_JSONL, "w") as f:
-        for ds in ["hotpotqa", "2wikimultihop", "musique"]:
-            for result in eligible_by_ds[ds]:
-                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        for item in selected:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-    # Write failures
+    # Write failures fresh from the CSV (all compile_failed rows)
     with open(FAILURES_CSV, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=csv_fields)
-        writer.writeheader()
-        for ds in ["hotpotqa", "2wikimultihop", "musique"]:
-            for result in failures_by_ds[ds]:
-                writer.writerow({k: result[k] for k in csv_fields})
+        w = csv.DictWriter(f, fieldnames=csv_fields)
+        w.writeheader()
+        seen_fail: set[tuple[str, str]] = set()
+        for (ds, qid), row in csv_rows.items():
+            if row["error"] and (ds, qid) not in seen_fail:
+                seen_fail.add((ds, qid))
+                w.writerow({k: row.get(k, "") for k in csv_fields})
+
+    if missing_plan:
+        print(f"  WARNING: {missing_plan} eligible rows missing frozen snapshots")
 
     elapsed = time.time() - start_time
-    total_compiled = sum(compiled_by_ds.values())
-    total_eligible = sum(len(v) for v in eligible_by_ds.values())
+    total_compiled = len(processed) + compiled_count
+    total_eligible = eligible_count  # from this run only; need to recount from CSV
+    # Recount all eligible from CSV
+    all_eligible = 0
+    for ds in TARGETS:
+        with open(CENSUS_CSV) as f:
+            reader = csv.DictReader(f)
+            ds_eligible = sum(1 for row in reader if row["dataset"] == ds and row["eligible"] == "True")
+            all_eligible += ds_eligible
 
     print(f"\n{'='*60}")
-    print(f"V1.2 TRAIN CENSUS COMPLETE")
+    print(f"V1.3 TRAIN CENSUS COMPLETE (PARALLEL)")
     print(f"{'='*60}")
-    print(f"Time: {elapsed:.0f}s ({elapsed/max(total_compiled,1):.1f}s/question)")
+    print(f"Time: {elapsed:.0f}s ({elapsed/max(compiled_count,1):.1f}s/question)")
     print(f"Total compiled: {total_compiled}")
-    print(f"Total eligible: {total_eligible}/{sum(TARGETS.values())}")
+    print(f"Total eligible: {all_eligible}/{sum(TARGETS.values())}")
     for ds in ["hotpotqa", "2wikimultihop", "musique"]:
-        print(f"  {ds}: {len(eligible_by_ds[ds])}/{TARGETS[ds]} eligible")
+        with open(CENSUS_CSV) as f:
+            reader = csv.DictReader(f)
+            ds_eligible = sum(1 for row in reader if row["dataset"] == ds and row["eligible"] == "True")
+        print(f"  {ds}: {ds_eligible}/{TARGETS[ds]} eligible")
 
-    all_met = all(len(eligible_by_ds[ds]) >= TARGETS[ds] for ds in TARGETS)
+    all_met = all(
+        sum(1 for row in csv.DictReader(open(CENSUS_CSV))
+            if row["dataset"] == ds and row["eligible"] == "True") >= TARGETS[ds]
+        for ds in TARGETS
+    )
     if all_met:
         print(f"\nALL TARGETS MET.")
     else:
         print(f"\nWARNING: Not all targets met!")
         for ds in TARGETS:
-            if len(eligible_by_ds[ds]) < TARGETS[ds]:
-                print(f"  {ds}: {len(eligible_by_ds[ds])}/{TARGETS[ds]} — SHORT")
+            with open(CENSUS_CSV) as f:
+                reader = csv.DictReader(f)
+                ds_eligible = sum(1 for row in reader if row["dataset"] == ds and row["eligible"] == "True")
+            if ds_eligible < TARGETS[ds]:
+                print(f"  {ds}: {ds_eligible}/{TARGETS[ds]} — SHORT")
 
     print(f"\nOutputs:")
     print(f"  Census CSV: {CENSUS_CSV}")

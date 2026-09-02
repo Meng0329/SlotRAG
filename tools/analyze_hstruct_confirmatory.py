@@ -143,6 +143,18 @@ def build_question_lookup():
 
 # ── Analysis functions ─────────────────────────────────────────────────────
 
+def _int_field(row, name, default=0):
+    """Coerce a CSV field to int, treating empty/absent as default.
+    Error rows may lack llm_calls/retrieval_calls entirely (DictReader gives "")."""
+    raw = row.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def analyze_stratum(results, filter_fn, label):
     """Analyze a stratum of results (eligible, validation-only, etc.)."""
     filtered = [r for r in results if filter_fn(r)]
@@ -165,10 +177,10 @@ def analyze_stratum(results, filter_fn, label):
                 "chain_em": float(chain[qid].get("em", 0)),
                 "static_f1": float(static[qid].get("f1", 0)),
                 "chain_f1": float(chain[qid].get("f1", 0)),
-                "static_llm_calls": int(static[qid].get("llm_calls", 0)),
-                "chain_llm_calls": int(chain[qid].get("llm_calls", 0)),
-                "static_retrieval_calls": int(static[qid].get("retrieval_calls", 0)),
-                "chain_retrieval_calls": int(chain[qid].get("retrieval_calls", 0)),
+                "static_llm_calls": _int_field(static[qid], "llm_calls"),
+                "chain_llm_calls": _int_field(chain[qid], "llm_calls"),
+                "static_retrieval_calls": _int_field(static[qid], "retrieval_calls"),
+                "chain_retrieval_calls": _int_field(chain[qid], "retrieval_calls"),
             })
 
     n = len(paired)
@@ -232,7 +244,10 @@ def analyze_stratum(results, filter_fn, label):
     )
     if boot_comps:
         boot_comp = boot_comps[0]
-        ci_lo, ci_hi = boot_comp.get("ci_low", 0.0), boot_comp.get("ci_high", 0.0)
+        # paired_bootstrap computes differences = reference − candidate, i.e.
+        # (static − chain). ΔEM is reported as (chain − static), so the CI must
+        # be sign-flipped: CI[chain−static] = [−ci_high, −ci_low].
+        ci_lo, ci_hi = -boot_comp.get("ci_high", 0.0), -boot_comp.get("ci_low", 0.0)
         boot_n = boot_comp.get("count", n)
     else:
         ci_lo, ci_hi, boot_n = 0.0, 0.0, n
@@ -405,18 +420,37 @@ def generate_report(primary, secondary, population, output_path):
 
 # ── Main ───────────────────────────────────────────────────────────────────
 
+def parse_args():
+    import argparse
+    p = argparse.ArgumentParser(description="H-STRUCT-1 confirmatory post-execution analysis")
+    p.add_argument("--results", type=str, default=None,
+                   help="Path to results CSV (default: confirmatory_results.csv)")
+    p.add_argument("--manifest", type=str, default=None,
+                   help="Path to manifest (default: confirmatory_eligible_manifest.jsonl)")
+    p.add_argument("--report", type=str, default=None,
+                   help="Path to report output (default: confirmatory_report.md)")
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
+    results_csv = Path(args.results) if args.results else RESULTS_CSV
+    manifest_path = Path(args.manifest) if args.manifest else MANIFEST_PATH
+    report_path = Path(args.report) if args.report else REPORT_PATH
+
     print("=== H-STRUCT-1 Confirmatory Analysis ===")
-    print("NO-PEEKING: Ensure ALL 1105×2 executions are complete before proceeding.")
+    print(f"Results: {results_csv}")
+    print(f"Manifest: {manifest_path}")
+    print("NO-PEEKING: Ensure ALL executions are complete before proceeding.")
     print()
 
     # Load results
-    if not RESULTS_CSV.exists():
-        print(f"ERROR: Results CSV not found: {RESULTS_CSV}")
+    if not results_csv.exists():
+        print(f"ERROR: Results CSV not found: {results_csv}")
         print("Run confirmatory execution first.")
         sys.exit(1)
 
-    results = load_results(RESULTS_CSV, question_lookup=build_question_lookup())
+    results = load_results(results_csv, question_lookup=build_question_lookup())
     print(f"Loaded {len(results)} result records (post-execution scored via score_record)")
 
     # Check completeness
@@ -425,7 +459,17 @@ def main():
     print(f"  Static arm: {n_static}")
     print(f"  Chain arm: {n_chain}")
 
+    # Expected = 2 × (# eligible questions in manifest). For the pooled
+    # validation+train confirmatory the pre-registered target is 1105; the
+    # train-only supplement is 742. Derive from the manifest when available.
     expected = 1105 * 2
+    if manifest_path.exists():
+        try:
+            with open(manifest_path) as mf:
+                expected = [line for line in mf if line.strip()]
+            expected = len(expected) * 2
+        except Exception:
+            pass
     if len(results) < expected:
         print(f"WARNING: Only {len(results)}/{expected} results. Analysis may be incomplete.")
 
@@ -458,8 +502,8 @@ def main():
 
     # Generate report
     print("[4/4] Generating report...")
-    generate_report(primary, secondary, population, REPORT_PATH)
-    print(f"Report written to: {REPORT_PATH}")
+    generate_report(primary, secondary, population, report_path)
+    print(f"Report written to: {report_path}")
 
     # Print summary
     if primary:

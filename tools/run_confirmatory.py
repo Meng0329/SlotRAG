@@ -52,10 +52,10 @@ METHOD_BY_ARM = {
 PROGRESS_FIELDS = ["completed", "total", "errors", "runtime_s", "current_item", "current_arm"]
 
 
-def load_manifest():
+def load_manifest(manifest_path: Path = MANIFEST_PATH):
     """Load frozen confirmatory manifest."""
     items = []
-    with open(MANIFEST_PATH) as f:
+    with open(manifest_path) as f:
         for line in f:
             items.append(json.loads(line.strip()))
     return items
@@ -196,14 +196,21 @@ def execute_one(
         }
 
 
-def load_completed():
+def load_completed(results_path: Path = RESULTS_CSV):
     """Load already-completed items from results CSV."""
     completed = set()
-    if RESULTS_CSV.exists():
-        with open(RESULTS_CSV) as f:
+    if results_path.exists():
+        with open(results_path) as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get("status") == "ok":
+                # Both "ok" and "budget_exceeded" are COMPLETED executions:
+                # budget_exceeded is a legitimate matched-budget outcome
+                # (answer may be empty => EM=0 by design, per frozen protocol).
+                # Only "error" rows (infra failures like ReadTimeout) are
+                # retried on resume. Re-running budget_exceeded would violate
+                # the strict single-execution rule (no re-runs/no budget
+                # inflation).
+                if row.get("status") in ("ok", "budget_exceeded"):
                     key = (row["question_id"], row["arm"])
                     completed.add(key)
     return completed
@@ -232,14 +239,25 @@ def main():
     parser = argparse.ArgumentParser(description="Run H-STRUCT-1 confirmatory test")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--parallel", type=int, default=4, help="Parallel questions")
+    parser.add_argument("--manifest", type=str, default=str(MANIFEST_PATH),
+                        help="Path to eligible manifest jsonl")
+    parser.add_argument("--results", type=str, default=str(RESULTS_CSV),
+                        help="Path to results CSV output")
+    parser.add_argument("--progress", type=str, default=str(PROGRESS_FILE),
+                        help="Path to progress JSON output")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    # Allow overriding output files (separate train run without clobbering
+    # the validation-run results)
+    results_csv = Path(args.results)
+    progress_file_path = Path(args.progress)
 
     # Load config
     config = AppConfig.from_yaml(REPO / args.config)
 
     # Load manifest
-    manifest = load_manifest()
+    manifest = load_manifest(Path(args.manifest))
     total_questions = len(manifest)
     total_executions = total_questions * 2  # static + chain per question
 
@@ -247,7 +265,7 @@ def main():
     print(f"Total executions: {total_executions} ({total_questions} × 2 arms)")
 
     # Load already-completed
-    completed = load_completed()
+    completed = load_completed(results_csv)
     remaining = []
     for item in manifest:
         for arm in ARMS:
@@ -268,8 +286,9 @@ def main():
 
     # Prepare results CSV
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_exists = RESULTS_CSV.exists()
-    csv_file = open(RESULTS_CSV, "a", newline="")
+    results_csv.parent.mkdir(parents=True, exist_ok=True)
+    csv_exists = results_csv.exists()
+    csv_file = open(results_csv, "a", newline="")
     if not csv_exists:
         # New file: emit header first, else the first data row becomes the
         # header and DictReader parsing (load_completed / analyzer) breaks.
@@ -280,7 +299,7 @@ def main():
         ])
         writer.writeheader()
         csv_file.flush()
-    progress_file = open(PROGRESS_FILE, "w")
+    progress_file = open(progress_file_path, "w")
 
     progress = {
         "status": "running",
@@ -368,7 +387,7 @@ def main():
     print(f"  Total: {len(completed) + len(remaining)}/{total_executions}")
     print(f"  Errors: {errors}")
     print(f"  Runtime: {elapsed:.0f}s ({elapsed/60:.1f} min)")
-    print(f"  Results: {RESULTS_CSV}")
+    print(f"  Results: {results_csv}")
     print(f"\n  NO-PEEKING: Run analyze_hstruct_confirmatory.py for results.")
 
 

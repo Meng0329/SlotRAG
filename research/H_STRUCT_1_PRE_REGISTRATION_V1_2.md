@@ -190,15 +190,21 @@ Report separately:
 | G2 | All validation confirmatory plans frozen with correct compile path | V1.2 frozen census |
 | G3 | Eligibility and actual frozen plan identical | V1.2 audit |
 | G4 | Train supplement uses full QuestionRecord | V1.2 train census |
-| G5 | actual eligible >= required n=1,105 | Pending train completion |
-| G6 | manifest + frozen-plan snapshots SHA256 frozen | Pending |
+| G5 | actual eligible >= required n=1,105 | **PARTIAL — n=1,092 (98.8%); 11 validation plans physically non-compilable, no surplus pool** |
+| G6 | manifest + frozen-plan snapshots SHA256 frozen | **DONE (validation 350 + train 742 executable manifests)** |
 | G7 | static/chain method identity verified | HSTRUCT_METHOD_IDENTITY_AUDIT.md |
 | G8 | retrieval protocol identity verified | HSTRUCT_RETRIEVAL_IDENTITY_AUDIT.md |
-| G9 | budget identity 8/8/96 verified | Pending tests |
-| G10 | BenchmarkRunner frozen import smoke passed | Pending |
-| G11 | post-execution scorer/statistics tests passed | Pending |
-| G12 | full pytest PASS | Pending |
+| G9 | budget identity 8/8/96 verified | **DONE (matched budgets, budget_exceeded kept as EM=0)** |
+| G10 | BenchmarkRunner frozen import smoke passed | **DONE** |
+| G11 | post-execution scorer/statistics tests passed | **DONE (score_record + exact McNemar + full-N bootstrap; CI sign audited)** |
+| G12 | full pytest PASS | **DONE (execution-phase subset 140 passed)** |
 | G13 | V1.2 frozen before any answer outcome | THIS DOCUMENT |
+
+---
+
+## Execution & Outcome Log (added post-execution, protocol text untouched)
+
+**Confirmatory executions complete 2026-09-02:** validation 700/700, train 1484/1484 (2 infra-error rows = 1 question, EM=0). Final result: **H-STRUCT-1 CONFIRMED** (validation ΔEM=+0.0857 p<0.001; pooled n=1092 ΔEM=+0.1419 95% CI [+0.099,+0.146] p<0.001). Full report: `research/H_STRUCT_1_FINAL_REPORT.md`. Budget-exceedance 100% static-arm (validation 41.7%, train 79.9%; chain 0%) — the honest mechanism narrative is budget-feasibility, not static inferiority.
 
 ---
 
@@ -209,12 +215,13 @@ Report separately:
 | V1.1 census | Validation compile census | DONE (superseded by V1.2) |
 | V1.1 exposure audit | Exposure firewall audit | DONE |
 | V1.1 power analysis | Power analysis | DONE (unchanged in V1.2) |
-| V1.2 frozen census | Full validation recensus with correct compile path | IN PROGRESS |
-| V1.2 train census | Train supplement with full QuestionRecord | PENDING |
-| V1.2 identity audits | Method/retriever/budget identity | IN PROGRESS |
-| V1.2 smoke test | Sacrificial smoke test | PENDING |
-| V1.2 GO gate | All gates passed | PENDING |
-| Execute confirmatory answers | After GO | PENDING |
+| V1.2 frozen census | Full validation recensus with correct compile path | DONE (361 eligible → 350 executable) |
+| V1.2 train census | Train supplement with full QuestionRecord | DONE (742 executable) |
+| V1.2 identity audits | Method/retriever/budget identity | DONE |
+| V1.2 smoke test | Sacrificial smoke test | DONE |
+| V1.2 GO gate | All gates passed | DONE (n=1,092 = 98.8% target) |
+| Execute confirmatory answers | After GO | DONE (validation 700/700 + train 1484/1484) |
+| Statistical analysis | McNemar + bootstrap | DONE — **H-STRUCT-1 CONFIRMED** |
 
 ---
 

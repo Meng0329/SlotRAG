@@ -36,6 +36,60 @@ from .qo import (
 )
 
 
+def _join_adjacent_orders(logical_plan: LogicalPlan, orders: list[list[str]]) -> list[list[str]]:
+    """Filter orders to those where every slot after the first has at least one
+    join-neighbor already in the prefix — the constraint required by the
+    materializer's incremental join.  Preserves input order for determinism."""
+    join_adj: dict[str, set[str]] = {s.id: set() for s in logical_plan.subgoals}
+    for edge in logical_plan.join_edges:
+        if edge.left_slot in join_adj and edge.right_slot in join_adj:
+            join_adj[edge.left_slot].add(edge.right_slot)
+            join_adj[edge.right_slot].add(edge.left_slot)
+    result: list[list[str]] = []
+    for order in orders:
+        visited: set[str] = set()
+        ok = True
+        for sid in order:
+            if visited and not (visited & join_adj[sid]):
+                ok = False
+                break
+            visited.add(sid)
+        if ok:
+            result.append(order)
+    return result
+
+
+def _join_frontier_order(logical_plan: LogicalPlan, base_order: list[str]) -> list[str]:
+    """Build a join-adjacent order via frontier expansion of ``base_order``.
+
+    Starts from the first slot of ``base_order``, then greedily picks the next
+    slot that has a join-neighbor already in the prefix (ties broken by the
+    slot's position in ``base_order``), guaranteeing the materializer's
+    incremental-join constraint.  For plans with operator-only connections the
+    frontier may exhaust; remaining slots are appended in base order.
+    """
+    join_adj: dict[str, set[str]] = {s.id: set() for s in logical_plan.subgoals}
+    for edge in logical_plan.join_edges:
+        if edge.left_slot in join_adj and edge.right_slot in join_adj:
+            join_adj[edge.left_slot].add(edge.right_slot)
+            join_adj[edge.right_slot].add(edge.left_slot)
+    remaining = list(base_order)
+    result: list[str] = [remaining.pop(0)]
+    visited: set[str] = set(result)
+    while remaining:
+        picked = None
+        for cand in remaining:
+            if visited & join_adj[cand]:
+                picked = cand
+                break
+        if picked is None:
+            picked = remaining[0]
+        remaining.remove(picked)
+        result.append(picked)
+        visited.add(picked)
+    return result
+
+
 class PlanObjectiveParams(StrictModel):
     """Requirement-aware objective weights and budget for plan search.
 
@@ -257,8 +311,14 @@ def search_physical_plans(
     )
 
     orders = _dependency_respecting_orders(logical_plan)
+    # require materializer-join-adjacency: slot2 before slot4 would fail with
+    # "no join path" at execution, so drop such orders from the search space.
+    orders = _join_adjacent_orders(logical_plan, orders)
     if not orders:
-        orders = [legacy.slot_execution_order]
+        # no dependency order is join-adjacent (e.g. a chain connected through
+        # a hub not reachable topologically).  Fall back to frontier expansion
+        # of the legacy order so at least one executable candidate exists.
+        orders = [_join_frontier_order(logical_plan, legacy.slot_execution_order)]
 
     candidate_records: list[PlanCandidate] = []
     seen: set[tuple[tuple[str, ...], tuple[tuple[str, int], ...], tuple[tuple[str, str], ...]]] = set()

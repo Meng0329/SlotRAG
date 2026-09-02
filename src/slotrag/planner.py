@@ -2745,8 +2745,10 @@ def _operator_connects_branches(plan: SlotPlan, materialized_slots: set[str], in
     components = _join_components(plan)
     incoming_component = components[incoming_slot]
     current_components = {components[slot_id] for slot_id in materialized_slots}
-    if incoming_component in current_components:
-        return False
+    # NOTE: both same-component and different-component cases must fall
+    # through to the operator check below.  The caller already ruled out
+    # a direct join, so if no operator bridges the gap, this is a valid
+    # "needs frontier-safe reordering" signal regardless of component.
     slot_fields = {slot.id: slot.variables for slot in plan.slots}
     for operator in plan.operators:
         if operator.kind not in {"field_argmin", "field_argmax"}:

@@ -1,10 +1,28 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-08-15  
+> **最后更新**: 2026-09-02  
 > **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付（commit `bf815c1`/`7f4fdc4` 起连续提交，可复现构建：`bash /tmp/latexmk_full.sh`）。**用户裁定（2026-08-15）接受 25% Coverage 转论文**。诚实 §4.3 matched-budget 主表 = 1/4 = 25%（musique WIN、hotpotqa TIE、2wiki/drop LOSS）。方向 B 勘察（H-031）证伪字符串校正，策略层在"不换模型"下穷尽（H-022×3 + H-020/H-027 rejected + H-018 已生效仍截短）。25% = qwen3.6-27b matched-budget 真实 Coverage 上限，论文用 honest 叙事。
->
-> **Phase 5 审稿修复已落地**：（1）精确配对 McNemar 表（commit 含 `adba624`，见 memory `slotrag-phase5-paired-mcnemar`）——refute 审稿人"budget artifact"（musique 真实配对 WIN +64, p<0.001），确认 hotpotqa aggregate TIE 降级为显著配对 LOSS（−38, p<0.001）；（2）**dual-denominator Coverage 诚实披露**（commit `7f4fdc4`）——抽象+results 同时报 1/4=25%（四 headlined matched-budget cell）与 1/5=20%（含 strategyqa robust TIE 非-win），解决审稿人 denominator-game 质疑。9 条引用齐全，PDF 5 页 0 undefined。
+> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付 → **H-STRUCT-1 确认性测试 ✅ 执行完毕（CONFIRMED）**。
+
+---
+
+## 最新进展（2026-09-02）：H-STRUCT-1 确认性测试执行完毕
+
+**H-STRUCT-1（depth_only 策略：structural_hops ≥ 2 → chain）确认性测试 CONFIRMED**，详见 `research/H_STRUCT_1_FINAL_REPORT.md`。
+
+| 集合 | n 配对 | Static EM | Chain EM | ΔEM | 95% CI | McNemar p(2s) | 判决 |
+|------|--------|-----------|----------|-----|--------|---------------|------|
+| validation（primary, UNEXPOSED） | 350 | 0.1714 | 0.2571 | +0.0857 | [+0.051, +0.133] | <0.001 | **CONFIRMED** |
+| train（supplementary） | 742 | 0.0526 | 0.2210 | +0.1685 | [+0.109, +0.168] | <0.001 | **CONFIRMED** |
+| **pooled** | **1092** | 0.0907 | 0.2326 | **+0.1419** | [+0.099, +0.146] | <0.001 | **CONFIRMED** |
+
+三数据集 pooled 均显著：2wiki +0.123 (p<0.001)、hotpotqa +0.222 (p<0.001)、musique +0.123 (p=0.012)。chain 同时平均少用 ~1.2 次 LLM 调用（ΔF1 +0.23）。
+
+**诚实披露（报告第 2 节）**：ΔEM 主导机制是静态臂在冻结 8 次检索预算内大量不可完成（budget_exceeded 100% 集中于 static：validation 41.7%、train 79.9%；chain 0%）。配对题两臂 plan_hash 全一致，单次执行无重跑。n=1092 = 预注册目标 1,105 的 98.8%（validation 11 个 eligible 计划物理不可编译，无富余池）。论文叙事须围绕 matched-budget 预算内可实现性。
+
+---
+
+> **Phase 5 历史**：**审稿修复已落地**（1）精确配对 McNemar 表（commit 含 `adba624`，见 memory `slotrag-phase5-paired-mcnemar`）——refute 审稿人"budget artifact"（musique 真实配对 WIN +64, p<0.001），确认 hotpotqa aggregate TIE 降级为显著配对 LOSS（−38, p<0.001）；（2）**dual-denominator Coverage 诚实披露**（commit `7f4fdc4`）——抽象+results 同时报 1/4=25%（四 headlined matched-budget cell）与 1/5=20%（含 strategyqa robust TIE 非-win），解决审稿人 denominator-game 质疑。9 条引用齐全，PDF 5 页 0 undefined。方向 B 勘察（H-031）证伪字符串校正，25% = qwen3.6-27b matched-budget 真实 Coverage 上限，论文用 honest 叙事（accept-decision: 用户裁定 2026-08-15 接受 25% 转论文）。
 
 ---
 

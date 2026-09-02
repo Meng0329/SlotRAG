@@ -124,4 +124,18 @@ def test_physical_plan_cost_orders_ready_slots_without_violating_dependencies():
 
     physical = compile_physical_plan(logical)
 
-    assert physical.slot_execution_order == ["S2", "S1", "S3"]
+    # Order must be materializer-join-adjacent: every slot after the first has
+    # a join-neighbor already in the prefix (S3 joins S1 and S2, so S3 must
+    # come before both leaves-or-after-one — the executable order is a frontier
+    # expansion that keeps S3 between/before its join partners).
+    order = physical.slot_execution_order
+    join_adj: dict[str, set[str]] = {s: set() for s in order}
+    for j in logical.join_edges:
+        join_adj[j.left_slot].add(j.right_slot)
+        join_adj[j.right_slot].add(j.left_slot)
+    visited: set[str] = set()
+    for sid in order:
+        assert not visited or (visited & join_adj[sid]), f"slot {sid} has no join path at position {len(visited)}"
+        visited.add(sid)
+    # deterministic: cost-ordered leaves first then their shared join target
+    assert order[0] == "S2"

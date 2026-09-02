@@ -1,0 +1,45 @@
+=== Train Compile Census (V1.3 — PARALLEL, 16 workers) ===
+FIREWALL: SlotCompiler ONLY. No retrieval, no generation, no EM/F1.
+Compile path: compile_slotrag_plan(METHODS['slotrag'], dataset, full_question_record, agnes)
+Targets: {'hotpotqa': 148, '2wikimultihop': 559, 'musique': 37}
+Seed: 2027
+Workers: 16
+
+  hotpotqa: loaded 90447 full QuestionRecords from train file
+  2wikimultihop: loaded 167454 full QuestionRecords from train file
+  musique: loaded 19938 full QuestionRecords from train file
+
+  RESUME: 18770 questions already processed, skipping them
+--- hotpotqa: target=148 eligible, pool=90447, already_eligible=7007, already_processed=7007 ---
+--- 2wikimultihop: target=559 eligible, pool=167454, already_eligible=11763, already_processed=11763 ---
+--- musique: target=37 eligible, pool=19938, already_eligible=0, already_processed=0 ---
+
+  Total questions: 277839, already processed: 18770, remaining: 259069
+  Estimated time: ~3778 min (vs ~60449 min serial)
+
+  [18870/38708] compiled=100 eligible=6 errors=0 | 277s elapsed, ETA 54853s | 0.4 q/s
+  [18970/38708] compiled=200 eligible=9 errors=1 | 564s elapsed, ETA 55634s | 0.4 q/s
+  [19070/38708] compiled=300 eligible=14 errors=2 | 835s elapsed, ETA 54680s | 0.4 q/s
+  [19170/38708] compiled=400 eligible=21 errors=3 | 970s elapsed, ETA 47389s | 0.4 q/s
+  [19270/38708] compiled=500 eligible=25 errors=7 | 1271s elapsed, ETA 49422s | 0.4 q/s
+  [19370/38708] compiled=600 eligible=29 errors=9 | 1661s elapsed, ETA 53540s | 0.4 q/s
+  [19470/38708] compiled=700 eligible=32 errors=9 | 1786s elapsed, ETA 49089s | 0.4 q/s
+  [19570/38708] compiled=800 eligible=36 errors=11 | 2170s elapsed, ETA 51913s | 0.4 q/s
+  TARGET REACHED: musique (eligible+resume=18807)
+
+============================================================
+V1.3 TRAIN CENSUS COMPLETE (PARALLEL)
+============================================================
+Time: 2352s (2.8s/question)
+Total compiled: 19606
+Total eligible: 839/744
+  hotpotqa: 240/148 eligible
+  2wikimultihop: 561/559 eligible
+  musique: 38/37 eligible
+
+ALL TARGETS MET.
+
+Outputs:
+  Census CSV: /data/mzb/SlotRAG/research/hstruct_confirmatory/train_compile_census_v12.csv
+  Eligible manifest: /data/mzb/SlotRAG/research/hstruct_confirmatory/train_eligible_manifest_v12.jsonl
+  Frozen snapshots: /data/mzb/SlotRAG/research/hstruct_frozen_train/
