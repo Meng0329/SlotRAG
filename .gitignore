@@ -4,17 +4,15 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-# .env
-# logs/
-# data/raw/
-# data/processed/
-# runs/
-# *.jsonl
-# *.csv
-# !research/EXPERIMENT_LEDGER.csv
-# !research/FAILURE_LEDGER.csv
-# !research/RELATED_WORK_MATRIX.csv
-# !tests/fixtures/*.jsonl
+.env
+logs/
+runs/
+*.jsonl
+*.csv
+!research/EXPERIMENT_LEDGER.csv
+!research/FAILURE_LEDGER.csv
+!research/RELATED_WORK_MATRIX.csv
+!tests/fixtures/*.jsonl
 runs_archive/
 research/hstruct_frozen_train/
 research/hstruct_frozen_validation/
