@@ -670,3 +670,24 @@
   - **2wiki 37 残尾 BE = 全结构硬顶**（37/37 also-BE-under-guard，0 recovered-to-BE）：极端题 4-call 预算下无论方法做不完，非预算修复引入。
   - **关键叙事转变**: 预算修复完成"假崩溃→真实准确率"转换（musique/hotpotqa），但 **2wiki/drop 是固有准确率差、非预算问题**（drop 全程 0 BE、预算修复零作用天生输 graphrag；2wiki 回收后仍输 ircot）。**honest matched-budget Coverage = 25%**，低于 Phase 3 名义 40/50%（非 matched-budget + 未全量 BE 清洗）。**已裁定（2026-08-15）：接受 25% 转 Phase 5 论文**。H-031 勘察证伪方向 B（字符串校正四套模拟全净负，alias 失败本质是 H-022 选型天花板非字符串问题；"生成契约修正"=重复已拒 H-018），策略层在"不换模型"下穷尽，25% = qwen3.6-27b matched-budget 真实 Coverage 上限。
 
+
+### H-STRUCT-1: depth_only 策略（structural_hops ≥ 2 → chain）确认性测试
+
+- **状态**: **CONFIRMED**（2026-09-02 执行完毕，McNemar exact p<0.001 + full-N paired bootstrap 95% CI 不含 0）
+- **协议**: `research/H_STRUCT_1_PRE_REGISTRATION_V1_2.md`（FROZEN；V1.2 修正计划冻结管道/评分/统计口径，冻结于任何 answer outcome 之前）
+- **策略定义**: `Policy A (depth_only)`: 若 `structural_hops(plan) >= 2` 用 chain 臂（自适应物理计划分配），否则 static 臂。`structural_hops` = 结构证据图（joins + field_argmin/field_argmax 边）最长简单路径，τ=2。
+- **配对设计**: 每题冻结唯一 SlotPlan，static 与 chain 两臂执行**同一计划**（plan_hash 逐配对校验一致），预算 `max_steps=8, max_llm_calls=96, max_retrieval_calls=8` 两臂相同，单次执行无重跑。
+- **执行规模**: validation（primary, UNEXPOSED）350 配对 + train（supplementary）742 配对 = **n=1092 配对**（预注册目标 1,105 的 98.8%；validation 361 eligible − 11 物理不可编译无富余池，train 2 题 1 题永久 ReadTimeout 作 EM=0）。
+- **结果（post-execution `score_record()`）**:
+
+| 集合 | n | Static EM | Chain EM | ΔEM | 95% CI | McNemar p(2s) |
+|------|---|-----------|----------|-----|--------|---------------|
+| validation (primary) | 350 | 0.1714 | 0.2571 | +0.0857 | [+0.051, +0.133] | <0.001 |
+| train (supplementary) | 742 | 0.0526 | 0.2210 | +0.1685 | [+0.109, +0.168] | <0.001 |
+| **pooled** | **1092** | 0.0907 | 0.2326 | **+0.1419** | [+0.099, +0.146] | <0.001 |
+
+  - **Pooled per-dataset 均显著**: 2wiki +0.1227 (p<0.0001)、hotpotqa +0.2217 (p<0.0001)、musique +0.1231 (p=0.0117)。Holm-corrected 全保留。
+  - **效率**: chain 平均少用 ~1.2 次 LLM 调用，ΔF1 +0.2348（pooled）。
+- **机制（诚实披露）**: budget_exceeded **100% 集中于 static 臂**（pooled static 739/1092 = 67.7%：validation 41.7%、train 79.9%；chain 0%）。ΔEM 主效应当前为 static 在冻结 8-call 预算内大量无法完成深度计划（空答案 EM=0）vs chain 自适应分配总能完成 —— 即**预算内可实现性**收益，与 G6/G7 matched-budget 发现一致。论文必须用 budget-feasibility 叙事，避免 "static 更笨" 归因。
+- **判定: CONFIRMED**。Policy A（depth_only, τ=2）成为有确认性证据的深度策略；eligible 自然流行率仅 3–7%（validation census: hotpotqa 3.2% / 2wiki 7.0% / musique 5.4%），人口级收益 0.0025–0.0086 EM/题，论文宜定位为"深度计划的预算内自适应降级"而非全局切换。
+- **归属**: 附带确认性管道资产（冻结计划/执行/统计工具）见 `research/hstruct_confirmatory/`、`research/hstruct_validation_census/`；完整报告 `research/H_STRUCT_1_FINAL_REPORT.md`；commit `6f7292c`。
