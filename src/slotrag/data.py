@@ -79,7 +79,16 @@ def fetch_dataset(url: str, destination: Path, expected_sha256: str = "", timeou
 def _read_json_records(path: Path) -> list[dict[str, Any]]:
     try:
         if path.suffix.lower() in {".jsonl", ".ndjson"}:
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            # NOTE: we split on "\n" explicitly (not str.splitlines()).
+            # splitlines() treats U+2028/U+2029 (Unicode line separators) as
+            # record boundaries, but these can appear inside JSON string
+            # values and would split one valid record into broken fragments
+            # ("Unterminated string" errors).
+            return [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").split("\n")
+                if line.strip()
+            ]
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise DatasetError(f"cannot parse dataset {path}: {exc}") from exc

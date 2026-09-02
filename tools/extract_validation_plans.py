@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-extract_validation_plans.py — Phase 5: Re-compile eligible validation questions and save plan_json
+extract_validation_plans.py — V1.2: Recovery gate for validation frozen plans
 
-The validation census (validation_compile_census.py) computed SlotCompiler output
-but only saved plan_hash to the manifest, not plan_json. The confirmatory runner
-needs frozen plans for fairness (both arms use identical SlotPlan).
+Re-compiles the 361 census-eligible validation questions using the CORRECT
+compile path: compile_slotrag_plan(SPEC, dataset, full_question_record, agnes_client).
 
-This script targets ONLY the 361 eligible questions (~10 min vs 3.4h full re-run).
-It compiles each eligible question, saves plan_json, and appends to the manifest.
+This produces:
+1. validation_plan_recovery_audit.csv — hash comparison with original census
+2. Frozen plan snapshots in research/hstruct_frozen_validation/{dataset}/{question_id}.json
+
+CRITICAL: Uses load_questions() from slotrag.data (same path as validation_compile_census.py)
+and compile_slotrag_plan() with METHODS["slotrag"] SPEC.
 
 Usage:
     python tools/extract_validation_plans.py
-
-Output:
-    research/hstruct_validation_census/validation_plan_manifest_with_plans.jsonl
 """
 
 import csv
@@ -28,10 +28,15 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
 
 from slotrag.config import AppConfig
-from slotrag.models import SlotPlan
-from slotrag.providers import AgnesClient
-from slotrag.benchmarking.datasets import DATASETS, adapt_record, iter_jsonl
-from slotrag.planner import SlotCompiler
+from slotrag.models import SlotPlan, RunMetrics
+from slotrag.providers import AgnesClient, provider_clients
+from slotrag.data import load_questions
+from slotrag.benchmarking.datasets import DATASETS as DATASET_SPECS
+from slotrag.benchmarking.methods import (
+    METHODS,
+    compile_slotrag_plan,
+    slotrag_compile_options,
+)
 
 # ── Graph utilities (inlined from validation_compile_census.py) ──────────
 
@@ -104,163 +109,291 @@ def classify_topology(adj, slot_ids, edge_types):
         return "tree"
     return "complex"
 
-OUTPUT_DIR = REPO / "research" / "hstruct_validation_census"
-VALIDATION_SET = REPO / "research" / "eval_sets" / "validation_set.json"
-CENSUS_CSV = OUTPUT_DIR / "validation_structural_census.csv"
-MANIFEST_OUT = OUTPUT_DIR / "validation_plan_manifest_with_plans.jsonl"
 
-SEED = 2027
-
-
-def load_eligible_ids():
-    """Load question_ids of eligible validation questions."""
-    ids = set()
-    with open(CENSUS_CSV) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row["eligible"] == "True" or row["eligible"] == "1":
-                ids.add(row["question_id"])
-    return ids
-
-
-def load_validation_ids():
-    """Load validation set question IDs."""
-    with open(VALIDATION_SET) as f:
-        return json.load(f)
-
-
-def load_validation_questions(dataset_name, target_ids):
-    """Load specific validation questions from benchmark files, normalized via adapt_record."""
-    spec = DATASETS[dataset_name]
-    eval_path = REPO / "benchmark" / spec.evaluation_file
-    questions = []
-    for idx, rec in iter_jsonl(eval_path):
-        if rec["id"] in target_ids:
-            questions.append(adapt_record(spec, rec, idx, split="validation"))
-    return questions
-
-
-def compile_question(question, config, agnes_client):
-    """Compile a question using SlotCompiler (firewall: compile only)."""
-    compiler = SlotCompiler(client=agnes_client)
-    plan, metrics = compiler.compile(question.question)
+def _plan_sha256(plan: SlotPlan) -> str:
+    """Deterministic plan hash (matches BenchmarkRunner)."""
     plan_json = json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    plan_hash = hashlib.sha256(plan_json.encode()).hexdigest()[:16]
-    return plan, plan_json, plan_hash
+    return hashlib.sha256(plan_json.encode()).hexdigest()
+
+
+def _canonical_sha256(obj) -> str:
+    """Canonical SHA256 for any JSON-serializable object."""
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+OUTPUT_DIR = REPO / "research" / "hstruct_validation_census"
+FROZEN_DIR = REPO / "research" / "hstruct_frozen_validation"
+VALIDATION_SET_PATH = REPO / "research" / "eval_sets" / "validation_set.json"
+CENSUS_CSV = OUTPUT_DIR / "validation_structural_census.csv"
+RECOVERY_AUDIT = OUTPUT_DIR / "validation_plan_recovery_audit.csv"
+RECOVERY_MANIFEST = OUTPUT_DIR / "validation_plan_manifest_v12.jsonl"
+
+METHOD_NAME = "slotrag"
+SPEC = METHODS[METHOD_NAME]
+TARGET_DATASETS = ["hotpotqa", "2wikimultihop", "musique"]
 
 
 def main():
     import sys as _sys
     log = lambda msg: _sys.stderr.write(msg + "\n") or _sys.stderr.flush()
 
-    log("=== Extract Validation Plans (Phase 5) ===")
+    log("=== Extract Validation Plans (V1.2 — CORRECT compile path) ===")
+    log("RULES: No retrieval, no answer generation, no EM/F1, no gold-answer inspection.")
+    log(f"Compile path: compile_slotrag_plan(METHODS['{METHOD_NAME}'], dataset, question, agnes)")
+    log(f"SPEC fields: field_extremum={SPEC.field_extremum_templates}, "
+        f"polar={SPEC.polar_comparison_templates}, runtime_compiler={SPEC.runtime_compiler}")
+    log("")
 
-    # Load eligible IDs
-    eligible_ids = load_eligible_ids()
-    log(f"Eligible validation questions: {len(eligible_ids)}")
+    # Load census eligible
+    census = {}
+    with open(CENSUS_CSV) as f:
+        for row in csv.DictReader(f):
+            if row["eligible"] == "True":
+                census[row["question_id"]] = {
+                    "dataset": row["dataset"],
+                    "plan_hash": row["plan_hash"],
+                    "hops": int(row["structural_hops"]),
+                    "topology": row["topology"],
+                }
+    log(f"Census eligible: {len(census)}")
 
     # Load validation IDs
-    val_ids = load_validation_ids()
-    log(f"Validation set IDs: {len(val_ids)}")
+    with open(VALIDATION_SET_PATH) as f:
+        val_ids = json.load(f)
+    log(f"Validation set IDs: {sum(len(v) for v in val_ids.values())}")
 
-    # Organize by dataset
-    by_dataset = {}
-    for ds, ids in val_ids.items():
-        overlap = [qid for qid in ids if qid in eligible_ids]
-        by_dataset[ds] = overlap
-        log(f"  {ds}: {len(overlap)} eligible")
+    # Load full QuestionRecords from benchmark files (same path as census)
+    BENCHMARK_ROOT = REPO / "benchmark"
+    ds_questions = {}
+    for ds in TARGET_DATASETS:
+        ds_spec = DATASET_SPECS[ds]
+        jsonl_path = BENCHMARK_ROOT / ds_spec.evaluation_file
+        if not jsonl_path.exists():
+            log(f"  WARNING: {jsonl_path} not found, skipping {ds}")
+            continue
+        all_qs = load_questions(jsonl_path)
+        # Filter to validation IDs
+        target_ids = set(val_ids.get(ds, []))
+        ds_questions[ds] = {q.id: q for q in all_qs if q.id in target_ids}
+        log(f"  {ds}: loaded {len(all_qs)} total, {len(ds_questions[ds])} validation")
 
-    # Initialize shared infrastructure
+    # Initialize services
     log("\n[Initializing services]")
     config = AppConfig.from_yaml(REPO / "configs/default.yaml")
-    from slotrag.providers import AgnesClient
-    agnes = AgnesClient(config.agnes)
-    log("  AgnesClient created.")
+    agnes, embedding, reranker = provider_clients(config)
+    log("  Services created.")
 
-    # Compile each eligible question — write results incrementally to JSONL
+    # Compile each eligible question with CORRECT path
+    log(f"\n[Compiling {len(census)} eligible questions with CORRECT path]")
     t0 = time.time()
-    total = len(eligible_ids)
     done = 0
     errors = 0
-    log(f"\n[Compiling {total} eligible questions]")
+    hash_matches = 0
+    hash_mismatches = 0
+    hops_matches = 0
+    hops_mismatches = 0
 
-    out_f = open(MANIFEST_OUT, "w")
+    FROZEN_DIR.mkdir(parents=True, exist_ok=True)
+    audit_rows = []
+    manifest_rows = []
 
-    for ds in ["hotpotqa", "2wikimultihop", "musique"]:
-        qids = by_dataset.get(ds, [])
-        if not qids:
+    # Write recovery audit CSV header
+    audit_f = open(RECOVERY_AUDIT, "w", newline="")
+    audit_writer = csv.DictWriter(audit_f, fieldnames=[
+        "dataset", "question_id",
+        "census_plan_hash", "recovered_plan_hash", "hash_match",
+        "census_hops", "recovered_hops", "hops_match",
+        "census_topology", "recovered_topology", "topology_match",
+        "recovery_mode", "compile_status", "error",
+    ])
+    audit_writer.writeheader()
+
+    manifest_f = open(RECOVERY_MANIFEST, "w")
+
+    for qid, census_info in census.items():
+        ds = census_info["dataset"]
+        done += 1
+
+        question = ds_questions.get(ds, {}).get(qid)
+        if question is None:
+            errors += 1
+            row = {
+                "dataset": ds, "question_id": qid,
+                "census_plan_hash": census_info["plan_hash"],
+                "recovered_plan_hash": None, "hash_match": False,
+                "census_hops": census_info["hops"],
+                "recovered_hops": -1, "hops_match": False,
+                "census_topology": census_info["topology"],
+                "recovered_topology": "not_found",
+                "topology_match": False,
+                "recovery_mode": "unrecoverable",
+                "compile_status": "question_not_found",
+                "error": "question not found in benchmark file",
+            }
+            audit_writer.writerow(row)
+            audit_f.flush()
+            log(f"  [{done}/{len(census)}] {ds}/{qid} NOT FOUND")
             continue
 
-        questions = load_validation_questions(ds, set(qids))
-        q_by_id = {q.id: q for q in questions}
+        try:
+            # CORRECT compile path — matches validation_compile_census.py
+            plan, compiler_metrics = compile_slotrag_plan(SPEC, ds, question, agnes)
 
-        for qid in qids:
-            done += 1
-            q = q_by_id.get(qid)
-            if q is None:
-                log(f"  [{done}/{total}] {ds}/{qid} NOT FOUND")
-                errors += 1
-                continue
+            # Compute structural properties
+            slot_ids = [s.id for s in plan.slots]
+            adj, edge_types, n_operator_edges = derive_structural_evidence_graph(plan)
+            structural_hops, structural_nodes = exact_longest_simple_path(adj, slot_ids)
+            topology = classify_topology(adj, set(slot_ids), edge_types)
 
-            try:
-                plan, plan_json, plan_hash = compile_question(q, config, agnes)
-                adj, edge_types, n_operator_edges = derive_structural_evidence_graph(plan)
-                slot_ids = [s.id for s in plan.slots]
-                structural_hops, structural_nodes = exact_longest_simple_path(adj, slot_ids)
-                topology = classify_topology(adj, slot_ids, edge_types)
+            # Plan hashes
+            plan_json = json.dumps(plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+            recovered_hash = hashlib.sha256(plan_json.encode()).hexdigest()[:16]
+            census_hash = census_info["plan_hash"]
+            hash_match = recovered_hash == census_hash
+            hops_match = structural_hops == census_info["hops"]
+            topology_match = topology == census_info["topology"]
 
-                rec = {
-                    "dataset": ds,
-                    "question_id": qid,
-                    "plan_hash": plan_hash,
-                    "plan_json": plan_json,
-                    "n_slots": len(plan.slots),
-                    "n_edges": len(plan.joins),
-                    "n_operator_edges": n_operator_edges,
-                    "structural_hops": structural_hops,
-                    "structural_nodes": structural_nodes,
-                    "topology": topology,
-                    "eligible": True,
-                    "error": None,
-                }
-                out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                out_f.flush()
-                if done % 10 == 0 or done == total:
-                    elapsed = time.time() - t0
-                    rate = done / elapsed if elapsed > 0 else 0
-                    eta = (total - done) / rate if rate > 0 else 0
-                    log(f"  [{done}/{total}] {ds}/{qid} OK hops={structural_hops} | {elapsed:.0f}s elapsed ETA {eta:.0f}s")
+            if hash_match:
+                hash_matches += 1
+                recovery_mode = "historical_exact"
+            else:
+                hash_mismatches += 1
+                recovery_mode = "unrecoverable"
+            if hops_match:
+                hops_matches += 1
+            else:
+                hops_mismatches += 1
 
-            except Exception as e:
-                import traceback
-                errors += 1
-                rec = {
-                    "dataset": ds,
-                    "question_id": qid,
-                    "plan_hash": None,
-                    "plan_json": None,
-                    "n_slots": 0,
-                    "n_edges": 0,
-                    "n_operator_edges": 0,
-                    "structural_hops": -1,
-                    "structural_nodes": 0,
-                    "topology": "error",
-                    "eligible": False,
-                    "error": str(e)[:200],
-                }
-                out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                out_f.flush()
-                log(f"  [{done}/{total}] {ds}/{qid} ERROR: {e}")
-                log(traceback.format_exc())
+            # Build frozen snapshot (BenchmarkRunner-compatible format)
+            compile_input = {
+                "stage": "hstruct-v12-census",
+                "dataset": ds,
+                "question_id": qid,
+                "question": question.question,
+                "source_method": METHOD_NAME,
+                "compiler_options": slotrag_compile_options(SPEC, ds, question),
+            }
+            input_sha256 = _canonical_sha256(compile_input)
 
-    out_f.close()
+            snapshot = {
+                "schema_version": 1,
+                "stage": "hstruct-v12-census",
+                "dataset": ds,
+                "question_id": qid,
+                "source_method": METHOD_NAME,
+                "input_sha256": input_sha256,
+                "compiler_options": compile_input["compiler_options"],
+                "attempt_index": 1,
+                "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "wall_latency_ms": getattr(compiler_metrics, "compilation_latency_ms", 0),
+                "provider_delta": {},
+                "preparation_mode": "v12_census",
+                "status": "ok",
+                "error": None,
+                "failure_category": "ok",
+                "plan_sha256": _plan_sha256(plan),
+                "plan": plan.model_dump(mode="json"),
+                "compiler_metrics": compiler_metrics.model_dump(mode="json"),
+                "structural_hops": structural_hops,
+                "structural_nodes": structural_nodes,
+                "topology": topology,
+                "eligible": structural_hops >= 2,
+            }
+
+            # Save frozen snapshot
+            snap_dir = FROZEN_DIR / ds
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            snap_path = snap_dir / f"{qid}.json"
+            with open(snap_path, "w") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+
+            # Audit row
+            audit_row = {
+                "dataset": ds, "question_id": qid,
+                "census_plan_hash": census_hash,
+                "recovered_plan_hash": recovered_hash,
+                "hash_match": hash_match,
+                "census_hops": census_info["hops"],
+                "recovered_hops": structural_hops,
+                "hops_match": hops_match,
+                "census_topology": census_info["topology"],
+                "recovered_topology": topology,
+                "topology_match": topology_match,
+                "recovery_mode": recovery_mode,
+                "compile_status": "ok",
+                "error": None,
+            }
+            audit_writer.writerow(audit_row)
+            audit_f.flush()
+
+            # Manifest row (for downstream use)
+            manifest_row = {
+                "dataset": ds,
+                "question_id": qid,
+                "plan_hash": recovered_hash,
+                "census_plan_hash": census_hash,
+                "hash_match": hash_match,
+                "plan_json": plan_json,
+                "n_slots": len(plan.slots),
+                "n_edges": len(plan.joins),
+                "n_operator_edges": n_operator_edges,
+                "structural_hops": structural_hops,
+                "structural_nodes": structural_nodes,
+                "topology": topology,
+                "eligible": structural_hops >= 2,
+                "error": None,
+            }
+            manifest_f.write(json.dumps(manifest_row, ensure_ascii=False) + "\n")
+            manifest_f.flush()
+
+            if done % 20 == 0 or done == len(census):
+                elapsed = time.time() - t0
+                rate = done / elapsed if elapsed > 0 else 0
+                eta = (len(census) - done) / rate if rate > 0 else 0
+                log(f"  [{done}/{len(census)}] {ds}/{qid} OK hops={structural_hops} "
+                    f"hash_match={hash_match} | {elapsed:.0f}s ETA {eta:.0f}s")
+
+        except Exception as e:
+            import traceback
+            errors += 1
+            row = {
+                "dataset": ds, "question_id": qid,
+                "census_plan_hash": census_info["plan_hash"],
+                "recovered_plan_hash": None, "hash_match": False,
+                "census_hops": census_info["hops"],
+                "recovered_hops": -1, "hops_match": False,
+                "census_topology": census_info["topology"],
+                "recovered_topology": "error",
+                "topology_match": False,
+                "recovery_mode": "unrecoverable",
+                "compile_status": "error",
+                "error": str(e)[:200],
+            }
+            audit_writer.writerow(row)
+            audit_f.flush()
+            log(f"  [{done}/{len(census)}] {ds}/{qid} ERROR: {e}")
+
+    audit_f.close()
+    manifest_f.close()
     elapsed = time.time() - t0
-    n_ok = done - errors
+
     log(f"\n{'='*60}")
-    log(f"Complete: {done} questions, {n_ok} OK, {errors} errors")
+    log(f"COMPLETE: {done} questions, {done - errors} OK, {errors} errors")
     log(f"Time: {elapsed:.0f}s ({elapsed/done:.1f}s/question)")
-    log(f"Output: {MANIFEST_OUT}")
-    log(f"\nNext: Run freeze_confirmatory_manifest.py to merge with train plans.")
+    log(f"HASH MATCH: {hash_matches}/{done - errors} exact, {hash_mismatches} mismatch")
+    log(f"HOPS MATCH: {hops_matches}/{done - errors} exact, {hops_mismatches} mismatch")
+    log(f"Recovery audit: {RECOVERY_AUDIT}")
+    log(f"Frozen snapshots: {FROZEN_DIR}/")
+    log(f"Manifest: {RECOVERY_MANIFEST}")
+
+    # Summary
+    if hash_matches == done - errors:
+        log(f"\n*** CASE A: All {hash_matches} plans exact-recovered. V1.1 preserved. ***")
+    else:
+        log(f"\n*** CASE B: {hash_mismatches} plans unrecoverable. V1.2 REQUIRED. ***")
+        log(f"    Original census plan hashes differ from re-compilation.")
+        log(f"    V1.1 eligibility preserved for reference, V1.2 supersedes.")
 
 
 if __name__ == "__main__":

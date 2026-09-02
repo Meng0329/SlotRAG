@@ -19,6 +19,7 @@ Requires:
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -43,8 +44,8 @@ PROGRESS_FILE = OUTPUT_DIR / "execution_progress.json"
 SEED = 2027
 ARMS = ["static", "chain"]
 METHOD_BY_ARM = {
-    "static": "slotrag-static",
-    "chain": "slotrag-depth-chain",
+    "static": "slotrag-g7-static",
+    "chain": "slotrag-g7-chain",
 }
 
 # No-peeking: only these fields are logged per-item
@@ -117,29 +118,49 @@ def execute_one(
             "error": "question_not_found",
         }
 
-    retriever = None
-    try:
-        from slotrag.retrieval import HybridRetriever
-        retriever = HybridRetriever(config=config)
-    except Exception:
-        pass
+    # Build providers + retriever the same way BenchmarkRunner._retriever() does
+    # (runner.py:311-343): chunk passages, wire embedding/reranker clients, build.
+    # Do NOT swallow exceptions here — a failed retriever means a failed execution.
+    from slotrag.data import chunk_passages
+    from slotrag.providers import provider_clients
+    from slotrag.retrieval import EmbeddingCache, HybridRetriever
+    from slotrag.benchmarking.runner import _BudgetedAgnes, _BudgetedRetriever
 
-    client = None
-    try:
-        from slotrag.providers import AgnesClient
-        client = AgnesClient(config=config)
-    except Exception:
-        pass
+    agnes, embedding, reranker = provider_clients(config)
+    passages = chunk_passages(
+        question.passages,
+        chunk_tokens=config.retrieval.chunk_tokens,
+        overlap=config.retrieval.chunk_overlap,
+    )
+    retriever = HybridRetriever(
+        passages,
+        embedding,
+        reranker,
+        bm25_k=config.retrieval.bm25_k,
+        dense_k=config.retrieval.dense_k,
+        final_k=config.retrieval.final_k,
+        rrf_k=config.retrieval.rrf_k,
+        bm25_weight=config.retrieval.bm25_weight,
+        dense_weight=config.retrieval.dense_weight,
+        rerank_enabled=config.reranker.enabled,
+        cache=EmbeddingCache(),
+        dense_enabled=True,
+        sparse_index_mode=config.retrieval.sparse_index_mode,
+        sparse_title_weight=config.retrieval.sparse_title_weight,
+    )
+    retriever.build_index()
 
     try:
         result = run_method(
             spec_name,
             dataset=dataset,
             question=question,
-            retriever=retriever,
-            client=client,
+            retriever=_BudgetedRetriever(retriever, 8),
+            client=_BudgetedAgnes(agnes, 96),
             config=config,
             seed=SEED,
+            max_steps=8,
+            max_retrieval_calls=8,
             frozen_plan=plan,
         )
 
@@ -147,6 +168,8 @@ def execute_one(
         metrics = result.metrics or None
         status = result.status
 
+        # Step 16: NO scoring during execution. Save raw answer only.
+        # Scoring uses score_record() post-execution to avoid CSV boolean bug.
         return {
             "question_id": question_id,
             "dataset": dataset,
@@ -156,9 +179,6 @@ def execute_one(
             "plan_hash": hashlib.sha256(plan_json.encode()).hexdigest()[:16],
             "status": status,
             "answer": answer_text[:500],
-            "correct": getattr(metrics, "correct", False) if metrics else False,
-            "em": getattr(metrics, "em", 0.0) if metrics else 0.0,
-            "f1": getattr(metrics, "f1", 0.0) if metrics else 0.0,
             "llm_calls": getattr(metrics, "llm_calls", 0) if metrics else 0,
             "retrieval_calls": getattr(metrics, "retrieval_calls", 0) if metrics else 0,
             "error": None,
@@ -193,7 +213,7 @@ def write_result_row(row: dict, file_handle):
     """Append one result row to CSV."""
     writer = csv.DictWriter(file_handle, fieldnames=[
         "question_id", "dataset", "arm", "source_split", "method",
-        "plan_hash", "status", "answer", "correct", "em", "f1",
+        "plan_hash", "status", "answer",
         "llm_calls", "retrieval_calls", "error",
     ], extrasaction="ignore")
     writer.writerow(row)
@@ -250,6 +270,16 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_exists = RESULTS_CSV.exists()
     csv_file = open(RESULTS_CSV, "a", newline="")
+    if not csv_exists:
+        # New file: emit header first, else the first data row becomes the
+        # header and DictReader parsing (load_completed / analyzer) breaks.
+        writer = csv.DictWriter(csv_file, fieldnames=[
+            "question_id", "dataset", "arm", "source_split", "method",
+            "plan_hash", "status", "answer",
+            "llm_calls", "retrieval_calls", "error",
+        ])
+        writer.writeheader()
+        csv_file.flush()
     progress_file = open(PROGRESS_FILE, "w")
 
     progress = {
@@ -343,5 +373,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import hashlib
     main()

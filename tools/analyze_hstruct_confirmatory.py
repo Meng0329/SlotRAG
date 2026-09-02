@@ -26,6 +26,11 @@ sys.path.insert(0, str(REPO))
 from scipy.stats import chi2, norm
 from scipy.stats import binom as binom_dist
 
+from slotrag.models import ExecutionResult
+from slotrag.benchmarking.metrics import score_record
+from slotrag.benchmarking.statistics import mcnemar
+from slotrag.benchmarking.datasets import DATASETS as DATASET_SPECS, iter_jsonl, adapt_record
+
 # ── Paths ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = REPO / "research" / "hstruct_confirmatory"
 MANIFEST_PATH = RESULTS_DIR / "confirmatory_eligible_manifest.jsonl"
@@ -40,57 +45,23 @@ VALIDATION_PREVALENCE = {
 }
 
 
-# ── McNemar test ───────────────────────────────────────────────────────────
+# ── McNemar test (delegates to audited statistics.mcnemar) ────────────────
 
 def mcnemar_test(b, c, alpha=0.05, two_sided=True):
     """
-    McNemar test with continuity correction.
+    Exact two-sided McNemar test (binominal on discordant pairs).
 
-    Returns: (chi2_stat, p_value, odds_ratio)
+    Replaces the V1.1 continuity-corrected chi-square approximation.
+    Delegates to slotrag.benchmarking.statistics.mcnemar which computes
+    the exact mid-p two-sided p-value over the b/c discordant counts.
     """
-    n_disc = b + c
-    if n_disc == 0:
-        return 0.0, 1.0, float('inf') if b > 0 else 1.0
-
-    # Continuity-corrected chi2
-    stat = (abs(b - c) - 1) ** 2 / n_disc
-    if two_sided:
-        p_val = 1 - chi2.cdf(stat, df=1)
-    else:
-        # One-sided: P(chain better | H0)
-        # Under H0: b ~ Binom(n_disc, 0.5)
-        if b >= c:
-            p_val = 1 - binom_dist.cdf(b - 1, n_disc, 0.5)
-        else:
-            p_val = binom_dist.cdf(b, n_disc, 0.5)
-
-    # Odds ratio (with Haldane-Anscombe correction for zero cells)
+    candidate = [1] * b + [0] * c
+    reference = [0] * b + [1] * c
+    result = mcnemar(candidate, reference)
+    p_val = result["p_exact"]
     odds_ratio = (b + 0.5) / (c + 0.5)
-
-    return stat, p_val, odds_ratio
-
-
-def bootstrap_ci(b, c, n_sims=10000, seed=2027, ci_level=0.95):
-    """
-    Bootstrap 95% CI for ΔEM using paired resampling.
-    """
-    import random
-    rng = random.Random(seed)
-    n_disc = b + c
-    if n_disc == 0:
-        return (0.0, 0.0)
-
-    deltas = []
-    for _ in range(n_sims):
-        # Resample discordant pairs
-        bb = sum(1 for _ in range(n_disc) if rng.random() < b / n_disc)
-        cc = n_disc - bb
-        deltas.append((bb - cc) / n_disc)
-
-    deltas.sort()
-    lo_idx = int((1 - ci_level) / 2 * n_sims)
-    hi_idx = int((1 + ci_level) / 2 * n_sims) - 1
-    return (deltas[lo_idx], deltas[hi_idx])
+    chi_stat = result.get("chi_square", 0.0)
+    return chi_stat, p_val, odds_ratio
 
 
 def holm_correction(p_values):
@@ -110,12 +81,30 @@ def holm_correction(p_values):
 
 # ── Load results ───────────────────────────────────────────────────────────
 
-def load_results(results_csv):
-    """Load confirmatory results from CSV."""
+def load_results(results_csv, question_lookup=None):
+    """Load confirmatory results from CSV and score each raw answer.
+
+    The runner writes ONLY raw `answer` (no correct/em/f1 columns — those are
+    scored post-execution to avoid the CSV-boolean bug). score_record() computes
+    em/f1/primary_score from the gold answers in the frozen benchmark file.
+    """
     results = []
     with open(results_csv, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            # All manifest items are eligible, so every executed row is eligible.
+            row["eligible"] = "True"
+            # Post-execution scoring (Step 16)
+            if question_lookup is not None and row.get("answer"):
+                key = (row.get("dataset"), row.get("question_id"))
+                question = question_lookup.get(key)
+                if question is not None:
+                    result = ExecutionResult(answer=row["answer"])
+                    scores = score_record(row["dataset"], question, result)
+                    row["em"] = float(scores.get("em", 0.0))
+                    row["f1"] = float(scores.get("f1", 0.0))
+                    row["primary_score"] = float(scores.get("primary_score", 0.0))
+                    row["correct"] = row["em"] > 0.5
             results.append(row)
     return results
 
@@ -127,6 +116,29 @@ def load_manifest(manifest_path):
         for line in f:
             items.append(json.loads(line.strip()))
     return items
+
+
+def build_question_lookup():
+    """Load all question records from benchmark files for post-execution scoring.
+
+    Returns dict keyed by (dataset, question_id) -> QuestionRecord, covering
+    both the validation (evaluation_file) and train splits, since the
+    confirmatory sample draws from validation + train supplement.
+    """
+    lookup = {}
+    for ds_name, spec in DATASET_SPECS.items():
+        for split_attr in ("evaluation_file", "train_file"):
+            rel = getattr(spec, split_attr, None)
+            if not rel:
+                continue
+            path = REPO / "benchmark" / rel
+            if not path.exists():
+                continue
+            split = "validation" if split_attr == "evaluation_file" else "train"
+            for idx, record in iter_jsonl(path):
+                q = adapt_record(spec, record, idx, split=split)
+                lookup[(ds_name, q.id)] = q
+    return lookup
 
 
 # ── Analysis functions ─────────────────────────────────────────────────────
@@ -188,8 +200,42 @@ def analyze_stratum(results, filter_fn, label):
     stat, p_two, or_val = mcnemar_test(b, c, two_sided=True)
     _, p_one, _ = mcnemar_test(b, c, two_sided=False)
 
-    # Bootstrap CI
-    ci_lo, ci_hi = bootstrap_ci(b, c)
+    # Full-N paired bootstrap: resample ALL N paired EM differences (not just
+    # discordant pairs — that would condition on the marginals and inflate
+    # precision). Delegates to audited statistics.paired_bootstrap.
+    from slotrag.benchmarking.statistics import paired_bootstrap
+    import numpy as np
+    rng = np.random.default_rng(2027)
+    boot_records = []
+    for p in paired:
+        boot_records.append({
+            "result": {"metrics": {}, "status": "ok"},
+            "scores": {"primary_score": float(p["static_em"])},
+            "dataset": p["dataset"],
+            "method": "slotrag-g7-static",
+            "method_label": "slotrag-g7-static",
+            "question_id": p["qid"],
+            "seed": 2027,
+        })
+        boot_records.append({
+            "result": {"metrics": {}, "status": "ok"},
+            "scores": {"primary_score": float(p["chain_em"])},
+            "dataset": p["dataset"],
+            "method": "slotrag-g7-chain",
+            "method_label": "slotrag-g7-chain",
+            "question_id": p["qid"],
+            "seed": 2027,
+        })
+    boot_comps = paired_bootstrap(
+        boot_records, reference="slotrag-g7-static",
+        iterations=10000, seed=2027,
+    )
+    if boot_comps:
+        boot_comp = boot_comps[0]
+        ci_lo, ci_hi = boot_comp.get("ci_low", 0.0), boot_comp.get("ci_high", 0.0)
+        boot_n = boot_comp.get("count", n)
+    else:
+        ci_lo, ci_hi, boot_n = 0.0, 0.0, n
 
     # Per-dataset breakdown
     by_dataset = defaultdict(list)
@@ -370,8 +416,8 @@ def main():
         print("Run confirmatory execution first.")
         sys.exit(1)
 
-    results = load_results(RESULTS_CSV)
-    print(f"Loaded {len(results)} result records")
+    results = load_results(RESULTS_CSV, question_lookup=build_question_lookup())
+    print(f"Loaded {len(results)} result records (post-execution scored via score_record)")
 
     # Check completeness
     n_static = sum(1 for r in results if r.get("arm") == "static")
