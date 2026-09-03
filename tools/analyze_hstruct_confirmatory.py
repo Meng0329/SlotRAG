@@ -45,23 +45,25 @@ VALIDATION_PREVALENCE = {
 }
 
 
-# ── McNemar test (delegates to audited statistics.mcnemar) ────────────────
+# ── McNemar test (exact binomial primary; mid-p + chi-square secondary) ───
 
 def mcnemar_test(b, c, alpha=0.05, two_sided=True):
     """
-    Exact two-sided McNemar test (binominal on discordant pairs).
+    Exact two-sided McNemar test (binomial on discordant pairs).
 
-    Replaces the V1.1 continuity-corrected chi-square approximation.
-    Delegates to slotrag.benchmarking.statistics.mcnemar which computes
-    the exact mid-p two-sided p-value over the b/c discordant counts.
+    Primary: scipy.stats.binomtest(b, n=b+c, p=0.5, alternative="two-sided").
+    Secondary: mid-p corrected and continuity-corrected chi-square (H-STRUCT-1
+    V1.2 statistics-correction: the previous primary was mid-p; the primary
+    verdict now uses p_exact_binomial).
     """
     candidate = [1] * b + [0] * c
     reference = [0] * b + [1] * c
-    result = mcnemar(candidate, reference)
-    p_val = result["p_exact"]
+    result = mcnemar_exact(candidate, reference)
+    p_val = result["p_exact_binomial"]
     odds_ratio = (b + 0.5) / (c + 0.5)
-    chi_stat = result.get("chi_square", 0.0)
-    return chi_stat, p_val, odds_ratio
+    chi_stat = result.get("p_chi_square", 0.0)
+    p_midp = result.get("p_midp", 0.0)
+    return chi_stat, p_val, odds_ratio, p_midp
 
 
 def holm_correction(p_values):
@@ -209,50 +211,22 @@ def analyze_stratum(results, filter_fn, label):
     delta_llm = chain_llm - static_llm
 
     # McNemar
-    stat, p_two, or_val = mcnemar_test(b, c, two_sided=True)
-    _, p_one, _ = mcnemar_test(b, c, two_sided=False)
+    stat, p_two, or_val, p_midp = mcnemar_test(b, c, two_sided=True)
+    _, p_one, _, _ = mcnemar_test(b, c, two_sided=False)
 
-    # Full-N paired bootstrap: resample ALL N paired EM differences (not just
-    # discordant pairs — that would condition on the marginals and inflate
-    # precision). Delegates to audited statistics.paired_bootstrap.
-    from slotrag.benchmarking.statistics import paired_bootstrap
+    # Full-N paired bootstrap: resample ALL N question-level paired EM
+    # differences d_i = EM_chain_i − EM_static_i (not just discordant pairs).
+    # Uses paired_bootstrap_vector over the full N — NOT the dataset-stratified
+    # paired_bootstrap's first slice (which was a per-dataset CI, not pooled).
+    from slotrag.benchmarking.statistics import paired_bootstrap_vector, mcnemar_exact
     import numpy as np
-    rng = np.random.default_rng(2027)
-    boot_records = []
-    for p in paired:
-        boot_records.append({
-            "result": {"metrics": {}, "status": "ok"},
-            "scores": {"primary_score": float(p["static_em"])},
-            "dataset": p["dataset"],
-            "method": "slotrag-g7-static",
-            "method_label": "slotrag-g7-static",
-            "question_id": p["qid"],
-            "seed": 2027,
-        })
-        boot_records.append({
-            "result": {"metrics": {}, "status": "ok"},
-            "scores": {"primary_score": float(p["chain_em"])},
-            "dataset": p["dataset"],
-            "method": "slotrag-g7-chain",
-            "method_label": "slotrag-g7-chain",
-            "question_id": p["qid"],
-            "seed": 2027,
-        })
-    boot_comps = paired_bootstrap(
-        boot_records, reference="slotrag-g7-static",
-        iterations=10000, seed=2027,
-    )
-    if boot_comps:
-        boot_comp = boot_comps[0]
-        # paired_bootstrap computes differences = reference − candidate, i.e.
-        # (static − chain). ΔEM is reported as (chain − static), so the CI must
-        # be sign-flipped: CI[chain−static] = [−ci_high, −ci_low].
-        ci_lo, ci_hi = -boot_comp.get("ci_high", 0.0), -boot_comp.get("ci_low", 0.0)
-        boot_n = boot_comp.get("count", n)
-    else:
-        ci_lo, ci_hi, boot_n = 0.0, 0.0, n
+    static_ems = [p["static_em"] for p in paired]
+    chain_ems = [p["chain_em"] for p in paired]
+    boot = paired_bootstrap_vector(static_ems, chain_ems, iterations=10000, seed=2027)
+    ci_lo, ci_hi = boot["ci_low"], boot["ci_high"]
+    boot_n = boot["n"]
 
-    # Per-dataset breakdown
+    # Per-dataset breakdown (question-level CI per dataset + exact binomial McNemar)
     by_dataset = defaultdict(list)
     for p in paired:
         by_dataset[p["dataset"]].append(p)
@@ -264,8 +238,12 @@ def analyze_stratum(results, filter_fn, label):
         ds_c = sum(1 for p in ps if p["static_correct"] and not p["chain_correct"])
         ds_static_em = sum(p["static_em"] for p in ps) / ds_n
         ds_chain_em = sum(p["chain_em"] for p in ps) / ds_n
-        ds_stat, ds_p_two, ds_or = mcnemar_test(ds_b, ds_c, two_sided=True)
-        _, ds_p_one, _ = mcnemar_test(ds_b, ds_c, two_sided=False)
+        ds_mc = mcnemar_exact([1 if not p["static_correct"] and p["chain_correct"] else 0 for p in ps],
+                              [1 if p["static_correct"] and not p["chain_correct"] else 0 for p in ps])
+        ds_ds_cand = [p["chain_em"] for p in ps]
+        ds_ds_ref = [p["static_em"] for p in ps]
+        ds_boot = paired_bootstrap_vector(ds_ds_ref, ds_ds_cand, iterations=10000, seed=2027)
+        ds_or = (ds_b + 0.5) / (ds_c + 0.5) if ds_c or ds_b else float("inf")
 
         dataset_results[ds] = {
             "n": ds_n,
@@ -274,10 +252,12 @@ def analyze_stratum(results, filter_fn, label):
             "static_em": ds_static_em,
             "chain_em": ds_chain_em,
             "delta_em": ds_chain_em - ds_static_em,
-            "mcnemar_chi2": ds_stat,
-            "p_two_sided": ds_p_two,
-            "p_one_sided": ds_p_one,
+            "mcnemar_chi2": ds_mc["p_chi_square"],
+            "p_two_sided": ds_mc["p_exact_binomial"],
+            "p_midp": ds_mc["p_midp"],
+            "p_one_sided": ds_mc["p_exact_binomial"] / 2 if ds_chain_em > ds_static_em else 1 - ds_mc["p_exact_binomial"] / 2,
             "odds_ratio": ds_or,
+            "ci_95": (ds_boot["ci_low"], ds_boot["ci_high"]),
         }
 
     return {
@@ -298,6 +278,7 @@ def analyze_stratum(results, filter_fn, label):
         "delta_llm_calls": delta_llm,
         "mcnemar_chi2": stat,
         "p_two_sided": p_two,
+        "p_midp": p_midp,
         "p_one_sided": p_one,
         "odds_ratio": or_val,
         "ci_95": (ci_lo, ci_hi),

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.stats import binomtest
 
 from ..models import RunMetrics, SlotPlan
 
@@ -805,6 +806,64 @@ def _holm(pairs: list[dict[str, Any]]) -> None:
 
 
 def paired_bootstrap(records: list[dict[str, Any]], *, reference: str = "slotrag", iterations: int = 10_000, seed: int = 2027) -> list[dict[str, Any]]:
+    """Backward-compatible alias of ``paired_bootstrap_per_dataset``.
+
+    Returns the dataset-stratified comparison list (one entry per dataset —
+    NOT a pooled CI).  New pooled statistics must use ``paired_bootstrap_vector``.
+    """
+    return paired_bootstrap_per_dataset(
+        records, reference=reference, iterations=iterations, seed=seed
+    )
+
+
+def paired_bootstrap_vector(
+    a: list[float],
+    b: list[float],
+    *,
+    iterations: int = 10_000,
+    seed: int = 2027,
+    level: float = 0.95,
+) -> dict[str, Any]:
+    """Question-level paired bootstrap CI over ALL N paired differences.
+
+    ``a[i]`` and ``b[i]`` are the paired per-question EM scores for two arms
+    (e.g. static and chain).  Each bootstrap iteration resamples the N
+    question-level *differences* d_i = b_i - a_i with replacement and takes
+    their mean.
+
+    Returns dict with mean_difference, ci_low, ci_high (sign is b − a).
+    """
+    if len(a) != len(b):
+        raise ValueError("paired_bootstrap_vector: a and b must have equal length")
+    diffs = np.asarray(b, dtype=float) - np.asarray(a, dtype=float)
+    n = len(diffs)
+    if n < 2:
+        return {"mean_difference": float(diffs.mean()), "ci_low": None, "ci_high": None, "n": n}
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, n, size=(iterations, n))
+    bootstrap = diffs[indices].mean(axis=1)
+    alpha = 1.0 - level
+    lo = float(np.percentile(bootstrap, 100 * alpha / 2))
+    hi = float(np.percentile(bootstrap, 100 * (1 - alpha / 2)))
+    p_val = min(1.0, 2 * min(float(np.mean(bootstrap <= 0)), float(np.mean(bootstrap >= 0))))
+    return {
+        "mean_difference": float(np.mean(diffs)),
+        "ci_low": lo,
+        "ci_high": hi,
+        "p_value": p_val,
+        "n": n,
+    }
+
+
+def paired_bootstrap_per_dataset(
+    records: list[dict[str, Any]], *, reference: str = "slotrag", iterations: int = 10_000, seed: int = 2027
+) -> list[dict[str, Any]]:
+    """Per-dataset paired bootstrap (dataset-stratified comparison list).
+
+    NOTE: returns one entry per (dataset, candidate) pair — NOT a pooled CI.
+    Consumers that need a single pooled CI over all N paired questions must use
+    ``paired_bootstrap_vector`` (question-level resampling over the full N).
+    """
     rows = [_flat(record) for record in records]
     raw_values: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     for row in rows:
@@ -922,6 +981,46 @@ def mcnemar(
         "b_minus_c": b - c,
         "p_exact": p_exact,
         "chi_square": chi,
+    }
+
+
+def mcnemar_exact(candidate: list[int], reference: list[int]) -> dict[str, str | int | float]:
+    """McNemar with the exact two-sided binomial test as the primary statistic.
+
+    b = #discordant pairs where candidate=1 & reference=0 (candidate-only win)
+    c = #discordant pairs where candidate=0 & reference=1 (reference-only win)
+
+    Returns three p-values so the primary verdict can use the exact binomial:
+      - p_exact_binomial : scipy.stats.binomtest(b, n=b+c, p=0.5, alternative="two-sided")
+      - p_midp           : H-STRUCT-1 V1.2 mid-p corrected (sensitivity)
+      - p_chi_square     : continuity-corrected chi-square approximation
+    """
+    if len(candidate) != len(reference):
+        raise ValueError("mcnemar_exact requires equal-length paired sequences")
+    b = sum(1 for cand, ref in zip(candidate, reference) if cand and not ref)
+    c = sum(1 for cand, ref in zip(candidate, reference) if (not cand) and ref)
+    n = b + c
+    p_exact_binomial: float = 1.0
+    p_midp: float = 1.0
+    chi: float = 0.0
+    if n > 0:
+        res = binomtest(b, n, 0.5, alternative="two-sided")
+        p_exact_binomial = float(res.pvalue)
+        from math import comb
+
+        midp = 0.5 * comb(n, b) / (2 ** n)
+        sum_ = float(sum(comb(n, k) for k in range(b + 1)) / (2 ** n))
+        p_midp = min(1.0, 2.0 * min(sum_ - midp, 1.0 - sum_ + midp))
+        if b != c:
+            chi = float((abs(b - c) - 1) ** 2 / n)
+    return {
+        "candidate_only_wins_b": b,
+        "reference_only_wins_c": c,
+        "discordant_pairs": n,
+        "b_minus_c": b - c,
+        "p_exact_binomial": p_exact_binomial,
+        "p_midp": p_midp,
+        "p_chi_square": chi,
     }
 
 
