@@ -1,0 +1,35 @@
+{
+  "n": 350,
+  "P_exec_eligible": 0.0539,
+  "ate_stratum": 0.07714285714285714,
+  "ci_stratum": [
+    0.045714285714285714,
+    0.10857142857142857
+  ],
+  "ate_population_Aprime": 0.004158,
+  "ci_population_Aprime": [
+    0.002464,
+    0.005852
+  ],
+  "be_static_350": 146,
+  "be_flat_350": 0,
+  "be_static_per_1000": 22.484,
+  "be_Aprime_per_1000": 0.0,
+  "be_abs_reduction_per_1000": 22.484,
+  "chain_minus_flat_llm_mean": -0.9856733524355301,
+  "chain_minus_flat_llm_ci": [
+    -1.1088825214899714,
+    -0.8624641833810889
+  ],
+  "chain_minus_flat_retr_mean": -0.7593123209169055,
+  "chain_minus_flat_retr_ci": [
+    -0.8567335243553008,
+    -0.664756446991404
+  ],
+  "feasibility_confusion": {
+    "tn": 76,
+    "fp": 0,
+    "fn": 128,
+    "tp": 146
+  }
+}

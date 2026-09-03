@@ -1,8 +1,57 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-09-02  
-> **更新者**: documentation-writer agent  
-> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付 → **H-STRUCT-1 确认性测试 ✅ 执行完毕（CONFIRMED）**。
+> **最后更新**: 2026-09-03  
+> **更新者**: Claude Code  
+> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付 → **H-STRUCT-1 确认性测试 ✅ CONFIRMED** → **H-STRUCT-2 CASE B ✅ chain 负结果** → **H-STRUCT-3 ✅ GATE NECESSARY (CASE G1)**。
+
+---
+
+## 最新进展（2026-09-03）：H-STRUCT-3 Gate Necessity 裁决 — GATE NECESSARY (CASE G1)
+
+**H-STRUCT-3（structure-gate 必要性 + Policy A′ 离线重放）完成**，详见 `research/H_STRUCT_3_FINAL_REPORT.md`。**所有数字均由 CPU-only 脚本重算，无新 LLM / 检索 / 答案执行。**
+
+### 四策略 macro 对比（n=8,632 exploratory trace，permissive regime）
+
+| Policy | Macro EM | Macro LLM | BE rate | completion |
+|--------|----------|-----------|---------|------------|
+| P_static | 0.4434 | 27.03 | 4.4% | 92.6% |
+| P_flat | 0.4361 | 21.75 | 3.3% | 93.6% |
+| P_chain | 0.4315 | 22.91 | 3.8% | 93.1% |
+| **P_gate_flat (A′)** | **0.4482** | 23.81 | **2.8%** | **94.1%** |
+
+### Gate Necessity Test（浅层 hops<2, n=8,085）
+
+- **flat vs static ΔEM = −0.0210, CI [−0.0273, −0.0146], p<0.001** → flat 显著伤害浅层质量
+- 2wiki hops0 主导：ΔEM −0.0445；hops1 −0.0181；hops>=2 −0.0393
+- hotpotqa/musique 浅层 ≈0（无伤害）
+- **CASE G1 (GATE NECESSARY)**
+
+### A′ vs always-flat（n=8,632）
+
+- ΔEM **+0.0197** CI[+0.0138,+0.0256] p<0.001；ΔF1 +0.0073；Δretrieval −0.0144 p<0.001；ΔLLM +0.86 n.s. (p=0.059)
+- Per-dataset：2wiki +0.0333（主要收益域），hotpotqa/musique ≈0 n.s.
+
+### 人口级 A′ 效应（confirmatory validation n=350, P=0.05390）
+
+- ATE_exec_eligible = **+0.0771**, CI[+0.0457, +0.1086]
+- ATE_population(A′) = **0.05390 × 0.0771 = +0.004158 EM/题**, CI[+0.002464, +0.005852]（不含 0，显著）
+
+### budget_exceeded 削减（confirmatory B=8）
+
+- static BE 146/350 → flat 0/350 → 人口级 −22.48 BE per 1000 natural questions（相对 100%）
+- 静态可完成性命题：Feasible(Σ≤8)→0/76 BE（TN），Infeasible(>8)→146/274 BE（TP），FP=0；precision 1.0, recall 0.533
+
+### 链式 importance 效率 audit（confirmatory 350 pairs）
+
+- chain−flat LLM: −0.986 CI[−1.109,−0.862] perm-p<0.001；retrieval: −0.759 CI[−0.857,−0.665] perm-p<0.001
+- 仅效率，非准确率。Chain 永久降级为 ablation（H-STRUCT-2 CASE B）。
+
+### 最终裁决与论文动作
+
+- **GATE NECESSARY (CASE G1)** → 方法名保留 **"Structure-Gated Budget-Feasible Physical Planning"**
+- 三个贡献 C1/C2/C3（`research/PAPER_CONTRIBUTIONS_V3.md`）
+- Positioning 已更新（`research/TKDE_STRUCTURAL_POLICY_POSITIONING.md`：无 "first adaptive/budget-aware/query-planner/structure-aware RAG" 声称）
+- chain-rule importance：NOT a contribution（ablation / falsified hypothesis）；§11×§13 强制公开
 
 ---
 

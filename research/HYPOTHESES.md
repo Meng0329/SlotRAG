@@ -691,3 +691,54 @@
 - **机制（诚实披露）**: budget_exceeded **100% 集中于 static 臂**（pooled static 739/1092 = 67.7%：validation 41.7%、train 79.9%；chain 0%）。ΔEM 主效应当前为 static 在冻结 8-call 预算内大量无法完成深度计划（空答案 EM=0）vs chain 自适应分配总能完成 —— 即**预算内可实现性**收益，与 G6/G7 matched-budget 发现一致。论文必须用 budget-feasibility 叙事，避免 "static 更笨" 归因。
 - **判定: CONFIRMED**。Policy A（depth_only, τ=2）成为有确认性证据的深度策略；eligible 自然流行率仅 3–7%（validation census: hotpotqa 3.2% / 2wiki 7.0% / musique 5.4%），人口级收益 0.0025–0.0086 EM/题，论文宜定位为"深度计划的预算内自适应降级"而非全局切换。
 - **归属**: 附带确认性管道资产（冻结计划/执行/统计工具）见 `research/hstruct_confirmatory/`、`research/hstruct_validation_census/`；完整报告 `research/H_STRUCT_1_FINAL_REPORT.md`；commit `6f7292c`。
+
+---
+
+### H-STRUCT-2: flat → chain 控制（chain importance 独立价值）
+
+- **状态**: **CASE B — chain 无独立价值**（commit 4623326，已推送）
+- **结论**: static→chain ΔEM +0.0857 (p=2.8e-06)；static→flat +0.0771 (p=1.4e-06)；**flat→chain +0.0086, CI[−0.026,+0.043], exact McNemar p=0.743 不显著**。chain 相对 static 的全部增益来自全局预算感知分配（flat 复制 0.0771/0.0857），非 importance 机制。chain 降级为 ablation。
+- **判定: CASE B**，不扩 train flat。下一轮 = H-STRUCT-3（Policy A′ 离线重放，零新执行）。
+
+---
+
+### H-STRUCT-3: Structure-Gate 必要性 & Policy A′ 离线重放
+
+- **状态**: **GATE NECESSARY (CASE G1)**（2026-09-03 完成，全部 CPU-only 零新 LLM/检索/答案执行）
+- **前置**: H-STRUCT-2 CASE B（chain 无独立价值）→ 方法改名 "Structure-Gated Budget-Feasible Physical Planning" → gate 阻止 flat 伤害浅层计划
+- **数据来源**: exploratory three-arm trace（25,948 行，n=8,632 strict three-arm paired）+ confirmatory validation 350 配对 + V1.2 census P=0.05390
+
+**§3 四策略 macro（permissive trace, n=8,632）**:
+
+| Policy | Macro EM | Macro LLM | BE rate | completion |
+|--------|----------|-----------|---------|------------|
+| P_static | 0.4434 | 27.03 | 4.4% | 92.6% |
+| P_flat | 0.4361 | 21.75 | 3.3% | 93.6% |
+| P_chain | 0.4315 | 22.91 | 3.8% | 93.1% |
+| **P_gate_flat (A′)** | **0.4482** | 23.81 | **2.8%** | **94.1%** |
+
+**§5 Gate 必要性测试（shallow hops<2, n=8,085）**:
+- flat vs static ΔEM = **−0.0210, CI [−0.0273, −0.0146], p<0.001** → flat 显著伤害浅层质量
+- 2wiki hops0 主导（−0.0445），hotpotqa/musique 浅层 ≈0
+- **CASE G1 (GATE NECESSARY)**
+
+**§10 A′ vs always-flat（n=8,632）**:
+- ΔEM **+0.0197** CI[+0.0138,+0.0256] p<0.001；ΔF1 +0.0073；Δretrieval −0.0144 p<0.001；ΔLLM +0.86 n.s.
+- 2wiki +0.0333（主要收益域），hotpotqa +0.0017 n.s.，musique +0.0012 n.s.
+
+**§7/8 人口级 A′ 效应（confirmatory n=350, P=0.05390）**:
+- ATE_exec_eligible = +0.0771, CI[+0.0457, +0.1086]
+- ATE_population(A′) = **+0.004158 EM/题**, CI[+0.002464, +0.005852]（不含 0，显著）
+
+**§9 budget_exceeded 削减**:
+- confirmatory 350: static BE 146 → flat 0 → 人口级 −22.48 BE per 1000 natural questions（相对 100%）
+
+**§11 chain efficiency audit（confirmatory 350, n=349）**:
+- chain−flat LLM: −0.986 CI[−1.109,−0.862] perm-p<0.001；retrieval: −0.759 CI[−0.857,−0.665] perm-p<0.001（仅效率，非准确率；chain 降级 ablation）
+
+**§12 feasibility 混淆矩阵**:
+- TN 76 / FP 0 / FN 128 / TP 146；precision 1.0, recall 0.533
+
+**最终判决**: GATE NECESSARY → 保留方法名 "Structure-Gated Budget-Feasible Physical Planning"
+- 三个贡献 C1/C2/C3（`PAPER_CONTRIBUTIONS_V3.md`）；chain importance NOT a contribution（ablation/falsified）
+- 产出: `research/H_STRUCT_3_FINAL_REPORT.md`、`research/PAPER_CONTRIBUTIONS_V3.md`、`research/TKDE_STRUCTURAL_POLICY_POSITIONING.md`（§14 更新）；analysis CSVs in `research/hstruct_validation_census/`
