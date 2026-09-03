@@ -42,10 +42,11 @@ RESULTS_CSV = OUTPUT_DIR / "confirmatory_results.csv"
 PROGRESS_FILE = OUTPUT_DIR / "execution_progress.json"
 
 SEED = 2027
-ARMS = ["static", "chain"]
+ARMS = ["static", "chain", "flat"]
 METHOD_BY_ARM = {
     "static": "slotrag-g7-static",
     "chain": "slotrag-g7-chain",
+    "flat": "slotrag-g7-flat",
 }
 
 # No-peeking: only these fields are logged per-item
@@ -246,7 +247,13 @@ def main():
     parser.add_argument("--progress", type=str, default=str(PROGRESS_FILE),
                         help="Path to progress JSON output")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--arms", type=str, default=",".join(ARMS),
+                        help="Comma-separated arms to execute (default: all)")
     args = parser.parse_args()
+    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    for a in arms:
+        if a not in METHOD_BY_ARM:
+            raise SystemExit(f"Unknown arm: {a} (valid: {list(METHOD_BY_ARM)})")
 
     # Allow overriding output files (separate train run without clobbering
     # the validation-run results)
@@ -259,16 +266,17 @@ def main():
     # Load manifest
     manifest = load_manifest(Path(args.manifest))
     total_questions = len(manifest)
-    total_executions = total_questions * 2  # static + chain per question
+    total_executions = total_questions * len(arms)
 
     print(f"Loaded {total_questions} questions from frozen manifest")
-    print(f"Total executions: {total_executions} ({total_questions} × 2 arms)")
+    print(f"Arms: {arms}")
+    print(f"Total executions: {total_executions} ({total_questions} × {len(arms)} arms)")
 
     # Load already-completed
     completed = load_completed(results_csv)
     remaining = []
     for item in manifest:
-        for arm in ARMS:
+        for arm in arms:
             key = (item["question_id"], arm)
             if key not in completed:
                 remaining.append((item, arm))
