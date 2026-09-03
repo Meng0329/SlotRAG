@@ -12,6 +12,7 @@ this subdomain. On non-well-defined chains the closed form is a proxy artifact
 and is outside the claim.
 
 \subsection{Logical-to-Physical Crossover (RQ9)}
+\label{subsec:crossover}
 No physical implementation dominates universally, and on the full
 SEALED\_TEST set the crossover is \emph{heterogeneous} rather than uniformly
 favorable to the allocator. The chain law gives the requirement-aware arm
@@ -29,6 +30,28 @@ is strictly dominated on cost on 2WikiMultiHopQA where its EM is also
 significantly worse. We report this frontier without selecting the subdomain
 that shows a saving.
 
+A pre-registered confirmatory test conditions exactly on this frontier
+(\code{H\_STRUCT\_1\_PRE\_REGISTRATION\_V1\_2}). On the \emph{eligible}
+subdomain ($\mathrm{structural\_hops}\ge2$, deep plans) it executes $1{,}092$
+paired questions ($350$ held-out validation $+742$ train) with both arms
+replaying the \emph{same} frozen SlotPlan (plan hashes match pairwise) under a
+hard $\max\_retrieval\_calls{=}8$ budget. Chain dominates static:
+$\Delta\text{EM}={+}0.086$ ($95\%$ CI $[+0.051,+0.133]$) on the held-out
+validation set and ${+}0.142$ ($[+0.099,+0.146]$) pooled, McNemar
+$p<0.001$; all three datasets are positive and significant. On this protocol
+chain also spends fewer LLM calls ($\Delta{-}1.2$/question), so the
+LLM-for-EM trade-off reported above inverts: on deep plans, under an identical
+frozen plan and hard budget, the allocator's freedom is a strict win rather
+than a cost. The budget-exceedance polarity is likewise protocol-dependent:
+the static arm exhausts the hard $8$-call budget on $41.7\%$ (validation) /
+$79.9\%$ (train) of eligible questions, whereas the chain arm completes all of
+them; in the SEALED full-set protocol, where each arm compiles its own physical
+plan over the shared logical plan, the deep HotpotQA chain arm instead
+over-spends ($323$ budget-exceeded vs.\ $117$). Both observations agree on the
+RQ9 thesis---allocation freedom is exercised and pays only where plans are
+deep---and differ only in which arm the budget polarity lands on under which
+plan-source protocol.
+
 \subsection{Bottleneck Attribution (RQ8)}
 Execution traces reveal where additional retrieval ceases to translate into
 answer gains. We decompose failures into acquisition, verification/materialization,
@@ -42,7 +65,13 @@ exploration the chain arm buys is often spent on requirements that do not
 carry the answer. The honest complement to the effectiveness result is that the chain arm's
 deeper exploration on the deep HotpotQA plans converts into \emph{more}
 budget-exceeded questions ($323$ vs.\ $117$ for static) rather than into more
-correct answers---a cost, not a benefit, on that dataset. The budget-exceeded
+correct answers---a cost, not a benefit, on that dataset---under this
+protocol, where each arm compiles its own physical plan. This arm polarity is
+protocol-dependent: a confirmatory test that replays the \emph{same} frozen
+plan on both arms under a hard $8$-call budget reverses it (static exhausts on
+$41.7\%$/$79.9\%$ of eligible questions, chain completes all), because static's
+full-plan materialization cannot fit a deep plan into the hard budget
+(\S\ref{subsec:crossover}). The budget-exceeded
 total is not uniform across arms or datasets: on 2WikiMultiHopQA the static and
 flat arms hit the ceiling far more often (static $265$, flat $246$) than the
 chain arm ($2$), because the shallow 2Wiki plans exhaust their budget before
