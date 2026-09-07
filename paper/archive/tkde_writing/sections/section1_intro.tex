@@ -1,0 +1,78 @@
+\section{Introduction}
+\label{sec:intro}
+
+Retrieval-augmented generation (RAG) decomposes complex questions into
+retrieval and reasoning steps, and a growing line of work makes those steps
+increasingly explicit: logical query trees \cite{planrag}, executable programs
+\cite{pyrag}, typed slots \cite{slotrag}, and learned adaptive control
+\cite{dynakrag}. This explicitness is a prerequisite for treating multi-hop
+retrieval as an \emph{execution} problem rather than a prompt-engineering
+problem. But it also raises a systems question that most RAG papers do not
+state precisely: given a finite resource budget, \emph{how should a system
+compile a question into dependent evidence requirements, choose physical
+implementations for them, allocate budget across them, and acquire the evidence
+while observing the outcomes at runtime}?
+
+This paper answers that question with a concrete evidence-centric execution
+model. We make three connected moves. First, we treat evidence \emph{requirements}
+--- conditions that must be satisfied, with a type, an importance, a set of
+variables to bind, and dependencies over other requirements --- as first-class
+objects, and give them a typed algebra with monotone state-transition
+semantics (\S\ref{sec:algebra}). Second, we separate the logical evidence
+program from its physical implementations and introduce a deterministic
+importance-weighted allocator that assigns execution orders, retrieval
+implementations, and budget allocations to typed requirements under a matched
+budget (\S\ref{sec:optimizer}). Third, we execute plans deterministically with
+hard budget enforcement and full provenance, so that every answer is traceable
+to the evidence and physical actions that produced it (\S\ref{sec:execution}).
+
+The design is governed throughout by an honesty discipline that we apply to
+ourselves. A property estimator is claimed only where it is construction-derived
+and exact; on the well-defined chains that dominate our workloads, requirement
+importance equals $\tau = 2d-1$ by derivation, and we do not claim a learned
+estimator adds value there. Runtime re-optimization over alternative physical
+plans is explicitly future work under a branching execution model, because on
+the chain-only topology this system runs today it would be vacuous. And in the
+evaluation, a win is claimed only when it is statistically supported under the
+matched-budget protocol; point-estimate differences are reported as such.
+
+Our main experimental finding, on the frozen SEALED\_TEST set (8,661 questions
+across HotpotQA, 2WikiMultiHopQA, and MuSiQue; model \code{qwen3.5-9b}; matched
+retrieval budget $=8$), is that the chain-rule allocator does \emph{not} win
+globally. The three arms share a frozen logical plan, so every EM difference is
+a pure plan-level effect. On HotpotQA the arms are statistically
+indistinguishable (flat $55.4\%$ / static $54.1\%$ / chain $54.2\%$;
+chain-vs-static McNemar $p{=}0.80$). On MuSiQue the chain arm is numerically
+best ($27.5\%$) but does not reach significance (McNemar $p{=}0.064$). On
+2WikiMultiHopQA the chain arm is \emph{significantly worse} than static
+($47.8\%$ vs.\ $51.7\%$, paired bootstrap $\Delta$EM $-3.9$pt CI$[-5.0,-2.9]$,
+$p<0.0001$). The flat arm, which performs no dependency-tree search, is the
+strongest or tied arm on all three datasets. The matched-budget frontier is
+similarly heterogeneous: mean retrieval calls are near-identical between chain
+and static (HotpotQA $-0.20$, 2Wiki $+0.01$, MuSiQue $-0.09$ calls/question),
+while the chain arm \emph{spends more LLM calls} on HotpotQA ($+24.0$ per
+question, $p<0.0001$)---the mechanical cost of deeper exploration. The honest
+conclusion is that allocator benefit is conditional on dependency depth: it
+helps on the deep chains of MuSiQue and is neutral-to-harmful on the shallow
+plans that dominate 2WikiMultiHopQA.
+
+\paragraph{Contributions.}
+\begin{itemize}
+\item An evidence-centric execution model for multi-hop RAG, in which a
+question is compiled into typed, dependent evidence requirements with a formal
+monotone state-transition algebra (\S\ref{sec:algebra}).
+\item A requirement-aware physical-plan allocator that assigns legal orders,
+physical implementations, and budget allocations to typed requirements under a
+matched budget, derived from the chain-law importance
+$\tau = 2d-1$ on well-defined chains (\S\ref{sec:optimizer}).
+\item A deterministic adaptive executor with hard budget enforcement and
+end-to-end provenance, enabling per-question trace audits and operator-level
+failure attribution (\S\ref{sec:execution}).
+\item An honest matched-budget evaluation that states \emph{where} the
+allocator helps and where it hurts: on 8,661 frozen questions it is
+significantly worse than static on 2WikiMultiHopQA ($p<0.0001$) and only
+marginally best on MuSiQue ($p{=}0.064$), with flat importance tied-or-ahead
+everywhere---so we frame the contribution as a measurable, reproducible
+plan-effect framework and a cost-aware frontier analysis, not a universal
+win (\S\ref{sec:results}).
+\end{itemize}

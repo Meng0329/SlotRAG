@@ -1,18 +1,21 @@
-\documentclass[sigconf]{acmart}
+\documentclass[journal]{IEEEtran}
 
 \title{SlotRAG: Budget-Feasible Physical Planning over Typed Evidence Plans for Multi-Hop Retrieval-Augmented Generation}
 
-\author{Anonymous}
-\affiliation{%
-  \institution{Anonymous Institution}
-  \country{}
+\author{%
+\IEEEauthorblockN{Anonymous Author\IEEEauthorrefmark{1}%
+\thanks{Manuscript received...; revised...; accepted...; published...}%
+\thanks{Manuscript ID: TKDE-2026-XXXX}}
+\IEEEauthorblockA{\IEEEauthorrefmark{1}Anonymous Institution\\
+Email: anonymous@anonymous.edu}
 }
-\email{anonymous@anonymous.edu}
 
 \usepackage{booktabs}
 \usepackage{bm}
-\usepackage{lmodern}
 \usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{url}
+\usepackage{graphicx}
 
 \newcommand{\code}[1]{\texttt{#1}}
 
@@ -49,6 +52,11 @@ a mechanism for regime-sensitive physical planning whose confirmatory
 benefit is established on the deep plans where it was designed to operate.
 \end{abstract}
 
+\begin{IEEEkeywords}
+retrieval-augmented generation, multi-hop reasoning, budget-aware planning,
+typed evidence plans, physical planning
+\end{IEEEkeywords}
+
 \maketitle
 
 \section{Introduction}\label{sec:intro}
@@ -84,7 +92,7 @@ benefit is established on the deep plans where it was designed to operate.
 \section{Conclusion}\label{sec:conclusion}
 \input{sections/conclusion}
 
-\bibliographystyle{ACM-Reference-Format}
+\bibliographystyle{IEEEtran}
 \bibliography{refs}
 
 \end{document}

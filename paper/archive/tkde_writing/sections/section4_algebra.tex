@@ -1,0 +1,138 @@
+\section{Declarative Evidence Algebra}
+\label{sec:algebra}
+
+% EA-P1 — Design goals
+Evidence acquisition in a multi-hop system is usefully viewed as an execution
+problem: a complex question induces a set of evidence conditions that must be
+satisfied, and the system must acquire the evidence that satisfies them. Our
+algebra is designed around three principles. First, programs are
+\emph{declarative}: a program expresses what evidence goals must be met rather
+than which retrieval procedure to run. Second, operators are \emph{typed and
+composable}: each operator has a typed input/output contract, so programs are
+built by composing operators whose evidence types are compatible. Third, the
+properties an optimizer needs---expected cost, expected yield, dependency, and
+utility---remain \emph{explicit} as typed fields rather than hidden inside
+natural-language prompts. The central object is the
+\emph{evidence requirement} (\code{EvidenceRequirement}, models.py), a
+first-class typed need with a status, an expected evidence type, an importance,
+the variables it must bind, and its dependencies over other requirements. Its
+status is one of \code{unresolved} $<$ \code{partial} $<$ \code{satisfied}
+(\code{RequirementStatus}), forming a monotone lattice over which the execution
+semantics advance.
+
+% EA-P2 — Requirement and acquisition operators
+We distinguish the declarative condition to be satisfied from the mechanism
+used to acquire evidence for it. \textsc{Require} introduces an unresolved
+evidence condition; \textsc{Search} and \textsc{Expand} acquire candidate
+evidence, either from a source index or from an already-bound value. This
+distinction is enforced in the state-transition semantics of the algebra: the
+operator \code{apply\_observation(state, observation)} advances each affected
+requirement one legal step along the lattice \code{unresolved} $\rightarrow$
+\code{partial} $\rightarrow$ \code{satisfied}, and never regresses (a satisfied
+requirement is terminal). An observation is a per-requirement coverage probe
+(how many of the requirement's variables are bound, whether any evidence has
+been seen, and which source ids produced it). Because a requirement encodes
+\emph{what must hold}, not \emph{which action to execute}, the same condition
+remains well-defined no matter which physical acquisition strategy is later
+selected.
+
+% EA-P3 — Binding and composition operators
+Two properties make downstream acquisition conditional on observed values
+rather than on newly generated subquestions. First, \emph{binding}: evidence is
+converted into reusable typed variables that later operators can consume
+(\code{BindingRow}, \code{AdaptiveBindingBeam}). Second, \emph{composition}:
+operators compose evidence through shared bindings or explicit join
+constraints. In the compiled plan, join edges connect the slots that must share
+a bound variable; this is what turns a sequence of independent retrieval calls
+into a dependent evidence chain. Filtering applies typed predicates to reduce
+candidate sets before materialization. The distinction is not cosmetic: because
+the dependency is over the variable values actually observed at runtime, a
+later acquisition step is conditioned on a real binding (e.g., a bridge entity
+that was actually retrieved) rather than on a static subquestion.
+
+% EA-P4 — Verification/materialization/packing operators
+A common source of lost information in RAG is the conflation of
+\emph{retrieved}, \emph{materialized}, and \emph{packed} evidence. We separate
+them deliberately. \textsc{Verify} checks whether candidate evidence supports a
+requirement (in our implementation, a sufficiency verdict recorded on the
+slot's execution trace); \textsc{Materialize} commits selected evidence to the
+persistent evidence state as provenance-clean records; and \textsc{Pack}
+constructs the bounded context delivered to the answer model. Evidence can
+therefore be retrieved yet rejected before materialization, or materialized yet
+omitted from the final context when the reader budget is tighter than the
+evidence budget. This separation is what allows a system to report honestly
+\emph{how much} of the retrieved evidence survives into the answer context, and
+why a gap between retrieval recall and answer quality can be attributed to a
+specific stage.
+
+% EA-P5 — Type semantics
+The type system exposes five evidence types: passage, entity, relation,
+table-row, and structured-record (\code{EvidenceType}). Operator signatures
+make compatibility explicit: an operator that consumes a \code{relation}
+evidence item is not applied to a bare \code{passage}, and the optimizer can
+reason about which physical implementations produce which types. We
+additionally establish type-preservation conditions for well-formed programs,
+so a legal composition is guaranteed to produce evidence of the declared output
+type. We note the current end-to-end backend materializes text passages; the
+table-row and structured-record types are the interface over which the
+heterogeneous extension (Section~\ref{sec:heterogeneous}) is defined.
+
+% EA-P6 — Rewrite rules
+Rewrites fall into three classes, ordered by the strength of their guarantee.
+\emph{Exact} rewrites preserve operator semantics exactly. \emph{Evidence-preserving}
+rewrites may alter intermediate candidate sets while still guaranteeing that the
+requirement is satisfied under stated conditions (e.g., an entity-conditioned
+retrieval that returns a superset of the answer-bearing evidence). \emph{Approximate}
+rewrites trade recall or verification risk for cost; they expose an estimated
+loss term to the optimizer so that a cheaper approximate plan is only selected
+when its estimated utility loss is justified. The logical-to-physical mapping
+of the next section is precisely an evidence-preserving rewrite family: the
+logical program fixes what dependencies must be satisfied, while the physical
+implementation (sparse, dense, hybrid, or conditioned access) is left open.
+
+% EA-P7 — End-to-end walkthrough
+Figure~\ref{fig:walkthrough} traces a single query through the algebra. The
+question is compiled into a typed evidence program (a set of requirements with
+a dependency graph); each requirement is then realizable by multiple physical
+access paths. The same logical program can therefore be executed by a uniform
+static plan, by a cost-only plan, or by the requirement-aware optimized plan of
+Section~\ref{sec:optimizer}, under identical retrieval budgets. The logical
+layer fixes \emph{what} must be satisfied; the physical layer decides
+\emph{how}---and the two are audited separately. This decoupling is the
+foundation of the matched-budget evaluation in Section~\ref{sec:experiments}.
+
+\subsection{Heterogeneous Evidence}
+\label{sec:heterogeneous}
+
+The evidence algebra types Passage, TableRow, Entity, and Relation are each
+backed by a physical implementation: dense/sparse retrieval for passages,
+conditioned table access for table rows, entity linking for entities, and KB
+joins for relations. The typed algebra ensures that a composition requiring a
+\code{TableRow} cannot be satisfied with a bare \code{Passage}, and the
+physical planner selects the implementation that produces evidence of the
+declared type. End-to-end evidence through table rows is real (Section~\ref{sec:results}),
+where FEVEROUS table evidence is converted into typed \code{table\_row}
+passages and runs through the same materializer without core-architecture
+changes.
+
+\begin{figure}[t]
+\centering
+\begin{tabular}{@{}l@{}}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Requirement} & \textbf{Status} & \textbf{Type} \\
+\hline
+S1: \texttt{FindEntity(bridge)} & resolved$\to$partial & passage \\
+S2: \texttt{FindEntity(answer)} & unresolved & passage \\
+\hline
+\end{tabular}
+\\[4pt]
+$\downarrow$ \texttt{apply\_observation(S1, \{covered\_vars:1, evidence:True\})}$\to$ partial \\
+$\downarrow$ \texttt{apply\_observation(S2, \{covered\_vars:1, evidence:True\})}$\to$ satisfied
+\end{tabular}
+\caption{Walkthrough: a two-hop query is compiled into two typed evidence
+requirements with a dependency ($\text{S2}$ depends on $\text{S1}$'s bound
+entity). Each observation advances requirements along the lattice;
+the logical program is the same regardless of which physical plan executes it.}
+\label{fig:walkthrough}
+\end{figure}

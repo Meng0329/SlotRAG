@@ -13,8 +13,15 @@ A physical allocation $A(P) = \{a_s \mid s \in S\}$ assigns a non-negative integ
 \paragraph{Allocation feasibility.}
 Define the allocation feasibility predicate: $F(P, A, B) = \mathbf{1}\!\left[\sum_{s \in S} a_s \leq B\right]$. When $F = 0$, the allocation exceeds the global budget: the static executor must interrupt materialization before completing all slots, resulting in a \emph{budget-exhaustion event} (BE). When $F = 1$, the allocation fits within the budget; whether the plan succeeds depends on retrieval quality and answer generation, not on budget exhaustion.
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/budget_mismatch.pdf}
+\caption{(a) Under static allocation, independent per-slot budgets (4+4+4=12) can exceed the global budget $B = 8$, causing truncation; the budget-aware flat planner constrains the total. (b) Confusion matrix on 350 frozen deep plans: $\sum a_i > B$ is necessary (recall 1.0) but not sufficient (precision 0.533) for budget exhaustion.}
+\label{fig:budge}
+\end{figure}
+
 \paragraph{Budget-exhaustion as a necessary condition.}
-Under the static allocation implementation, every observed budget-exhaustion event satisfies $F = 0$: the sum of static allocations exceeded the global budget. Formally, $\Pr[F = 0 \mid \text{BE observed}] \geq \Pr[F = 0 \mid \text{BE observed}]$. The contrapositive is $F = 1 \Rightarrow \text{no BE under static execution}$. This is a necessary condition, not a sufficient one: a plan with $F = 0$ may still terminate without budget exhaustion if the executor's other stopping criteria (step limit, LLM-call limit, early convergence) trigger first.
+Under the static allocation implementation, every observed budget-exhaustion event satisfies $F = 0$: the sum of static allocations exceeded the global budget. Formally, $\Pr[F = 0 \mid \text{BE observed}] = 1$: every recorded budget exhaustion was preceded by an infeasible allocation. The contrapositive is $F = 1 \Rightarrow \text{no BE under static execution}$. This is a necessary condition, not a sufficient one: a plan with $F = 0$ may still terminate without budget exhaustion if the executor's other stopping criteria (step limit, LLM-call limit, early convergence) trigger first.
 
 \paragraph{Objective.}
 We formulate physical planning as constrained optimization: maximize expected evidence acquisition and answer quality subject to the global retrieval-call budget $B$. The key insight is that the logical plan $P$ is fixed (determined at compile time by the slot compiler), while the physical allocation $A$ is the optimization variable. The budget-feasibility diagnosis operates on $P$ at compile time; the dispatch policy selects the allocation strategy at execution time based on structural depth.

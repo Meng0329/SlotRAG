@@ -2,10 +2,10 @@
 Adaptive-RAG \cite{adaptiverag} learns a classifier over raw-question complexity to select among no-retrieval, single-step, and iterative retrieval strategies. SlotRAG operates at a different decision point: it does not classify raw-question complexity but instead selects a physical execution strategy for an already-compiled evidence plan. The gate in SlotRAG is deterministic and structurally grounded; the classifier in Adaptive-RAG is learned and query-surface-based.
 
 \paragraph{Structured and programmatic retrieval.}
-Several recent systems represent multi-hop reasoning as structured programs or logical plans. PlanRAG \cite{planrag} constructs logical query trees and optimizes them with a cost model before iterative execution, focusing on the construction and optimization of the reasoning tree itself. PyRAG \cite{pyrag} represents multi-hop reasoning as executable programs that compose retrieval and reasoning steps. DynaKRAG \cite{dynakrag} learns evidence control strategies for multi-hop retrieval. These systems address the upstream planning problem; SlotRAG addresses the downstream execution problem: given an already-compiled evidence plan, how should its subgoals be physically materialized under a hard global budget? SlotRAG is not novel merely because retrieval is represented structurally; the contribution lies in the typed evidence intermediate representation, the compile-time feasibility diagnosis, and the execution layer.
+Several recent systems represent multi-hop reasoning as structured programs or logical plans. PlanRAG \cite{planrag} constructs logical query trees and optimizes them with a cost model before iterative execution, focusing on the construction and optimization of the reasoning tree itself. PyRAG \cite{pyrag} represents multi-hop reasoning as executable programs that compose retrieval and reasoning steps. PROGRAM \cite{program} optimizes retrieval programmatically with generative reasoning and augmented multi-queries. DynaKRAG \cite{dynakrag} learns evidence control strategies for multi-hop retrieval; sufficiency-judging methods such as S2G-RAG~\cite{s2grag} decide when retrieved evidence suffices before further retrieval. These systems address the upstream planning problem or the stopping decision; SlotRAG addresses the downstream execution problem: given an already-compiled evidence plan, how should its subgoals be physically materialized under a hard global budget? SlotRAG is not novel merely because retrieval is represented structurally; the contribution lies in the typed evidence intermediate representation, the compile-time feasibility diagnosis, and the execution layer.
 
 \paragraph{Budget-aware and resource-adaptive methods.}
-Resource-adaptive RAG systems allocate budgets dynamically across retrieval steps. PAGE-RAG \cite{pagerag} promotes evidence through provenance-aware graphs under fixed budgets. Know Before You Fetch \cite{knowbeforeyoufetch} calibrates retrieval-budget allocation to reduce waste. These methods focus on candidate-level or retrieval-triggering decisions; SlotRAG operates on a different abstraction: the physical allocation over compiled typed evidence requirements. The distinction is between selecting what to retrieve and allocating how to execute a plan whose requirements are already specified.
+Resource-adaptive RAG systems allocate budgets dynamically across retrieval steps. PAGE-RAG \cite{pagerag} promotes evidence through provenance-aware graphs under fixed budgets. Know Before You Fetch \cite{knowbeforeyoufetch} calibrates retrieval-budget allocation to reduce waste. PruneRAG \cite{prunerag} prunes query-decomposition trees to control cost across retrieval and generation. These methods focus on candidate-level, decomposition-level, or retrieval-triggering decisions; SlotRAG operates on a different abstraction: the physical allocation over compiled typed evidence requirements. The distinction is between selecting what to retrieve or how deeply to decompose, and allocating how to execute a plan whose requirements are already specified.
 
 \paragraph{Iterative multi-hop reasoning.}
 IRCoT \cite{ircot} interleaves retrieval with chain-of-thought reasoning, letting each reasoning step trigger the next retrieval. ReAct \cite{react} alternates between action (retrieval) and observation (reasoning) in an agentic loop. GraphRAG \cite{graphrag} leverages knowledge-graph structure for retrieval. These represent strong adapted baselines on multi-hop benchmarks. SlotRAG differs by committing the full evidence plan before execution, making the execution strategy a property of the plan rather than of the reasoning trajectory.
@@ -22,19 +22,20 @@ A growing body of work calls for RAG evaluation under matched budgets with expli
 Table~\ref{tab:positioning} summarizes the comparison across decision point, decision input, learnedness, plan explicitness, and global-budget feasibility. Entries are based on the cited papers' own descriptions.
 
 \begin{table}[t]
-\centering\small
-\begin{tabular}{@{}p{2.1cm}p{2.5cm}p{2.4cm}p{1.1cm}p{1.6cm}p{1.9cm}@{}}
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llllll@{}}
 \toprule
-\textbf{Method} & \textbf{Decision input} & \textbf{Decision point} & \textbf{Learned?} & \textbf{Explicit plan?} & \textbf{Global budget feasibility?} \\
+\textbf{Method} & \textbf{Decision input} & \textbf{Decision point} & \textbf{Learned?} & \textbf{Explicit plan?} & \textbf{Budget feasibility?} \\
 \midrule
-Adaptive-RAG \cite{adaptiverag} & Raw question & Retrieval strategy per query & Yes (classifier) & No & No \\
-PlanRAG \cite{planrag} & Logical query tree & Tree construction + cost optimization & Partially & Yes & No \\
-PyRAG \cite{pyrag} & Question & Executable program composition & No & Yes & No \\
-PAGE-RAG \cite{pagerag} & Evidence graph & Candidate evidence promotion & No & Partial & Fixed budget \\
-Know Before You Fetch \cite{knowbeforeyoufetch} & Query & Retrieval budget calibration & Partial & No & Yes (calibration) \\
-\textbf{SlotRAG} & \textbf{Compiled typed plan} & \textbf{Physical allocation strategy} & \textbf{No} & \textbf{Yes} & \textbf{Yes (feasibility diagnosis)} \\
+Adaptive-RAG & Raw question & Retrieval strategy/query & Yes (classifier) & No & No \\
+PlanRAG & Logical query tree & Tree construction + cost & Partially & Yes & No \\
+PyRAG & Question & Program composition & No & Yes & No \\
+PAGE-RAG & Evidence graph & Candidate promotion & No & Partial & Fixed budget \\
+Know Before You Fetch & Query & Budget calibration & Partial & No & Yes \\
+\textbf{SlotRAG} & \textbf{Typed plan} & \textbf{Allocation strategy} & \textbf{No} & \textbf{Yes} & \textbf{Yes (diagnosis)} \\
 \bottomrule
-\end{tabular}
-\caption{Differential positioning against related work. SlotRAG's decision point is downstream: it selects the physical allocation strategy for an already-compiled evidence plan and tests whether that allocation is globally feasible under the retrieval budget.}
+\end{tabular}}%
+\caption{Differential positioning. SlotRAG selects the physical allocation strategy for an already-compiled evidence plan and tests whether that allocation is globally feasible under the retrieval budget.}
 \label{tab:positioning}
 \end{table}

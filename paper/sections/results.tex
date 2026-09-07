@@ -3,16 +3,17 @@
 We evaluate the compile-time feasibility diagnosis against frozen confirmatory executions on 350 deep eligible plans under matched budget $B = 8$.
 
 \begin{table}[t]
-\centering\small
+\centering
+\resizebox{0.9\columnwidth}{!}{%
 \begin{tabular}{lrr}
 \toprule
-& \textbf{Observed: No BE} & \textbf{Observed: BE} \\
+& \textbf{Obs.: No BE} & \textbf{Obs.: BE} \\
 \midrule
-Predicted: Feasible ($\sum a_i \leq 8$) & TN = \textbf{76} & FN = \textbf{0} \\
-Predicted: Infeasible ($\sum a_i > 8$) & FP = \textbf{128} & TP = \textbf{146} \\
+Pred. feasible ($\sum a_i \leq B$) & TN = \textbf{76} & FN = \textbf{0} \\
+Pred. infeasible ($\sum a_i > B$) & FP = \textbf{128} & TP = \textbf{146} \\
 \bottomrule
-\end{tabular}
-\caption{Feasibility confusion matrix on 350 frozen deep plans. The prediction is $\sum a_i > B$ (infeasible); the outcome is budget exhaustion (BE). Positive = infeasible, positive outcome = BE.}
+\end{tabular}}%
+\caption{Feasibility confusion matrix on 350 frozen deep plans. Prediction is $\sum a_i > B$ (infeasible); outcome is budget exhaustion (BE). Positive = infeasible, positive outcome = BE.}
 \label{tab:confusion}
 \end{table}
 
@@ -63,6 +64,13 @@ Exact $p$ & \multicolumn{2}{c}{0.7428} \\
 
 \noindent The chain variant uses importance $\tau = 2(i+1) - 1$ for slot $i$ in the longest chain, giving downstream slots higher allocation priority. On deep plans, the chain law yields $\Delta$EM $= +0.0086$ ($p = 0.743$, 95\% CI includes zero). The accuracy improvement is not statistically significant. The final system uses flat for simplicity: a dependency-weighted allocator that is not significantly more accurate than a uniform one does not justify its additional conceptual complexity.
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/three_arm_ablation.pdf}
+\caption{Three-arm comparison on 350 deep executable plans (matched budget $B = 8$). (a) Answer quality: chain vs.\ flat $\Delta$EM $= +0.0086$ ($p = 0.743$), not significant. (b) Budget-exhausted rate: flat and chain both eliminate BE; static loses 41.7\% of plans to budget exhaustion. Budget-aware optimization explains the principal improvement; chain importance does not.}
+\label{fig:three_arm}
+\end{figure}
+
 \subsection{Structure-Gate Exploratory Analysis (RQ5)}\label{sec:results:gate}
 
 \subsubsection{Shallow-regime harm.}
@@ -86,16 +94,8 @@ $p$ & \multicolumn{2}{c}{$< 0.001$} \\
 
 \begin{figure}[t]
 \centering
-\small
-\begin{tabular}{@{}p{2.6cm}p{3.0cm}p{3.0cm}@{}}
-\toprule
-\textbf{Structural regime} & \textbf{Evidence level} & \textbf{Flat $-$ Static $\Delta$EM} \\
-\midrule
-Shallow ($\texttt{hops} < 2$, $n = 8{,}085$) & \emph{exploratory} & $-0.021$ \quad (gray) \\
-Deep ($\texttt{hops} \geq 2$, $n = 350$) & \emph{confirmatory} & $+0.077$ \quad (black) \\
-\bottomrule
-\end{tabular}
-\caption{Regime-sensitive treatment effect of budget-aware flat allocation. The shallow effect is exploratory (large-scale retrospective trace); the deep effect is confirmatory (frozen matched-budget validation). Evidence levels are visually distinguished and not equated.}
+\includegraphics[width=\columnwidth]{figures/regime_effect.pdf}
+\caption{Flat $-$ Static $\Delta$EM by structural regime. The shallow effect is \emph{exploratory} (large-scale historical trace, $n = 8{,}085$); the deep effect is \emph{confirmatory} (frozen matched-budget validation, $n = 350$). Independent shallow confirmation was infeasible because the earlier census did not retain full frozen plans for shallow items.}
 \label{fig:gate}
 \end{figure}
 

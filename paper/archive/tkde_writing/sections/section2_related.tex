@@ -1,0 +1,81 @@
+\section{Related Work and Positioning}
+\label{sec:related}
+
+% RW-P1 — Multi-hop / iterative RAG
+Prior multi-hop and agentic RAG systems improve evidence acquisition by
+iterating retrieval, reformulating queries, or traversing explicit structures.
+Their central strength is adaptive access to later-hop evidence. However, the
+information need to be satisfied and the physical actions used to satisfy it
+are often coupled in a method-specific control flow, making equivalent evidence
+goals difficult to compare and optimize across alternative executions. We do
+not claim these systems cannot plan; rather, the evidence condition to be met
+and the retrieval procedure that meets it are not separated in a way an
+optimizer can exploit.
+
+% RW-P2 — Planning and executable-program RAG
+Recent work has made RAG increasingly explicit: PlanRAG organizes atomic queries
+into logical query trees, while PyRAG exposes retrieval and reasoning as
+executable programs. These advances improve inspectability and planning.
+SlotRAG addresses a different systems question: how to represent the evidence
+conditions that must hold independently of the physical retrieval strategy, and
+how to optimize multiple physical realizations of the same evidence program
+under runtime uncertainty. The contribution is not ``also executable''; it is
+the separation of a typed, optimizer-visible evidence program from the physical
+plan that realizes it, and the requirement-aware allocation over that
+separation.
+
+% RW-P3 — Learned adaptive retrieval/control
+A complementary line learns policies for deciding when and how to retrieve from
+an evolving state (DynaKRAG; active RAG; stopping policies). SlotRAG
+deliberately separates prediction from optimization: learned or derived
+estimators predict properties such as evidence yield, selectivity, failure
+probability, and resource cost, while a deterministic allocator uses those
+estimates to assign execution order, retrieval implementation, and budget to
+each requirement. The separation makes the allocation auditable and the
+estimator swappable; general plan re-enumeration and dominance pruning across
+arbitrary graph topologies are future work under a branching execution
+model.
+
+% RW-P4 — Declarative semantic data systems
+Declarative AI data systems have already demonstrated the value of semantic
+operators, physical alternatives, cost estimation, and adaptive execution
+(LOTUS, Palimpzest/Abacus, Sema). Their workloads are general semantic data
+transformations. SlotRAG specializes these systems principles to dependent
+evidence acquisition, where operator utility is defined by progress toward
+unresolved evidence requirements and where provenance and evidence survival
+into the answer context are first-class execution outcomes. The objective
+(Equation~\ref{eq:objective}) is deliberately not a generic cost optimizer:
+utility is credited only for marginal progress on requirements still
+unsatisfied, which distinguishes it from cost or relevance optimization over
+general transformation pipelines.
+
+% RW-P5 — Positioning synthesis
+Table~\ref{tab:positioning} positions SlotRAG along four dimensions:
+declarative evidence requirements, a typed evidence algebra, logical/physical
+separation, and requirement-aware physical planning. The contribution is not any
+isolated primitive---planning, executable programs, learned estimates, semantic
+operators, and adaptive execution all exist---but an evidence-centric execution
+model that jointly provides these under explicit budgets, with evidence state
+as the interface between the declarative program and physical optimization.
+
+\begin{table}[t]
+\centering
+\caption{Positioning of SlotRAG against closest work along four dimensions.
+\checkmark\ = first-class/central; $\circ$ = partial/peripheral; --- = absent.
+Positioning is by design/method only; none of the listed systems (PlanRAG,
+PyRAG, LOTUS, Sema) was re-run as an experimental baseline in this paper---they
+are cited as related work, not as evaluated competitors.}
+\label{tab:positioning}
+\small
+\begin{tabular}{lccccc}
+\toprule
+ & SlotRAG & PlanRAG & PyRAG & LOTUS & Sema \\
+\midrule
+Declarative evidence requirements & \checkmark & $\circ$ & $\circ$ & --- & $\circ$ \\
+Typed evidence algebra w/ state transitions & \checkmark & --- & --- & $\circ$ & --- \\
+Logical/physical separation & \checkmark & $\circ$ & --- & \checkmark & \checkmark \\
+Requirement-aware budgeted planning & \checkmark & $\circ$ & --- & --- & $\circ$ \\
+Provenance as first-class outcome & \checkmark & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}

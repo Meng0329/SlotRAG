@@ -19,3 +19,10 @@ These properties are first-class outputs of the compiler. They do not require ex
 
 \paragraph{Logical/physical separation.}
 The typed evidence plan fixes \emph{what} must be satisfied; the physical planner decides \emph{how} each slot's evidence is acquired and allocated. The same logical plan can be executed by a static allocation, a budget-aware allocation, or any other physical strategy. This separation is what makes matched-budget comparison well-defined: all strategies share the same logical plan, and differences in output are attributable to the physical execution, not to differences in planning.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/system_overview.pdf}
+\caption{System overview. The slot compiler transforms a question into a typed evidence plan (slots, joins, operators). The dispatch gate routes structurally deep, statically infeasible plans to the budget-aware flat planner; shallow or feasible plans use static allocation. All plans are materialized within the global retrieval-call budget $B$.}
+\label{fig:system}
+\end{figure}

@@ -1,0 +1,84 @@
+\section{Problem Formulation}
+\label{sec:problem}
+
+% PF-P1 — Workload definition
+We consider a complex information need $q$ over one or more evidence sources
+$\mathcal{D}$ under a finite resource budget $B$. Solving $q$ requires
+acquiring a set of mutually dependent evidence items before producing an answer
+(or, for verification tasks, a verdict). The system therefore optimizes not
+only answer generation but the construction of an \emph{evidence state} that
+satisfies the information requirements induced by $q$. Two properties make the
+problem interesting rather than a single lookup. First, the evidence items are
+\emph{dependent}: binding one item (e.g., an entity) is a precondition for
+acquiring another (e.g., the relation that connects it to a second entity).
+Second, the system operates under \emph{partial information}: whether a bridge
+binding exists, how many candidates a retrieval step will return, and whether
+the answer model can use the materialized evidence are all uncertain before
+execution. A plan must therefore commit resources before the outcomes that
+determine its success are observed.
+
+% PF-P2 — Evidence item
+An evidence item is represented as a typed tuple
+$e = \langle \mathit{id}, \mathit{type}, \mathit{value}, \mathit{source},
+\mathit{provenance}, \mathit{bindings}, \mathit{cost}, \mathit{quality}
+\rangle$ (\code{EvidenceRecord}). Unlike an untyped text chunk, this
+representation exposes the properties downstream operators and the optimizer
+need: the \emph{type} determines which operators can consume it, the
+\emph{source} and \emph{provenance} make it traceable, the \emph{bindings}
+record which variables it instantiates, and \emph{cost}/\emph{quality} let the
+optimizer reason about resource consumption and expected utility. Treating an
+evidence item as a first-class record rather than a passage string is what
+makes typed composition and requirement-aware optimization well-defined.
+
+% PF-P3 — Evidence requirement
+An evidence requirement $r$ specifies a condition that must be satisfied rather
+than an action that must be executed (\code{EvidenceRequirement}): a set of
+variables to bind, an expected evidence type, an importance, and a status
+(\code{unresolved}/\code{partial}/\code{satisfied}). Requirements may depend on
+bindings produced by other requirements; this dependency is expressed as a
+relation over requirement ids and induces a dependency graph that
+\emph{constrains}---but does not fully determine---the legal execution order.
+The distinction between \emph{condition} and \emph{action} is the crux of the
+paper's positioning: the information need is stable, while the physical actions
+used to satisfy it are revisable and budget-bound.
+
+% PF-P4 — Evidence state
+Execution evolves an evidence state $S_t$ (\code{EvidenceState}) containing the
+acquired evidence, the current bindings, each requirement's status, the
+execution history, and the realized resource usage. Because retrieval success,
+selectivity, and evidence quality are only partially observable before
+execution, each state transition can in principle change both the feasible
+action space and the preferred physical plan. In the current system the
+execution topology is chain-only, so the feasible action space is a singleton
+order and state transitions change bindings but not the order; the formal
+object is nonetheless the same one over which the branching-execution extension
+would operate (Section~\ref{sec:execution}).
+
+% PF-P5 — Optimization objective
+We formulate physical planning as constrained optimization: maximize expected
+satisfaction of weighted evidence requirements and answer-facing evidence
+utility subject to explicit retrieval, context-token, latency, and optional
+monetary budgets. The objective (Equation~\ref{eq:objective}) separates task
+utility from operational constraints. Utility is credited only for progress on
+unresolved requirements; a requirement's importance weight is derived from its
+dependency depth by the chain law ($\tau = 2d-1$) on well-defined chains. This
+formulation enables \emph{matched-budget} comparison: two plans are compared at
+the same budget ceiling, and the realized cost dimension is reported alongside
+quality rather than hidden.
+
+% PF-P6 — Why optimization is non-trivial
+The optimization problem is combinatorial because each logical operator may
+admit multiple physical implementations, dependent operators have partially
+constrained orderings, and budget must be allocated before uncertain evidence
+yields are observed. Concretely, the search space is the product of legal
+orders, per-requirement physical implementations, and budget allocations.
+Section~\ref{sec:optimizer} derives the resulting search problem and motivates
+the allocation procedure: on the well-defined chains that dominate our
+workloads the dependency graph admits exactly one legal order, so the
+procedure reduces to an importance-weighted ($\tau = 2d-1$) budget allocation
+over a fixed order; on general graphs it falls back to bounded enumeration with
+dominance pruning. The non-triviality is not merely
+computational: because yields are uncertain, a plan that spends more on a
+high-importance downstream requirement can be strictly better than a cheaper
+plan even when the cheaper plan is closer to the budget ceiling---so a
+cost-only or relevance-only objective is provably insufficient.
