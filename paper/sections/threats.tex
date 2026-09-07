@@ -1,0 +1,20 @@
+\paragraph{Single generator.}
+All experiments use Qwen3.5-9B as both the plan compiler and the answer generator. The results characterize the budget-feasibility mechanism under this specific model. The feasibility diagnosis ($F(P, A, B)$) is model-independent, but the accuracy effects of the flat planner and gate are model-dependent. A different generator may have a different selection ceiling or sensitivity to evidence quality, changing the magnitude of the flat-vs-static difference.
+
+\paragraph{Benchmark dependence.}
+HotpotQA, 2WikiMultiHopQA, and MuSiQue are used throughout. The shallow-regime harm is concentrated on 2WikiMultiHop; the findings may not transfer to datasets with different structural characteristics or different answer-distribution properties.
+
+\paragraph{Structural measure.}
+$\texttt{structural\_hops}$ is a plan-structure metric computed from the compiled evidence graph's join and operator topology. It is not a gold-standard reasoning depth; different plans for the same question may receive different structural depth values depending on how the slot compiler decomposes the question. The census classified 361 plans as deep ($\texttt{hops} \geq 2$) and 6,133 as shallow ($\texttt{hops} < 2$) on the validation set, but this classification depends on the specific slot compiler.
+
+\paragraph{Gate evidence level.}
+The shallow-regime harm and A' vs.\ always-flat improvement are established through large-scale \emph{exploratory} retrospective analysis (8,632 plans, permissive budget), not through confirmatory matched-budget experiments. The independent shallow confirmatory test (H-STRUCT-4) was pre-registered but could not be executed because the V1.2 frozen census did not persist full SlotPlan payloads for shallow questions, and the protocol prohibited re-compilation. The gate is therefore empirically motivated but not independently confirmed under the $B = 8$ matched protocol.
+
+\paragraph{Plan compiler.}
+Slot plans are compiled by an LLM (Qwen3.5-9B) and validated through deterministic syntax checking. Different compilers or different calls may produce different plans for the same question, potentially changing the structural depth classification and the static allocation. The frozen protocol ensures that the same plan is used across all arms in paired comparisons, but the results are specific to this compiler's output distribution.
+
+\paragraph{Natural prevalence.}
+Deep eligible plans ($\texttt{hops} \geq 2$, physically executable) constitute approximately 5.4\% of the validation natural workload (361 / 6,494). The population-level effect is bounded by this prevalence. On workloads with a higher fraction of deep plans, the gate's value would increase proportionally; on workloads dominated by shallow plans, it would decrease.
+
+\paragraph{H-STRUCT-4 frozen-shallow unavailability.}
+The V1.2 frozen census persisted only plan hashes (not full SlotPlan JSON) for the 6,133 shallow questions. This is an infrastructure limitation, not a method limitation: the census was designed to support the deep-eligible confirmatory evaluation, and the shallow-payload gap was not anticipated as a blocker. A future V1.3 census that persists full payloads for all questions would enable the independent shallow confirmation.

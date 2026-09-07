@@ -1,15 +1,13 @@
-Under a matched budget, a slot-based RAG system wins one of four benchmark
-datasets, ties a second, and loses two on inherent answer-selection accuracy:
-Strongest-Baseline Coverage is $25\%$. The architecture succeeds when
-retrieval is the bottleneck and saturates when selection is. A budget-fix
-ablation converts a structural \texttt{BE} collapse into real accuracy
-(MuSiQue/HotpotQA), but no local fix---nine generation-side interventions,
-four string heuristics, or deterministic operators---raises Coverage further
-under the frozen model.
+We address a systems problem in multi-hop RAG: a logically valid evidence decomposition need not be physically executable under a hard global retrieval budget. We formalize this as a budget-feasibility problem over typed evidence plans and make three contributions.
 
-We report this honestly: no ``beats SOTA'', \texttt{acc\_ok} never conflated
-with \texttt{acc\_full}, non-determinism disclosed, and every failing
-intervention documented. The practical lesson for slot-based RAG is that
-retrieval-side engineering is largely amortized---the open lever is a
-stronger selector, not more evidence or more prompt control. We leave that,
-and the full 12{,}557-sample SEALED run, as future work.
+\paragraph{Typed evidence plans} separate multi-hop evidence requirements---slots, joins, operators---from their physical materialization, exposing typed couplings as a first-class object that enables compile-time analysis.
+
+\paragraph{Compile-time feasibility diagnosis} identifies a necessary condition for static budget exhaustion: independent per-slot allocations that sum to exceed the global budget. Confirmed against frozen matched-budget executions on 350 deep plans, this condition has perfect recall (1.0) and 0.533 precision; it is necessary but not sufficient.
+
+\paragraph{Structure-gated budget-feasible planning} applies a budget-aware flat optimizer selectively: on deep plans ($\texttt{structural\_hops} \geq 2$) with statically infeasible allocations, the planner improves answer quality by 7.7 EM points and eliminates all 146 budget-exhaustion events under the matched protocol ($p < 10^{-6}$). On shallow plans, the same optimizer can reduce answer quality; the gate protects these plans by retaining static execution.
+
+A dependency-sensitive importance law is ablated: it yields a marginal, statistically insignificant accuracy improvement over the uniform flat optimizer on deep plans ($p = 0.743$) and is therefore not part of the final method.
+
+The independent shallow-regime confirmation was pre-registered but could not be executed because frozen shallow plan payloads were unavailable. The gate's benefit on the shallow regime is supported only by large-scale exploratory evidence; an independent matched-budget confirmation remains an open requirement.
+
+The contribution is a mechanism for regime-sensitive physical planning whose confirmatory benefit is established on the deep plans where it was designed to operate, and whose shallow-regime protection is empirically motivated but not independently confirmed. This honest scoping---what is confirmed, what is exploratory, and what could not be tested---is a property of the evaluation, not a limitation.

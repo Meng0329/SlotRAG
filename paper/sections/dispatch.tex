@@ -1,0 +1,31 @@
+\paragraph{Structural-depth gate.}
+The structure-gated dispatch policy applies the budget-aware flat planner selectively, based on the plan's structural depth:
+
+\begin{quote}
+\small
+\textbf{Algorithm 1:} Regime-Sensitive Dispatch $(P, B)$\\
+1.\quad $\texttt{hops} \leftarrow \texttt{structural\_hops}(P)$\\
+2.\quad $F \leftarrow \mathbf{1}[\sum_{s} a^{\text{static}}_s \leq B]$\\
+3.\quad \textbf{if} $F = 0$ \textbf{and} $\texttt{hops} \geq 2$:\\
+\quad\quad \textbf{return} BudgetAwareFlatPlanner$(P, B)$\\
+4.\quad \textbf{else}:\\
+\quad\quad \textbf{return} StaticAllocation$(P, B)$
+\end{quote}
+
+\noindent The threshold $\texttt{hops} \geq 2$ was determined through large-scale retrospective analysis (Section~\ref{sec:results:gate}). It is applied as a fixed rule at execution time; it is not a learned threshold and is not re-optimized for any experimental outcome.
+
+\paragraph{Rationale.}
+The gate targets the regime where the budget-aware planner provides benefit: structurally deep plans ($\texttt{hops} \geq 2$) with statically infeasible allocations ($F = 0$). On these plans, the static allocator produces budget-exhaustion events, and the flat planner reallocates calls to fit within $B$. On shallow plans ($\texttt{hops} < 2$), exploratory analysis shows that the flat planner can reduce answer quality (Section~\ref{sec:results:gate}); the gate retains static execution in this regime.
+
+\paragraph{Properties.}
+The gate is:
+\begin{itemize}
+\item \emph{Deterministic}: given the same plan, it always produces the same dispatch decision.
+\item \emph{Structural}: the decision is based on the plan's topological depth, not on query surface features or a learned classifier.
+\item \emph{Non-parametric}: the threshold is fixed and does not introduce tunable parameters.
+\end{itemize}
+
+The gate does not modify the logical plan; it selects which physical allocation strategy is applied to it. Plans dispatched through the flat planner are executed with globally consistent allocations that satisfy $\sum_s a_s \leq B$. Plans dispatched through static execution may encounter budget-exhaustion events when $F = 0$.
+
+\paragraph{Execution semantics.}
+Physical execution follows the dispatched allocation. Retrieval calls are issued per-slot according to the allocation; each call retrieves candidate passages from a hybrid sparse/dense index, which are bound to the slot's variables and materialized as typed evidence records. When a slot depends on a binding from a predecessor (join edge in $J$), the binding is available only after the predecessor's materialization step completes. The executor enforces the global budget counter; when the counter reaches $B$, remaining slots are truncated and their status is recorded as \code{budget\_exceeded}. All evidence materialized up to that point is available to the generator.

@@ -1,7 +1,8 @@
 # TKDE_STRUCTURAL_POLICY_POSITIONING.md — Differentiation Statement
 
-> **Date:** 2026-09-03 (H-STRUCT-3 后更新)
+> **Date:** 2026-09-07 (v4 paper rewrite; RAG-on-a-Diet dropped)
 > **Purpose:** Position the structure-gated physical planning contribution against related adaptive/topology-aware RAG work
+> **Paper source:** paper/main.tex v4 (TKDE, acmart sigconf, 3 contributions: C1 typed plans, C2 feasibility diagnosis, C3 structure-gated planning)
 > **Rules (§14):** 不使用 "first adaptive RAG" / "first budget-aware RAG" / "first query planner for RAG" / "first structure-aware RAG"。gate 主题词 = budget-aware **flat** 物理优化器（非 chain），chain 已降级 ablation。
 
 ---

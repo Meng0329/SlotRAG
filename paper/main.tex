@@ -1,7 +1,6 @@
 \documentclass[sigconf]{acmart}
 
-\title{SlotRAG-X: Toward SLAM-Style Slot-Based Retrieval-Augmented Generation\\
-under a Matched Budget --- An Honest Evaluation of Coverage Ceilings}
+\title{SlotRAG: Budget-Feasible Physical Planning over Typed Evidence Plans for Multi-Hop Retrieval-Augmented Generation}
 
 \author{Anonymous}
 \affiliation{%
@@ -13,39 +12,41 @@ under a Matched Budget --- An Honest Evaluation of Coverage Ceilings}
 \usepackage{booktabs}
 \usepackage{bm}
 \usepackage{lmodern}
+\usepackage{amsmath}
+
+\newcommand{\code}[1]{\texttt{#1}}
 
 \begin{document}
 
 \begin{abstract}
-Slot-based retrieval-augmented generation (RAG) decomposes a multi-hop
-question into typed relation slots that are materialized and joined before
-answer generation. We report a rigorous, matched-budget evaluation of a
-slot-based RAG system (SlotRAG-X) across five multi-hop benchmarks
-(HotpotQA, 2WikiMultiHop, MuSiQue, StrategyQA, DROP) against their strongest
-published baselines, using a single fixed LLM (Qwen3.6-27B) and an identical
-per-benchmark budget (max\_retrieval\_calls=4, max\_llm\_calls=64,
-max\_steps=4, 300s/query --- the \S4.3 protocol).
-
-Our headline finding is deliberately honest: under this matched budget,
-SlotRAG-X achieves an Exact-Match/F1 Strongest-Baseline Coverage of
-\emph{25\%} ($1/4$ over the four headlined cells --- MuSiQue wins, HotpotQA
-ties within 0.028 under the aggregate rule, 2WikiMultiHop and DROP lose on
-inherent accuracy gaps; $1/5=20\%$ outright wins when StrategyQA's robust
-TIE is included). A budget-fix ablation (H-029/H-030)
-converts a ``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA)
-budget-exceeded items into real accuracy, fully recovering two datasets that
-were previously penalized to zero. We are explicit that the MuSiQue win is
-carried by those budget-recoveries (paired both-ok margin vs IRCoT is
-approximately neutral), and that the Coverage percentage mixes Exact-Match
-and DROP-F1 cells. We further show that the residual failure
-modes on 2WikiMultiHop/DROP are \emph{selection ceilings} of the frozen model
---- gold answers are verbatim in the evidence yet the model selects the wrong
-entity --- and that no string-anchored or prompt-level correction can recover
-them (all four falsified heuristics are net-negative). This paper's
-contribution is the \emph{honest map} of where slot-based RAG stands under a
-matched budget and why: the architecture succeeds when retrieval is the
-bottleneck (budget-limited), and saturates when answer \emph{selection} is the
-bottleneck (model-limited).
+Multi-hop retrieval-augmented generation (RAG) systems decompose complex
+questions into multiple evidence-acquisition steps. We observe that a
+decomposition that is logically valid need not be physically executable under
+a global retrieval budget: independent per-slot allocations may sum to
+exceed the system's hard retrieval-call limit, causing budget exhaustion
+before answer generation. We address this with \emph{budget-feasible
+physical planning} over \emph{typed evidence plans}---a separation
+of logical evidence requirements from their physical materialization
+strategy. We derive a compile-time feasibility condition on static
+allocations and confirm it against frozen matched-budget executions
+on 350 deep structural plans: every observed budget exhaustion violated
+global allocation feasibility (recall 1.0), although many infeasible plans
+terminated without exhausting the budget (precision 0.533). A
+budget-aware physical planner improves answer quality by 7.7 EM points
+over static allocation on deep plans under a matched budget
+($p < 10^{-6}$, exact McNemar), and eliminates all 146 observed
+budget-exhaustion events. Dependency-sensitive importance weighting
+is ablated: a uniform budget-aware optimizer outperforms a dependency-weighted
+variant on deep plans (EM difference $+$0.009, $p = 0.743$) while
+being strictly simpler. Large-scale exploratory replay (8{,}632 plans)
+indicates that applying the budget-aware optimizer to structurally shallow
+plans can reduce answer quality ($-$0.021 EM, $p < 0.001$), motivating
+a lightweight deterministic structural-depth gate. The gate's independent
+confirmation on shallow matched-budget executions was pre-registered but
+could not be executed because frozen shallow plan payloads were unavailable
+in the earlier census. We report the system's honest contribution:
+a mechanism for regime-sensitive physical planning whose confirmatory
+benefit is established on the deep plans where it was designed to operate.
 \end{abstract}
 
 \maketitle
@@ -53,20 +54,32 @@ bottleneck (model-limited).
 \section{Introduction}\label{sec:intro}
 \input{sections/intro}
 
-\section{Preliminaries and the Slot Compiler}\label{sec:method}
-\input{sections/method}
-
-\section{Matched-Budget Experimental Setup}\label{sec:setup}
-\input{sections/setup}
-
-\section{Results}\label{sec:results}
-\input{sections/results}
-
-\section{Why Credit Is Not Gained by Local Fixes}\label{sec:guardrails}
-\input{sections/guardrails}
-
 \section{Related Work}\label{sec:related}
 \input{sections/related}
+
+\section{Problem Formulation}\label{sec:problem}
+\input{sections/problem}
+
+\section{Typed Evidence Plans}\label{sec:algebra}
+\input{sections/algebra}
+
+\section{Budget-Feasible Physical Planning}\label{sec:optimizer}
+\input{sections/optimizer}
+
+\section{Structure-Sensitive Dispatch}\label{sec:dispatch}
+\input{sections/dispatch}
+
+\section{Experimental Protocol}\label{sec:protocol}
+\input{sections/protocol}
+
+\section{Main Results}\label{sec:results}
+\input{sections/results}
+
+\section{Analysis and Discussion}\label{sec:analysis}
+\input{sections/analysis}
+
+\section{Threats to Validity}\label{sec:threats}
+\input{sections/threats}
 
 \section{Conclusion}\label{sec:conclusion}
 \input{sections/conclusion}

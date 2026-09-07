@@ -1,132 +1,132 @@
-\subsection{Main Table under Matched Budget}\label{sec:results:main}
+\subsection{Static Budget-Feasibility Diagnosis (RQ2)}\label{sec:results:c2}
 
-The headline results use full SEALED matched-budget runs. \texttt{acc\_full}
-is the mean primary score over all common items, with budget-exceeded items
-scored 0; \texttt{acc\_ok} is the mean over status-ok items only.
+We evaluate the compile-time feasibility diagnosis against frozen confirmatory executions on 350 deep eligible plans under matched budget $B = 8$.
 
 \begin{table}[t]
 \centering\small
-\begin{tabular}{lrrrrcl}
+\begin{tabular}{lrr}
 \toprule
-Dataset & $n$ & \texttt{acc\_full} (guard) & \texttt{acc\_full} (budget) & $\Delta_b$ & Baseline & Verdict\\
+& \textbf{Observed: No BE} & \textbf{Observed: BE} \\
 \midrule
-MuSiQue   & $867$ & 0.3171  & \textbf{0.5807} & $+0.0544$ & IRCoT 0.5263   & WIN\\
-HotpotQA  & $1000$ & 0.5312  & \textbf{0.7842} & $-0.0282$ & GraphRAG 0.8124 & TIE\\
-2WikiMultiHop & $1000$ & 0.6644 & \textbf{0.6901} & $-0.0548$ & IRCoT 0.7449   & LOSS\\
-DROP      & $1000$ & 0.6393  & \textbf{0.6403} & $-0.0843$ & GraphRAG 0.7246 & LOSS\\
+Predicted: Feasible ($\sum a_i \leq 8$) & TN = \textbf{76} & FN = \textbf{0} \\
+Predicted: Infeasible ($\sum a_i > 8$) & FP = \textbf{128} & TP = \textbf{146} \\
 \bottomrule
 \end{tabular}
-\caption{Matched-budget ($\S$4.3) main table. \texttt{acc\_full} scores
-budget-exceeded items as 0; budget-fix = H-029/H-030 method. Verdicts here
-are the \emph{aggregate} $\Delta$ vs each strongest baseline (Table~\ref{tab:mcnemar}
-gives the paired per-item test, which validates MuSiQue and demotes HotpotQA
-from TIE to a significant loss).}
-\label{tab:main}
+\caption{Feasibility confusion matrix on 350 frozen deep plans. The prediction is $\sum a_i > B$ (infeasible); the outcome is budget exhaustion (BE). Positive = infeasible, positive outcome = BE.}
+\label{tab:confusion}
 \end{table}
 
-\input{sections/figcoverage}
+\noindent Under static allocation, 146 of 350 plans experience budget exhaustion (41.7\%). The feasibility condition $\sum a_i > B$ correctly identifies all 146 as infeasible (recall = 1.0, FN = 0), confirming that budget exhaustion is a necessary consequence of allocation infeasibility under static execution. However, 128 additional plans are predicted infeasible but complete without budget exhaustion (FP = 128), yielding precision = 146 / 274 = 0.533.
 
+The infeasibility condition is \emph{necessary but not sufficient} for budget exhaustion. Plans with $\sum a_i > B$ may still complete if other termination criteria (step limit, LLM-call limit, early convergence) are reached first. Conversely, no plan with $\sum a_i \leq B$ experiences budget exhaustion (TN = 76, FN = 0), confirming that static budget exhaustion under this executor requires allocation infeasibility.
 
-Under the aggregate WIN/TIE/LOSS rule ($|\Delta|>0.03$), \textsc{SlotRAG-X}
-wins MuSiQue, ties HotpotQA within 0.028 of GraphRAG, and loses 2WikiMultiHop
-and DROP on inherent accuracy gaps. Strongest-Baseline Coverage is $1/4 =
-25\%$ over the four headlined matched-budget cells; over all five benchmark
-datasets including StrategyQA's robust TIE (a non-win), the outright-win rate
-is $1/5 = 20\%$ ($\S$\ref{sec:results:failure}). We report the $1/4$ figure
-as the matched-budget headline (the four cells share one accounting protocol)
-and state the $1/5$ read explicitly so the TIE is not silently dropped from
-the denominator.
+\subsection{Deep-Regime Confirmatory Evaluation (RQ3)}\label{sec:results:deep}
 
-We also test the headlined cells with an exact paired McNemar statistic
-(guard-budget vs its strongest baseline on matched \texttt{question\_id}s),
-which is the comparison that determines whether a win is genuine
-\S\ref{tab:mcnemar}. The paired flip margins are decisive: MuSiQue is a
-\emph{significant} paired win ($+64$ flips, $132$ vs $68$, $p<0.001$); the
-HotpotQA aggregate ``TIE'' demotes to a \emph{significant paired loss}
-($-38$, $22$ vs $60$, $p<0.001$); 2WikiMultiHop and DROP are significant
-paired losses (Table~\ref{tab:mcnemar}). Coverage under the paired test
-remains $1/4 = 25\%$, but MuSiQue's win---which a reviewer might dismiss as
-budget-recovery artifact---is confirmed on a head-to-head paired basis.
+The budget-aware flat planner is evaluated against static allocation on 350 deep eligible plans ($\texttt{structural\_hops} \geq 2$) under matched budget $B = 8$.
 
-% Phase 3 nominal 40% is a mixed-set directionality result and is NOT the
-% current headline; it is reported only as a labeled historical estimate.
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+& \textbf{Static} & \textbf{Flat} & $\boldsymbol{\Delta}$ \\
+\midrule
+EM & 0.1714 & \textbf{0.2486} & $+$\textbf{0.0771} \\
+BE events & \textbf{146} & \textbf{0} & $-$146 \\
+\bottomrule
+\end{tabular}
+\caption{Confirmatory results on 350 deep eligible plans (matched budget $B = 8$). Flat improves EM by 7.7 points and eliminates all 146 budget-exhaustion events.}
+\label{tab:deep}
+\end{table}
 
-\subsection{Budget-Fix Ablation: From False Collapse to Real Accuracy}\label{sec:results:budget}
+\noindent \textbf{Answer quality.} The flat planner improves EM by 7.71 points ($+$0.0771, 95\% CI $[+0.049, +0.109]$, exact McNemar $p = 1.4 \times 10^{-6}$, discordant pairs: $b = 30, c = 3$). The effect is statistically significant and practically meaningful on these deep plans.
 
-A raw $\S$4.3 accounting penalizes the guard on the cost of \emph{dual-access
-bundles}: a slot opening two binding contexts issues one 2-query batch, which
-counts as two physical calls against $\max\_\mathrm{retrieval\_calls}=4$.
-Cross-slot accumulation drives $49.4\%$ (MuSiQue) and $32.6\%$ (HotpotQA) of
-items to \texttt{BE}, scored as 0 --- a \emph{structural accounting collapse},
-not a quality signal.
+\noindent \textbf{Budget exhaustion.} The flat planner reduces budget-exhaustion events from 146 to 0 on the same 350 plans, eliminating all static BE under this protocol. This is a direct consequence of the flat planner's allocation constraint $\sum_s a_s \leq B$.
 
-Two interventions fix it. H-029 (bound-single degradation) drops a bound
-slot's 2-query bundle to one anchored question+lexical query. H-030 (cross-slot
-budget reservation) front-reserves future slots and prunes plans that cannot
-fit. Together (guard-budget), budget-exceeded collapses to $0$ on MuSiQue
-($428\!\rightarrow\!0$) and HotpotQA ($326\!\rightarrow\!0$), 2WikiMultiHop
-$75\!\rightarrow\!37$, DROP stays $0$. Recovered items are high-completion
-(MuSiQue mean 0.547, HotpotQA 0.764); matched both-ok pairs show no systematic
-regression ($143$w/$124$l/$2771$t). The headline gains:
+\subsection{Dependency-Sensitive Importance Ablation (RQ4)}\label{sec:results:ablation}
 
-\medskip
-\centerline{
-  MuSiQue $0.3171\rightarrow0.5807$ (WIN), \quad
-  HotpotQA $0.5312\rightarrow0.7842$ (TIE) }
-\medskip
-The two remaining sets are \emph{inherent} gaps, not budget: DROP ran 0
-\texttt{BE} throughout, and 2WikiMultiHop still trails IRCoT by 0.055 after
-recovering all recoverable items. Budget-fix alone does not raise Coverage; it
-surfaces the true 25\%.
+We ablate the chain importance law by comparing the uniform flat planner against a dependency-weighted chain variant on the same 350 deep plans.
 
-\emph{Honest scoping of the MuSiQue WIN.} The win should not be read as a
-per-item accuracy advantage over IRCoT. On the items both methods answer
-(matched both-ok), the paired delta is approximately neutral ($-0.010$,
-$35$w/$35$l), and the systematic margin is concentrated in the 426 items
-originally scored $0$ by the unmatched guard (budget-exceeded) that the
-budget fix rescored to their true completion. In other words, the WIN
-reflects releasing the budget-recovery signal, not beating IRCoT head-to-head
-where both answer. We report it as a WIN under the $\S$4.3 matched
-acc\_full accounting (which scores \texttt{BE} as 0), and flag that a paired
-per-item test would likely downgrade it; we do not claim systems superiority.
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+& \textbf{Flat} & \textbf{Chain} & $\boldsymbol{\Delta}$ \\
+\midrule
+EM & 0.2486 & 0.2571 & $+$0.0086 \\
+95\% CI & \multicolumn{2}{c}{$[-0.026, +0.043]$} \\
+Exact $p$ & \multicolumn{2}{c}{0.7428} \\
+\bottomrule
+\end{tabular}
+\caption{Chain vs.\ flat on 350 deep plans. The chain importance law yields a marginal, statistically insignificant accuracy improvement (exact McNemar $p = 0.743$).}
+\label{tab:ablation}
+\end{table}
 
-\subsection{Failure Attribution: Selection Ceilings}\label{sec:results:failure}
+\noindent The chain variant uses importance $\tau = 2(i+1) - 1$ for slot $i$ in the longest chain, giving downstream slots higher allocation priority. On deep plans, the chain law yields $\Delta$EM $= +0.0086$ ($p = 0.743$, 95\% CI includes zero). The accuracy improvement is not statistically significant. The final system uses flat for simplicity: a dependency-weighted allocator that is not significantly more accurate than a uniform one does not justify its additional conceptual complexity.
 
-Across 2000 items (HotpotQA + 2wiki, guard-budget), failures split into
-\emph{surface-form} truncation ($72$ HotpotQA / $8$ 2wiki; predicted
-answer is a substring of gold, e.g.\ \emph{Duane Clarridge} vs
-\emph{Duane ``Dewy'' Clarridge}), \emph{alias-in-evidence} selection failure
-($230$ / $270$; gold verbatim in the evidence yet the model picks another
-entity), and \emph{alias-not-in-evidence} retrieval gaps ($61$ / $89$).
-Alias-in-evidence is the dominant failure on both ($63\%$ / $67\%$ of
-wrongs), confirming the selection ceiling is not a retrieval artifact.
+\subsection{Structure-Gate Exploratory Analysis (RQ5)}\label{sec:results:gate}
 
-Extending the same taxonomy to the dataset we \emph{win} (MuSiQue, $474$
-guard-budget wrong), the ceiling generalizes rather than being a 2wiki
-artifact: \emph{alias-in-evidence} selection failure again dominates, at
-$230/474 = 48.5\%$ of wrongs (gold verbatim in the evidence, model picks
-another entity), with \emph{alias-not-in-evidence} retrieval gaps at
-$171/474 = 36.1\%$ and \emph{surface-form} truncation at $73/474 = 15.4\%$
-(e.g.\ \emph{Paraguay} for \emph{Alfredo Stroessner's Paraguay}). The ~25\% limit is
-therefore not a per-dataset fluke: the same selector that drives MuSiQue's
-recoverable budget-loss also caps it at the model-level ceiling once the
-budget signal is released.
+\subsubsection{Shallow-regime harm.}
+Using the historical three-arm trace (8,632 strict three-arm paired questions under permissive budget), we isolate the shallow stratum ($\texttt{structural\_hops} < 2$, $n = 8{,}085$) and compute the flat vs.\ static treatment effect.
 
-Four string-correction heuristics (longest-substring completion, boundary
-truncation, parenthetical completion, and a distribution proof of
-infeasibility) are \emph{all net-negative}, e.g.\ longest-substring completion
-nets $-452$ (HotpotQA) / $-346$ (2wiki) by pulling answers into full
-sentences. The asymmetry that defeats any such rule is visible in the wrong
-items: ``pred is contained in longer evidence'' holds for $77$--$84\%$ of
-wrong answers (the model almost always produces a well-formed fragment of the
-gold context), so a rule that extends short answers toward the longer
-evidence breaks far more correct answers than it repairs. A gold-free
-deterministic rule therefore cannot raise net accuracy; this is the
-selection-ceiling evidence (H-022, confirmed $3\times$): gold answers are
-verbatim in the evidence and post-processing yields no gain. The correct
-intervention would be a stronger selector, which is out of scope under the
-frozen-model condition.
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+& \textbf{Flat $-$ Static} & \textbf{95\% CI} \\
+\midrule
+EM (exploratory) & $-$\textbf{0.0210} & $[-0.027, -0.015]$ \\
+$p$ & \multicolumn{2}{c}{$< 0.001$} \\
+\bottomrule
+\end{tabular}
+\caption{Exploratory shallow-regime flat vs.\ static ($n = 8{,}085$, permissive budget). Flat significantly reduces EM on shallow plans.}
+\label{tab:shallow}
+\end{table}
 
-StrategyQA is a robust TIE, not a WIN: three-run mean guard $0.8815$ vs IRCoT
-$0.8833$ ($\Delta=-0.19$pt), with the decoder flip-flopping on arithmetic
-boundary items at temperature 0.
+\noindent Flat allocation reduces EM by 2.10 points on shallow plans ($p < 0.001$), with the harm concentrated in 2WikiMultiHop ($\Delta$EM $= -0.045$ on hops-0 questions) and near-zero on HotpotQA and MuSiQue shallow strata. This exploratory finding motivates the gate: applying the budget-aware planner to shallow plans does not help on average and can harm quality.
+
+\begin{figure}[t]
+\centering
+\small
+\begin{tabular}{@{}p{2.6cm}p{3.0cm}p{3.0cm}@{}}
+\toprule
+\textbf{Structural regime} & \textbf{Evidence level} & \textbf{Flat $-$ Static $\Delta$EM} \\
+\midrule
+Shallow ($\texttt{hops} < 2$, $n = 8{,}085$) & \emph{exploratory} & $-0.021$ \quad (gray) \\
+Deep ($\texttt{hops} \geq 2$, $n = 350$) & \emph{confirmatory} & $+0.077$ \quad (black) \\
+\bottomrule
+\end{tabular}
+\caption{Regime-sensitive treatment effect of budget-aware flat allocation. The shallow effect is exploratory (large-scale retrospective trace); the deep effect is confirmatory (frozen matched-budget validation). Evidence levels are visually distinguished and not equated.}
+\label{fig:gate}
+\end{figure}
+
+\subsubsection{A' vs.\ always-flat.}
+The gated policy A' (flat when $\texttt{hops} \geq 2$ and feasible, static otherwise) is compared against always-flat on the same 8,632 paired trace.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+& \textbf{A' $-$ Always-Flat} & \textbf{95\% CI} \\
+\midrule
+EM & $+$\textbf{0.0197} & $[+0.014, +0.026]$ \\
+$p$ & \multicolumn{2}{c}{$< 0.001$} \\
+\bottomrule
+\end{tabular}
+\caption{Policy A' vs.\ always-flat (exploratory, $n = 8{,}632$). The gate improves EM by 2.0 points by protecting shallow plans.}
+\label{tab:gate}
+\end{table}
+
+\noindent The gate improves EM by 1.97 points ($p < 0.001$) by protecting the 93.6\% of questions that are shallow from the flat planner's shallow-regime harm. This is the direct evidence that structure-sensitive dispatch is beneficial.
+
+\subsubsection{Attempted independent confirmation (H-STRUCT-4).}
+A confirmatory shallow-regime matched-budget evaluation was pre-registered: n = 1,428 required (power analysis, two-sided $\alpha = 0.05$, 80\% power), drawn from the 6,133 shallow census questions. The V1.2 census, however, did not persist full SlotPlan payloads for shallow questions: only structural metadata and plan hashes were stored, not the SlotPlan JSON required for matched-budget execution. The pre-registered protocol prohibited re-compilation of plans, and no pre-frozen shallow plan snapshots existed in the repository.
+
+The independent shallow confirmation could not be executed. Zero answers were generated, zero models were contacted, and zero counterexamples were produced. The gate's benefit on the shallow regime remains supported only by the exploratory trace; an independent confirmation under the frozen matched-budget protocol remains an open requirement.
+
+\subsection{Population-Level Effect}\label{sec:results:population}
+
+The deep-eligible stratum constitutes approximately 5.39\% of the validation natural workload (361 eligible / 6,494 total). The population-level treatment effect of A' is:
+
+$\text{ATE}_{\text{pop}}(\text{A'}) = P(\text{eligible} \wedge \text{executable}) \times \text{ATE}_{\text{exec}} = 0.054 \times 0.0771 = +0.00416 \text{ EM/question}.$
+
+\noindent This is a small but statistically bounded effect (95\% CI $[+0.0025, +0.0059]$, not containing zero). The gate's value is not in large population-level accuracy gains but in eliminating matched-budget budget-exhaustion events on the structural regime where they occur, and in protecting shallow plans from harm.

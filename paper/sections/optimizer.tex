@@ -1,0 +1,19 @@
+\paragraph{Static allocation.}
+The static allocator distributes retrieval calls evenly across slots: each slot $s$ receives $a_s = \lfloor B / |S| \rfloor$ calls, with up to one additional call for the first $B \bmod |S|$ slots. This is the baseline physical strategy: it makes no use of the plan's structural information and treats all slots as equally demanding.
+
+\paragraph{Budget-feasibility diagnosis.}
+Before execution, the system evaluates $F(P, A_{\text{static}}, B)$ on the compiled plan. When $F = 0$, the static allocation is known in advance to exceed the global budget. This diagnosis is:
+\begin{itemize}
+\item \emph{Compile-time}: computed from the plan's slot count and budget, with no retrieval or generation cost.
+\item \emph{Necessary for budget exhaustion}: under static execution, $F = 0$ is a necessary condition for budget-exhaustion events (every BE violated feasibility; see Section~\ref{sec:results:c2}).
+\item \emph{Not sufficient}: many plans with $F = 0$ complete without exhausting the budget, because other termination criteria (step limit, LLM-call limit, early completion) may trigger first.
+\end{itemize}
+
+\paragraph{Budget-aware flat planner.}
+When $F = 0$ under static allocation, the budget-aware flat planner reallocates retrieval calls to fit within $B$ while maximizing evidence acquisition. It assigns equal importance weight to all slots and solves: $\max_{A} \sum_s u_s(a_s)$ subject to $\sum_s a_s \leq B$, where $u_s(a_s)$ is a concave evidence-utility function that models diminishing returns on additional retrieval calls. The planner is flat (uniform importance weights) by design: it does not require dependency-depth weights or any learned estimator. The uniform weights were chosen after ablating a dependency-weighted variant (Section~\ref{sec:results:ablation}).
+
+\paragraph{Feasibility-aware routing.}
+The planner always produces an allocation that satisfies $\sum_s a_s \leq B$, so the feasibility predicate $F = 1$ holds for all plans routed through the budget-aware planner. The planner thus eliminates budget-exhaustion events on the plans it executes. Its effect on answer quality is the subject of the confirmatory evaluation in Section~\ref{sec:results:deep}.
+
+\paragraph{Computational cost.}
+The feasibility diagnosis is $O(1)$: it checks whether $|S| \cdot \lfloor B / |S| \rfloor + (B \bmod |S|) \leq B$, which is always true by construction for the static case, or equivalently whether the static allocation's total exceeds $B$. The flat planner solves a concave allocation problem that is solvable in $O(|S| \log |S|)$ time. Both are negligible relative to the LLM and retrieval costs of the evidence-acquisition pipeline.

@@ -1,0 +1,21 @@
+\paragraph{Design principles.}
+Typed evidence plans are designed around three principles. First, programs are \emph{declarative}: a plan specifies what evidence goals must be met rather than which retrieval procedure to run. Second, operators are \emph{typed and composable}: each operator has a typed input/output contract, so programs are built by composing operators whose evidence types are compatible. Third, the properties an optimizer needs---expected cost, dependency structure, utility---remain \emph{explicit} as typed fields rather than hidden inside prompts.
+
+\paragraph{Slot compiler.}
+The slot compiler transforms a natural-language question $q$ into a typed evidence plan $P = (S, J, O)$. For each evidence requirement $r$, the compiler specifies: a set of variables to bind, an expected evidence type, and the slot's dependencies (via $J$) over other slots. The compiler operates via LLM generation followed by deterministic syntax validation; once validated, the plan is a fixed intermediate representation that all downstream components consume without further LLM calls.
+
+The plan's structure exposes typed evidence requirements explicitly. Join edges $J$ encode which slots must share bound variables (e.g., a bridge entity retrieved by one slot must be available to constrain the retrieval query of a dependent slot). Relational operators $O$ apply over materialized slot outputs when the question requires comparison (e.g., ``greater than'') or enumeration (e.g., ``all entities of type X'').
+
+\paragraph{Structural analysis.}
+Given a compiled plan $P$, the following properties are computed deterministically (no LLM calls):
+\begin{itemize}
+\item \emph{Slot count} $|S|$: the number of evidence requirements.
+\item \emph{Edge count} $|J| + |O|$: the number of join and operator edges.
+\item \emph{Structural depth} $\texttt{structural\_hops}(P)$: the longest path length in the structural evidence graph $G_P = (S, J \cup O)$.
+\item \emph{Static allocation feasibility} $F(P, A_{\text{static}}, B)$: whether the static allocation fits within the global budget.
+\end{itemize}
+
+These properties are first-class outputs of the compiler. They do not require executing any retrieval or generation step; they are derived from the plan's topology.
+
+\paragraph{Logical/physical separation.}
+The typed evidence plan fixes \emph{what} must be satisfied; the physical planner decides \emph{how} each slot's evidence is acquired and allocated. The same logical plan can be executed by a static allocation, a budget-aware allocation, or any other physical strategy. This separation is what makes matched-budget comparison well-defined: all strategies share the same logical plan, and differences in output are attributable to the physical execution, not to differences in planning.

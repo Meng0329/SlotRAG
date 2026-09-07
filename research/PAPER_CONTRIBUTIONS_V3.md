@@ -2,6 +2,8 @@
 
 > **Date**: 2026-09-07 (H-STRUCT-4 §24/§25 corrections applied)
 > **Status**: FINAL（H-STRUCT-3 完成后定稿）
+> **Paper source**: paper/main.tex + paper/sections/ (v4 complete rewrite, acmart sigconf, 9 pages)
+> **Audit trail**: PAPER_OVERCLAIM_AUDIT.md, PAPER_CLAIM_EVIDENCE_MATRIX.md, TKDE_BASELINE_GAP_AUDIT.md, TKDE_SUBMISSION_READINESS_V1.md
 > **约束**: chain-rule importance **不是贡献**（H-STRUCT-2 falsified, ΔEM +0.0086, p=0.743）；去掉所有 "first adaptive / budget-aware / query-planner / structure-aware RAG" 声称。
 
 ---

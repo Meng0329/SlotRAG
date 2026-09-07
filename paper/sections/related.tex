@@ -1,19 +1,40 @@
-\paragraph{Slot / program decomposition for RAG.} Slot-based and
-program-guided RAG frameworks decompose a multi-hop question into typed
-retrieval steps or executable programs, promising compositional evidence.
-Our slot compiler shares that goal but is evaluated under a strict matched
-budget with adapted baselines, which most such systems do not report.
+\paragraph{Adaptive retrieval and routing.}
+Adaptive-RAG \cite{adaptiverag} learns a classifier over raw-question complexity to select among no-retrieval, single-step, and iterative retrieval strategies. SlotRAG operates at a different decision point: it does not classify raw-question complexity but instead selects a physical execution strategy for an already-compiled evidence plan. The gate in SlotRAG is deterministic and structurally grounded; the classifier in Adaptive-RAG is learned and query-surface-based.
 
-\paragraph{Retrieval-augmented multi-hop reasoning.} Iterative-retrieval
-agents (IRCoT \cite{ircot}), graph-retrieval systems (GraphRAG \cite{graphrag}), and reasoning-acting agents (ReAct \cite{react}) are among the
-strongest adapted baselines on these benchmarks and are our comparison
-points. Our finding that a slot system can win one dataset, tie another, and
-lose two on inherent selection accuracy is scoped relative to these adapted
-baselines under the shared protocol.
+\paragraph{Structured and programmatic retrieval.}
+Several recent systems represent multi-hop reasoning as structured programs or logical plans. PlanRAG \cite{planrag} constructs logical query trees and optimizes them with a cost model before iterative execution, focusing on the construction and optimization of the reasoning tree itself. PyRAG \cite{pyrag} represents multi-hop reasoning as executable programs that compose retrieval and reasoning steps. DynaKRAG \cite{dynakrag} learns evidence control strategies for multi-hop retrieval. These systems address the upstream planning problem; SlotRAG addresses the downstream execution problem: given an already-compiled evidence plan, how should its subgoals be physically materialized under a hard global budget? SlotRAG is not novel merely because retrieval is represented structurally; the contribution lies in the typed evidence intermediate representation, the compile-time feasibility diagnosis, and the execution layer.
 
-\paragraph{Honest / matched-budget evaluation.} There is a growing call to
-report RAG results under identical budgets and to separate quality from
-budget accounting. Our separate reporting of \texttt{acc\_full} and
-\texttt{acc\_ok}, our disclosure of per-run non-determinism, and our
-full-negative-result reporting for rejected interventions are in that spirit:
-we treat what did not work as first-class evidence.
+\paragraph{Budget-aware and resource-adaptive methods.}
+Resource-adaptive RAG systems allocate budgets dynamically across retrieval steps. PAGE-RAG \cite{pagerag} promotes evidence through provenance-aware graphs under fixed budgets. Know Before You Fetch \cite{knowbeforeyoufetch} calibrates retrieval-budget allocation to reduce waste. These methods focus on candidate-level or retrieval-triggering decisions; SlotRAG operates on a different abstraction: the physical allocation over compiled typed evidence requirements. The distinction is between selecting what to retrieve and allocating how to execute a plan whose requirements are already specified.
+
+\paragraph{Iterative multi-hop reasoning.}
+IRCoT \cite{ircot} interleaves retrieval with chain-of-thought reasoning, letting each reasoning step trigger the next retrieval. ReAct \cite{react} alternates between action (retrieval) and observation (reasoning) in an agentic loop. GraphRAG \cite{graphrag} leverages knowledge-graph structure for retrieval. These represent strong adapted baselines on multi-hop benchmarks. SlotRAG differs by committing the full evidence plan before execution, making the execution strategy a property of the plan rather than of the reasoning trajectory.
+
+\paragraph{Semantic query processing.}
+Abacus and Sema \cite{sema} provide cost-based optimization over semantic operator systems; LOTUS \cite{lotus} enables semantic queries over unstructured and structured data. SlotRAG shares the principle of typed operators with explicit cost semantics, but targets multi-hop evidence materialization rather than general query processing over heterogeneous data.
+
+\paragraph{Honest and matched-budget evaluation.}
+A growing body of work calls for RAG evaluation under matched budgets with explicit accounting of budget-exhaustion events. SlotRAG contributes to this by separating answer quality metrics from budget-completion metrics and by reporting both under a shared protocol.
+
+\subsection{Comparison Summary}
+\label{sec:related:table}
+
+Table~\ref{tab:positioning} summarizes the comparison across decision point, decision input, learnedness, plan explicitness, and global-budget feasibility. Entries are based on the cited papers' own descriptions.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}p{2.1cm}p{2.5cm}p{2.4cm}p{1.1cm}p{1.6cm}p{1.9cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Decision input} & \textbf{Decision point} & \textbf{Learned?} & \textbf{Explicit plan?} & \textbf{Global budget feasibility?} \\
+\midrule
+Adaptive-RAG \cite{adaptiverag} & Raw question & Retrieval strategy per query & Yes (classifier) & No & No \\
+PlanRAG \cite{planrag} & Logical query tree & Tree construction + cost optimization & Partially & Yes & No \\
+PyRAG \cite{pyrag} & Question & Executable program composition & No & Yes & No \\
+PAGE-RAG \cite{pagerag} & Evidence graph & Candidate evidence promotion & No & Partial & Fixed budget \\
+Know Before You Fetch \cite{knowbeforeyoufetch} & Query & Retrieval budget calibration & Partial & No & Yes (calibration) \\
+\textbf{SlotRAG} & \textbf{Compiled typed plan} & \textbf{Physical allocation strategy} & \textbf{No} & \textbf{Yes} & \textbf{Yes (feasibility diagnosis)} \\
+\bottomrule
+\end{tabular}
+\caption{Differential positioning against related work. SlotRAG's decision point is downstream: it selects the physical allocation strategy for an already-compiled evidence plan and tests whether that allocation is globally feasible under the retrieval budget.}
+\label{tab:positioning}
+\end{table}

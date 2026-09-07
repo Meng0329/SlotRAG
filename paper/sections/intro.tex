@@ -1,41 +1,32 @@
-Retrieval-augmented generation (RAG) has become the workhorse recipe for
-answering multi-hop questions that require grounding in large knowledge
-sources. A growing line of work decomposes a question into \emph{slots} ---
-typed relational retrieval/extraction steps that are materialized and joined
-before a decoder produces the final answer. Slot decomposition promises
-stronger compositionality than flat top-$k$ retrieval: each hop retrieves
-precisely the evidence its typed role needs, and the intermediates are joined
-into a coherent evidence bundle for the generator.
+\paragraph{From decomposition to execution.}
+Multi-hop RAG systems increasingly decompose questions into structured evidence-acquisition steps---typed retrieval calls, join constraints, relational operators---that are planned before execution. This decomposition provides logical validity: each step specifies what evidence is needed. But logical validity does not guarantee physical executability. When the system operates under a hard global retrieval-call budget, the local allocations made for each step must compose into a plan that fits within that budget. A decomposition into three steps that each locally require four retrieval calls is not executable when the global budget is eight calls, regardless of its logical coherence.
 
-This paper asks an honest, under-examined question that most slot-system
-papers defer: \emph{under a matched budget --- the same finite retrieval and
-inference budget granted to the strongest published baselines --- how much of a
-benchmark does a slot-based RAG system actually cover?} We answer it
-concretely with a slot-based system, \textsc{SlotRAG-X}, evaluated on five
-multi-hop benchmarks (HotpotQA \cite{hotpotqa}, 2WikiMultiHop \cite{2wikimultihop}, MuSiQue \cite{musique}, StrategyQA \cite{strategyqa}, DROP \cite{drop})
-against their strongest adapted baselines, using one fixed LLM (Qwen3.6-27B \cite{qwen3})
-and an identical per-benchmark budget ($\S$4.3: $\max\_\mathrm{retrieval\_calls}=4$,
-$\max\_\mathrm{llm\_calls}=64$, $\max\_\mathrm{steps}=4$, $300$~s/query).
+This paper studies the execution problem that arises downstream of decomposition: \emph{how should a compiled multi-hop evidence plan be physically executed under a hard global retrieval budget?} We identify a necessary condition for static budget exhaustion that is computable at compile time, develop a budget-aware physical planner that eliminates matched-budget exhaustion on deep plans, and establish through confirmatory experiments that this planner improves answer quality in the regime where it was designed to operate.
 
-Our headline result is deliberately modest and honest. Under this matched
-budget, \textsc{SlotRAG-X} achieves an Exact-Match/F1 Strongest-Baseline
-Coverage of \emph{25\%} ($1/4$): MuSiQue wins, HotpotQA ties within $0.028$
-of its strongest adapted baseline, and 2WikiMultiHop and DROP lose on
-inherent accuracy gaps. A budget-fix ablation (H-029/H-030) converts a
-``false collapse'' of 428 (MuSiQue) and 326 (HotpotQA) budget-exceeded items
-into real accuracy, fully recovering two datasets that a raw \S4.3 accounting
-would have penalized to near zero. However, we show that the residual failure
-modes on 2WikiMultiHop/DROP are \emph{selection ceilings} of the frozen model
---- gold answers are verbatim in the evidence yet the model selects the wrong
-entity --- and that no string-anchored or prompt-level correction can recover
-them (all four falsified heuristics are net-negative).
+\paragraph{Why a universal optimizer is insufficient.}
+An intuitive response is to apply a budget-aware optimizer globally. However, large-scale retrospective analysis reveals that the optimizer's treatment effect is conditioned on plan structure. On structurally deep plans (where evidence requirements involve three or more slots joined through intermediate bindings), budget-aware allocation improves answer quality by 7.7 EM points and eliminates all budget-exhaustion events under a matched protocol. On shallow plans (one or two independent slots), the same optimizer can reduce answer quality by 2.1 EM points ($p < 0.001$ in exploratory analysis), with the harm concentrated on specific datasets. This motivates a regime-sensitive dispatch policy that applies the optimizer where it helps and retains static execution elsewhere.
 
-The contribution of this paper is the honest map of where slot-based RAG
-stands under a matched budget and why: the architecture succeeds when
-\emph{retrieval} is the bottleneck (budget-limited), and saturates when answer
-\emph{selection} is the bottleneck (model-limited). We report all rejected
-interventions (nine generation-side and four string-correction heuristics) as
-first-class evidence for that ceiling, and we state the guardrails that keep
-the claim honest: no ``beats SOTA'' phrasing (baselines are adapted), no
-conflation of answer-complete rate with budget-matched accuracy, and no claim
-that any local fix raises Coverage above 25\%.
+\paragraph{Scope and contributions.}
+We present three contributions grounded in frozen matched-budget evaluations:
+
+\begin{enumerate}
+\item \textbf{Typed evidence plans} (C1): We introduce a typed intermediate representation that separates multi-hop evidence requirements---slots, joins, operators---from their physical materialization. The plan's structural evidence graph exposes typed couplings as a first-class object, enabling compile-time analysis of what physical execution will encounter.
+
+\item \textbf{Compile-time budget-feasibility diagnosis} (C2): We show that independent per-slot physical allocations need not compose into a globally feasible plan under a retrieval-call budget. A necessary condition for static budget exhaustion is derivable from the plan structure at compile time. Confirmed against frozen matched-budget executions on 350 deep plans, this condition has perfect recall (every budget-exhaustion event violated feasibility) and 0.533 precision (many infeasible plans completed without exhausting the budget).
+
+\item \textbf{Structure-gated budget-feasible physical planning} (C3): We develop a budget-aware physical planner that reallocates retrieval calls across slots under a global constraint, and a deterministic structural-depth gate that applies it. Confirmatory experiments on deep executable plans show the planner improves answer quality and eliminates budget exhaustion. Large-scale exploratory replay provides evidence that retaining static execution outside the deep regime is justified.
+\end{enumerate}
+
+\paragraph{Motivating example.}
+Consider a three-slot plan whose static allocation assigns four retrieval calls to each slot: $4 + 4 + 4 = 12 > B = 8$. Each local allocation is individually reasonable---four calls per slot is a common default---but the composed allocation is globally infeasible. Under static execution, the materializer exhausts the budget after the first two slots, truncating the third before its evidence is acquired; the answer is generated from incomplete evidence. The plan is logically valid (each slot's requirement is well-specified) but physically infeasible. The budget-aware flat planner reallocates the eight available calls across the three slots (e.g., 3--3--2), materializing all three slots within budget. This is the central system question this paper addresses.
+
+\paragraph{Why a universal optimizer is insufficient.}
+An intuitive response is to apply a budget-aware optimizer globally. However, large-scale retrospective analysis reveals that the optimizer's treatment effect is conditioned on plan structure. On structurally deep plans (where evidence requirements involve three or more slots joined through intermediate bindings), budget-aware allocation improves answer quality by 7.7 EM points and eliminates all budget-exhaustion events under a matched protocol. On shallow plans (one or two independent slots), the same optimizer can reduce answer quality by 2.1 EM points ($p < 0.001$ in exploratory analysis), with the harm concentrated on specific datasets. This motivates a regime-sensitive dispatch policy that applies the optimizer where it helps and retains static execution elsewhere.
+
+\paragraph{Paper structure.}
+Section~\ref{sec:related} positions the work against related retrieval and planning systems.
+Section~\ref{sec:problem} formalizes the budget-feasibility problem.
+Sections~\ref{sec:algebra}--\ref{sec:dispatch} describe the system.
+Section~\ref{sec:protocol} defines the experimental protocol.
+Section~\ref{sec:results} reports confirmatory and exploratory results.
+Sections~\ref{sec:analysis}--\ref{sec:threats} discuss and contextualize the findings.

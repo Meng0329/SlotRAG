@@ -1,0 +1,29 @@
+\paragraph{System and model.}
+All experiments use the SlotRAG pipeline with a single LLM backend: Qwen3.5-9B for plan compilation and answer generation. Thinking mode is disabled. The hybrid retriever combines BM25 (sparse), dense embedding retrieval (Qwen3-Embedding-0.6B), and reciprocal rank fusion, followed by a cross-encoder reranker (bge-reranker-v2-m3).
+
+\paragraph{Matched budget.}
+All methods share one protocol: $\max\_\mathrm{steps}=8$, $\max\_\mathrm{retrieval\_calls}=8$, $\max\_\mathrm{llm\_calls}=96$. Budget-exceeded items score $0.0$. This is the \emph{confirmatory} budget; an earlier permissive exploratory trace (used for mechanism discovery) used higher limits and is explicitly labeled throughout.
+
+\paragraph{Benchmarks.}
+Three multi-hop benchmarks: HotpotQA \cite{hotpotqa} (diverse two-hop questions), 2WikiMultiHopQA \cite{2wikimultihop} (structured two-hop questions requiring bridging and comparison), and MuSiQue \cite{musique} (composite multi-hop questions spanning two to four hops). Primary metric: Exact Match (EM). Secondary: F1. Samples are drawn from the validation set (seed $2027$, stratified by structural depth).
+
+\paragraph{Arms.}
+All paired comparisons share the same compiled plans, questions, and seeds. The three physical strategies compared are:
+\begin{itemize}
+\item \textbf{Static}: even allocation across slots (deterministic).
+\item \textbf{Flat}: budget-aware optimizer with uniform importance weights.
+\item \textbf{Chain}: budget-aware optimizer with dependency-weighted importance ($\tau = 2(i+1) - 1$ for slot $i$ in the longest chain).
+\end{itemize}
+The static and flat arms are the primary comparison for the budget-feasibility hypothesis; the chain arm is an ablation testing dependency-sensitive allocation.
+
+\paragraph{Census and frozen plans.}
+A structural census was run over the validation set (6,494 questions) to identify eligible plans: those with $\texttt{structural\_hops} \geq 2$ and a valid compiled SlotPlan. For eligible plans, full frozen plan payloads (SlotPlan JSON, plan SHA-256, compiler options, input hash) were persisted to disk. This is the \emph{V1.2 frozen census}: 361 eligible deep plans with full payloads. Questions with $\texttt{structural\_hops} < 2$ (6,133 in the census) were recorded with structural metadata only; their full plan payloads were not persisted.
+
+\paragraph{Confirmatory execution.}
+For the confirmatory evaluation, 350 eligible validation plans were executed under all three arms (static, flat, chain), producing paired results on the same questions. This is the \emph{V1.2 confirmatory} evaluation: n = 350 deep executable plans, all with $\texttt{structural\_hops} \geq 2$.
+
+\paragraph{Exploratory trace.}
+A larger retrospective analysis used a historical three-arm trace (25,948 rows, 8,632 strict three-arm paired questions) collected under the permissive budget. This trace provides statistical power for mechanism discovery (gate necessity, shallow-regime effects) but is labeled as \emph{exploratory} throughout: it was not pre-registered as confirmatory, the budget regime differs from the confirmatory matched budget, and its results motivate the confirmatory evaluation rather than replacing it.
+
+\paragraph{Statistical tests.}
+Primary: two-sided exact McNemar test (binomial exact test on discordant pairs, $p$-value $= 2 \cdot \Pr[\text{Bin}(b+c, 0.5) \leq \min(b,c)]$). Bootstrap: paired bootstrap (10,000 iterations, seed 2027, full-$N$ question-level resampling, percentile confidence intervals). Dataset heterogeneity: Holm-corrected tests across datasets.
