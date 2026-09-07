@@ -1,6 +1,6 @@
 # PAPER_CONTRIBUTIONS_V3.md — SlotRAG-X: 3 项贡献
 
-> **Date**: 2026-09-03
+> **Date**: 2026-09-07 (H-STRUCT-4 §24/§25 corrections applied)
 > **Status**: FINAL（H-STRUCT-3 完成后定稿）
 > **约束**: chain-rule importance **不是贡献**（H-STRUCT-2 falsified, ΔEM +0.0086, p=0.743）；去掉所有 "first adaptive / budget-aware / query-planner / structure-aware RAG" 声称。
 
@@ -8,12 +8,12 @@
 
 ## C1 — Declarative Evidence Planning via Typed Slot Plans
 
-> SlotRAG 将复杂问题**声明性地编译为 typed slot plan**——每个 slot 指定一个谓词（查询意图）、约束条件、绑定变量，通过 join 边连接形成**结构证据图**。该计划在执行前即暴露了完整的证据依赖关系（哪些 slot 需要前置绑定，哪些 slot 可并行物化），为后续的预算感知物理分配提供了结构信息。
+> SlotRAG 将复杂问题**声明性地编译为 typed slot plan**——每个 slot 指定一个谓词（查询意图）、约束条件、绑定变量，通过 join 边连接形成**结构证据图**。该计划在执行前即暴露了完整的 **typed evidence requirements**（哪些 slot 需要前置绑定，哪些 slot 可并行物化），包括 **joins、operators、structural coupling**，为后续的预算感知物理分配提供了结构信息。
 
 **关键特性**：
 - Slot 计划是**声明式逻辑 plan**（LLM 编译，确定性语法校验），非逐步执行的启发式轨迹
 - 结构证据图的 `structural_hops` = 最长 join/operator 路径，直接可计算（LLM-free，planner 内确定性度量）
-- 计划的可执行性（`executable`）与物理可完成性（`Σ allocation ≤ B`）在编译阶段即可离线判定（§12 混淆矩阵：precision 1.0，recall 0.53）
+- 计划的可执行性（`executable`）与物理可完成性（`Σ allocation ≤ B`）在编译阶段即可离线判定（§12 混淆矩阵：precision 0.533，recall 1.0——Σ>B 是 BE 的必要条件但非充分条件）
 
 **与现有工作的边界**：
 - 不是 query planner（PlanRAG）：PlanRAG 的 planning 是检索策略选择；SlotRAG 的 plan 是**证据物化逻辑**——decision point 不同
@@ -24,15 +24,15 @@
 
 ## C2 — Structural Budget-Feasibility Diagnosis
 
-> 静态预算分配策略（每个 slot 预分配固定份额）在结构化深度计划上**结构性不可完成**（executable 但 sum-of-allocations > B）。该 diagnosis 通过离线 feasibility 分析**精确识别**哪类计划会 BE（precision 1.0），为 gate 的触发条件提供了机制性解释，而非黑箱 learned routing。
+> 静态预算分配策略（每个 slot 预分配固定份额）在结构化深度计划上**结构性不可完成**（executable 但 sum-of-allocations > B）。该 diagnosis 通过离线 feasibility 分析**精确识别**哪类计划会 BE（recall=1.0，Σ>B 是 BE 的必要条件），为 gate 的触发条件提供了机制性解释，而非黑箱 learned routing。
 
 **核心证据**：
-- 350 个冻结 plan 中，76 个 Feasible（Σ≤8）且**零 BE**（TN），146 个 Infeasible（Σ>8）且**全部 BE**（TP），FP=0（§12）
+- 350 个冻结 plan 中：TP=146（Σ>8 且 BE，预测不可完成且确实 BE）、FP=128（Σ>8 但未 BE，预测不可完成但未发生 BE）、FN=0（Σ≤8 且 BE，无漏判）、TN=76（Σ≤8 且未 BE，正确预测可完成）。precision=0.533（Σ>B 非充分条件，约半数不可完成计划实际未 BE），**recall=1.0**（所有 BE 均发生于 Σ>8 计划，Σ>B 是 BE 的必要条件）
 - H-STRUCT-1 confirmatory validation：static 41.7% BE 全部集中于 depth≥2 计划（n=350 matched-budget 8-call 体制）
 - Chain importance 能绕过此 BE（chain importances={sid:2*(idx+1)-1} 把高依赖 slot 分配更多份额），但 flat（全 1.0）更简单且**同样有效**（H-STRUCT-2 CASE B）
 
 **论文叙事**：
-> The failure of static allocation is structural: it is precisely predictable from the plan's topology at compile time, before any LLM or retrieval call is made. This diagnosis motivates a gate that operates on the plan's structure, not on the query's surface features.
+> The failure of static allocation is structurally predictable: an allocation whose sum exceeds the matched budget B is a necessary (recall = 1.0) but not sufficient (precision = 0.533) condition for budget_exceeded. This diagnosis motivates a gate that operates on the plan's structure, not on the query's surface features.
 
 ---
 

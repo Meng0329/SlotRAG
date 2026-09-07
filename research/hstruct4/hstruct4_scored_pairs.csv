@@ -1,0 +1,1 @@
+question_id,dataset,plan_sha256,static_em,flat_em,static_f1,flat_f1,static_llm_calls,flat_llm_calls,static_retrieval_calls,flat_retrieval_calls,static_status,flat_status,paired

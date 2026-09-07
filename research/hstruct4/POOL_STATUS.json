@@ -1,0 +1,11 @@
+{
+  "status": "INFEASIBLE",
+  "reason": "0/6133 census-shallow questions have frozen SlotPlan plan_json; \u00a75 prohibits recompilation",
+  "primary_pool_size": 0,
+  "reserve_pool_size": 0,
+  "slotcompiler_calls": 0,
+  "mannifest": {
+    "primary": "HSTRUCT4_PRIMARY_MANIFEST.jsonl",
+    "reserve": "HSTRUCT4_RESERVE_MANIFEST.jsonl"
+  }
+}

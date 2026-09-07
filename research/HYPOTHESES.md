@@ -737,8 +737,22 @@
 - chain−flat LLM: −0.986 CI[−1.109,−0.862] perm-p<0.001；retrieval: −0.759 CI[−0.857,−0.665] perm-p<0.001（仅效率，非准确率；chain 降级 ablation）
 
 **§12 feasibility 混淆矩阵**:
-- TN 76 / FP 0 / FN 128 / TP 146；precision 1.0, recall 0.533
+- TN 76 / FP 128 / FN 0 / TP 146；precision 0.533, recall 1.0（Σ>B 是 BE 的必要条件但非充分条件）
 
 **最终判决**: GATE NECESSARY → 保留方法名 "Structure-Gated Budget-Feasible Physical Planning"
 - 三个贡献 C1/C2/C3（`PAPER_CONTRIBUTIONS_V3.md`）；chain importance NOT a contribution（ablation/falsified）
 - 产出: `research/H_STRUCT_3_FINAL_REPORT.md`、`research/PAPER_CONTRIBUTIONS_V3.md`、`research/TKDE_STRUCTURAL_POLICY_POSITIONING.md`（§14 更新）；analysis CSVs in `research/hstruct_validation_census/`
+
+### H-STRUCT-4: 独立浅层（structural_hops < 2）flat-gate 确认测试
+
+- **状态**: **BLOCKED — INFEASIBLE**（2026-09-07 pre-execution audit 完成，零新 LLM/检索/答案执行；SlotCompiler calls=0）
+- **RQ-STRUCT-4**: same frozen matched-budget protocol 下, flat 应用于浅层计划是否相比 static 降低答案质量（ATE_shallow = E[EM_flat − EM_static | Shallow=1, Executable=1]，two-sided exact McNemar α=0.05）
+- **前置**: H-STRUCT-3 GATE NECESSARY（CASE G1）→ 独立 shallow 域 confirmatory 确认
+- **EXPOSURE/pool 判定**: **0 UNEXPOSED census-shallow candidates with frozen plans** → primary pool 为空
+  - census shallow (h<2) = 6,133（0:5,490, 1:566, -1:77）——V1.2 census 只为 **eligible（h≥2）361 题**持久化了 full SlotPlan plan_json；6,133 题只有 plan_hash 字符串引用，无 plan_json
+  - v12 frozen shallow 77 行全部是 census-DEEP 题的重新编译（hash_match=False），76/77 已在 H-STRUCT-1/2 暴露 → 不可服务 census-shallow
+  - §5 禁令（frozen snapshot missing → 不可入 pool，禁止重新编译修复）→ primary/reserve pool 均为空
+- **Power analysis（exploratory, moot）**: n=8,085 b=261 c=431 p_disc=0.0856 ΔEM=−0.0210；N @80% two-sided = **1,428**，@90% = **1,912**；census shallow 6,133 count 充足
+- **§24/§25 论文修正（本轮落地）**: C2 混淆矩阵 orientation（Σ>B positive → TP=146/FP=128/FN=0/TN=76, precision 0.533, recall 1.0）；C1 术语（禁 "true dependency depth"/"complete dependency relation"/"full producer-consumer DAG"；用 "typed evidence requirements, joins, operators, structural coupling, structural evidence graph, structural_hops"）
+- **最终判决**: 无法执行 → H-STRUCT-4 无 CASE A/B/C 可裁判；GATE NECESSARY 立基于 H-STRUCT-3 exploratory 证据（n=8,085 ΔEM −0.0210 p<0.001），未获得 confirmatory 独立确认
+- 产出: `research/H_STRUCT_4_PRE_REGISTRATION.md`、`H_STRUCT_4_POWER.md`、`H_STRUCT_4_EXPOSURE_AUDIT.md`、`H_STRUCT_4_PROTOCOL_IDENTITY_AUDIT.md`、`H_STRUCT_4_FINAL_REPORT.md`；`research/hstruct4/exposure_audit.csv`

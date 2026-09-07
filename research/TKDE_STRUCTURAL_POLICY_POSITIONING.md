@@ -83,7 +83,7 @@
 ## 3. What SlotRAG Actually Contributes
 
 1. **C1 — Declarative Evidence Planning**: 编译式 typed slot plan + 结构证据图（structural_hops 确定性可算）
-2. **C2 — Structural Budget-Feasibility Diagnosis**: 编译期离线判定计划的可完成性（Σ allocation ≤ B）；混淆矩阵 precision 1.0
+2. **C2 — Structural Budget-Feasibility Diagnosis**: 编译期离线判定计划的可完成性（Σ allocation ≤ B）；混淆矩阵 precision 0.533 / recall 1.0（Σ>B 是 BE 的必要非充分条件）
 3. **C3 — Structure-Gated Budget-Feasible Physical Planning**: 确定性结构深度 gate 把 budget-aware flat 限制在 ≥2-hop 计划，同时保护浅层质量并消除 matched-budget BE
 
 （详见 `PAPER_CONTRIBUTIONS_V3.md`；chain-rule importance = ablation/falsified，非贡献。）
@@ -107,6 +107,16 @@
 - ✅ "A deterministic depth gate confines budget-aware allocation to the regime where it pays"（A′ ΔEM +0.0197 vs always-flat, p<0.001）
 - ✅ "The gate operates on plan structure, not query complexity or knowledge topology"
 - ✅ "The gate is deterministic and requires no learned classifier or resource router"
-- ✅ "The budget-feasibility diagnosis is computable at compile time (precision 1.0)"
+- ✅ "The budget-feasibility diagnosis is computable at compile time (necessary-but-not-sufficient: Σ>B has recall 1.0 for BE, precision 0.533)"
 - ✅ "Improving the quality-cost frontier in the eligible stratum; eliminating matched-budget budget_exceeded on deep plans"
 - ✅ "Population-level effect is small and honestly bounded (+0.004 EM/题, CI 不含 0)"
+
+---
+
+## 6. §26 H-STRUCT-4 定位更新（2026-09-07）
+
+**H-STRUCT-4（独立浅层 gate 确认）INFEASIBLE**: V1.2 census 未持久化浅层题的 full SlotPlan（6,133/6,133 缺 frozen plan_json），§5 禁止重新编译 → primary pool 为空。**不改变 C3 声称边界**：GATE NECESSARY 的实证基础仍是 H-STRUCT-3 exploratory（n=8,085, ΔEM −0.0210, CI[−0.0273,−0.0146], p<0.001），未获得新的 confirmatory 确认，也未新增反例。
+
+- **论文措辞保持现状**（C1/C2/C3 基于 H-STRUCT-1/2/3 数字），不因 H-STRUCT-4 收窄；不加 "independent confirmatory validation of the shallow gate" 声称。
+- **C2 数值已按 §24 修正**：混淆矩阵 orientation = Σ>B positive → TP=146/FP=128/FN=0/TN=76, precision 0.533, recall 1.0（"necessary but not sufficient"）。
+- **C1 术语已按 §25 修正**：禁 "true dependency depth"/"complete dependency relation"/"full producer-consumer DAG"。

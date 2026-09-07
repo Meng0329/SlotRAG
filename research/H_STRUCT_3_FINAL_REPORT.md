@@ -136,13 +136,16 @@ chain importance 在成本上对 flat 有**显著的 exploratory 效率优势**�
 
 **命题**：静态分配在 B=8 预算下**结构性可完成**当且仅当 Σ_s allocation_static(s) ≤ B；否则 static executor 在完整物化前耗尽预算 → budget_exceeded。
 
+> **§24 orientation 修正（2026-09-07）**：Σ>B 作为 positive prediction（预测不可完成），BE 作为 positive outcome。混淆矩阵：**TP=146（Σ>8 且 BE）、FP=128（Σ>8 但未 BE）、FN=0（Σ≤8 且 BE）、TN=76（Σ≤8 且未 BE）**。
+
 | | 观测: not-exceeded | 观测: budget_exceeded |
 |--|--------------------|-----------------------|
-| 预测: Feasible (Σ≤8) | TN=**76** | FP=**0** |
-| 预测: Infeasible (Σ>8) | FN=**128** | TP=**146** |
+| 预测: Feasible (Σ≤8) | TN=**76** | FN=**0** |
+| 预测: Infeasible (Σ>8) | FP=**128** | TP=**146** |
 
-- **precision = 1.0**（0 个「预测可完成却 BE」——命题上位可判定准确）、recall = 0.5328（146/274；128 个 Infeasible 计划实际未 BE，因 `max_steps / max_llm_calls` 兜底亦可能提前正常终止）。
-- 反侧面（FP=0）说明：**没有计划在 Σ≤8 时仍然 BE** → 静态 BE 的必要条件就是 Σ>8。flat/chain 在每个可执行 plan 上都把分配压进 B=8（frontier: 349/350 feasible）。
+- **recall = 1.0**（146/146：所有 BE 都发生在 Σ≤8 的预测外——Σ>B 是 BE 的**必要条件**）、**precision = 0.533**（146/274：53.3% 的 Infeasible 计划实际未 BE——Σ>B 是 BE 的充分条件但不充分，128 个 Σ>8 计划因 `max_steps / max_llm_calls` 兜底提前正常终止）。
+- 反侧面（FN=0）说明：**没有计划在 Σ≤8 时仍然 BE** → 静态 BE 的必要条件就是 Σ>8。flat/chain 在每个可执行 plan 上都把分配压进 B=8（frontier: 349/350 feasible）。
+- **陈述口径（论文）**：预算不可完成诊断是 **necessary but not sufficient** —— recall=1.0 保证不会漏掉任何会 BE 的计划，但 precision=0.533 意味着约半数「Σ>B」计划实际可正常完成。禁止 precision=1.0/recall=0.533 的措辞。
 
 ---
 
@@ -202,7 +205,7 @@ POPULATION 理解（诚实）：人口级 EM 提升小（+0.42pt/题，CI 不含
 - 人口级 A′：ATE_exec_eligible +0.0771；ATE_population = 0.05390×0.0771 = +0.004158 [0.002464, 0.005852]
 - §9 BE：static 22.48/1000 → A′ 0.00/1000（绝对 −22.48/1000，相对 100%）
 - §11 chain−flat：LLM −0.986 [−1.109,−0.862] perm-p<0.001；retrieval −0.759 [−0.857,−0.665] perm-p<0.001（仅效率，非准确率）
-- §12 confusion：TN 76 / FP 0 / FN 128 / TP 146（precision 1.0, recall 0.533）
+- §12 confusion：TN 76 / FP 128 / FN 0 / TP 146（precision 0.533, recall 1.0；Σ>B 必要非充分）
 - H-STRUCT-2 保真数字（CASE B）：flat→chain ΔEM +0.0086 [−0.026,+0.043] p=0.7428
 
 ---

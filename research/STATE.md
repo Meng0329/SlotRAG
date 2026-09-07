@@ -1,12 +1,31 @@
 # STATE.md — SlotRAG-X 研究状态快照
 
-> **最后更新**: 2026-09-03  
+> **最后更新**: 2026-09-07  
 > **更新者**: Claude Code  
-> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付 → **H-STRUCT-1 确认性测试 ✅ CONFIRMED** → **H-STRUCT-2 CASE B ✅ chain 负结果** → **H-STRUCT-3 ✅ GATE NECESSARY (CASE G1)**。
+> **当前阶段**: Phase 4 冻结验证 ✅ 完成 → **Phase 5 论文** ✅ 已交付 → **H-STRUCT-1 确认性测试 ✅ CONFIRMED** → **H-STRUCT-2 CASE B ✅ chain 负结果** → **H-STRUCT-3 ✅ GATE NECESSARY (CASE G1)** → **H-STRUCT-4 ⚠️ INFEASIBLE (§5 frozen-plan infrastructure gap)**。
 
 ---
 
-## 最新进展（2026-09-03）：H-STRUCT-3 Gate Necessity 裁决 — GATE NECESSARY (CASE G1)
+## 最新进展（2026-09-07）：H-STRUCT-4 独立浅层 Gate 确认 — INFEASIBLE
+
+**H-STRUCT-4（独立浅层 gate 确认）完成 pre-execution audit，无法执行。** 详见 `research/H_STRUCT_4_FINAL_REPORT.md`。
+
+### 根因：V1.2 census 快照基础设施缺口
+
+V1.2 validation census 存储了 6,494 题的 `plan_hash` 和 `structural_hops`，但 **仅 361 题（hops>=2 eligible）保存了完整 SlotPlan plan_json**。6,133 题（hops<2, 非 eligible）只有 plan_hash 字符串引用，无法反推 SlotPlan。
+
+§5 要求：每个 primary pool candidate 必须有 pre-frozen plan_json；禁止重新编译修复。primary pool = 0（6,133/6,133 缺 plan snapshot），reserv e pool 亦为空。
+
+### Power Analysis（exploratory，moot but complete）
+
+- Exploratory shallow (n=8,085): b=261, c=431, p_disc=0.0856, ΔEM=−0.0210
+- N required @80% two-sided: **1,428**；@90%: **1,912**
+- Census shallow pool 6,133（count 充足，冻结计划缺失为阻塞点）
+
+### §24/§25 论文修正已落地
+
+- **§24**: C2 混淆矩阵 orientation 修正 → TP=146, FP=128, FN=0, TN=76; precision=0.533, recall=1.0; "necessary but not sufficient" 陈述
+- **§25**: C1 术语修正 → 禁用 "true dependency depth"/"complete dependency relation"/"full producer-consumer DAG"；使用 "typed evidence requirements, joins, operators, structural coupling, structural evidence graph, structural_hops"
 
 **H-STRUCT-3（structure-gate 必要性 + Policy A′ 离线重放）完成**，详见 `research/H_STRUCT_3_FINAL_REPORT.md`。**所有数字均由 CPU-only 脚本重算，无新 LLM / 检索 / 答案执行。**
 
