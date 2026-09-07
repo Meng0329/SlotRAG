@@ -58,7 +58,7 @@ V1.2 validation census 存储了 6,494 题的 `plan_hash` 和 `structural_hops`�
 ### budget_exceeded 削减（confirmatory B=8）
 
 - static BE 146/350 → flat 0/350 → 人口级 −22.48 BE per 1000 natural questions（相对 100%）
-- 静态可完成性命题：Feasible(Σ≤8)→0/76 BE（TN），Infeasible(>8)→146/274 BE（TP），FP=0；precision 1.0, recall 0.533
+- 静态可完成性命题：TP=146（Σ>8 且 BE）, FP=128（Σ>8 未 BE）, FN=0, TN=76；precision=0.533, recall=1.0（Σ>B 是 BE 的必要条件但非充分条件）
 
 ### 链式 importance 效率 audit（confirmatory 350 pairs）
 
