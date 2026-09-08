@@ -1,0 +1,7 @@
+retrieval-augmented generation
+multi-hop question answering
+query processing
+physical planning
+budget-aware execution
+evidence planning
+knowledge engineering

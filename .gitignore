@@ -20,3 +20,8 @@ research/hstruct_confirmatory/train_supplement_draw.jsonl
 research/hstruct_confirmatory/confirmatory_results.csv
 research/hstruct_confirmatory/execution_progress.json
 research/hstruct_confirmatory/train_compile_failures.csv
+*.aux
+*.log
+*.out
+*.bbl
+*.blg

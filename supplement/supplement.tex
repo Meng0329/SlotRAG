@@ -1,0 +1,103 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs,amsmath,amssymb,graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\title{Supplementary Material for\\
+``SlotRAG: Budget-Feasible Physical Planning over Typed Evidence Plans for Multi-Hop Retrieval-Augmented Generation''}
+\author{Anonymous Author(s)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Pre-registration History (H-STRUCT)} \label{sec:hstruct}
+
+The evaluation follows a frozen pre-registered protocol. The hypothesis chain
+is archived as: \texttt{H-STRUCT-1} (budget-feasibility diagnosis; census of
+deep eligible plans), \texttt{H-STRUCT-2} (paired matched-budget confirmation
+of the flat planner on deep plans), \texttt{H-STRUCT-3} (structure-gate
+dispatch necessity, exploratory replay), and \texttt{H-STRUCT-4}
+(independent shallow-regime confirmation). Pre-registration documents,
+amendments, and final reports are versioned in the repository under
+\texttt{research/H\_STRUCT\_*}. Table~\ref{tab:hstruct} summarizes each
+hypothesis, its evidence label, and outcome.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{llll}
+\toprule
+\textbf{Hyp.} & \textbf{Question} & \textbf{Evidence level} & \textbf{Outcome} \\
+\midrule
+H-STRUCT-1 & Feasibility diagnosis recall/precision & Confirmatory (n=350) & Confirmed \\
+H-STRUCT-2 & Flat vs.\ static on deep plans & Confirmatory (n=350) & Confirmed \\
+H-STRUCT-3 & Gate dispatch necessity & Exploratory (n=8,632) & Supported (exploratory) \\
+H-STRUCT-4 & Independent shallow confirmation & Pre-registered & Infeasible (payload gap) \\
+\bottomrule
+\end{tabular}
+\caption{H-STRUCT hypothesis history.}
+\label{tab:hstruct}
+\end{table}
+
+\section{Statistical Protocol} \label{sec:stats}
+
+All paired comparisons share the same compiled plans, questions, and seeds.
+The primary test is the two-sided exact McNemar test (binomial exact test on
+discordant pairs). Confidence intervals are paired bootstrap percentiles
+(10{,}000 iterations, seed 2027, full-$N$ question-level resampling). Dataset
+heterogeneity is assessed with Holm-corrected tests across datasets and
+strata. Budget-exceeded items score 0.0 EM because evaluation uses
+exact-match scoring and budget-exhausted executions without a final answer
+receive EM~$=0$. The confirmatory budget is $B=8$
+($\max\_\mathrm{steps}=8$, $\max\_\mathrm{retrieval\_calls}=8$,
+$\max\_\mathrm{llm\_calls}=96$); an earlier permissive exploratory trace used
+higher limits and is explicitly labeled \emph{exploratory}.
+
+\section{H-STRUCT-4: Infeasible Confirmation Attempt} \label{sec:hstruct4}
+
+A confirmatory shallow-regime matched-budget evaluation was pre-registered
+with n~=~1,428 required (power analysis, $\alpha=0.05$, 80\% power). The V1.2
+frozen census did not persist full SlotPlan JSON for the 6,133 shallow
+questions---only structural metadata and plan hashes---and the protocol
+prohibited re-compilation. Zero answers were generated; the attempt produced
+no counterexamples. The gate's shallow-regime benefit therefore remains
+supported only by exploratory evidence; an independent confirmation under the
+frozen matched-budget protocol remains an open requirement.
+
+\section{Extended Dataset-Stratum Tables} \label{sec:tables}
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Stratum} & \textbf{Flat $-$ Static} & \textbf{95\% CI} & \textbf{Regime} \\
+\midrule
+Deep (hops $\geq 2$, n=350) & $+$0.0771 & $[+0.049,+0.109]$ & Confirmatory \\
+Shallow (hops $<2$, n=8,085) & $-$0.0210 & $[-0.027,-0.015]$ & Exploratory \\
+Shallow 2Wiki hops-0 & $-$0.045 & -- & Exploratory (secondary) \\
+HotpotQA shallow & $\approx 0$ & -- & Exploratory \\
+MuSiQue shallow & $\approx 0$ & -- & Exploratory \\
+\bottomrule
+\end{tabular}
+\caption{Stratum-level flat-vs-static EM effects.}
+\label{tab:strata}
+\end{table}
+
+\section{Additional Failure Analysis} \label{sec:failure}
+
+Static budget-exhausted items had average EM below 0.01, confirming that
+partial evidence rarely yields correct answers on deep multi-hop questions.
+Budget exhaustion is structural: it arises from the mismatch between local
+slot allocations and the global budget (41.7\% of deep static executions),
+not from retrieval failures or generation errors. The flat planner eliminates
+these events by construction ($\sum_s a_s \leq B$).
+
+\section{Reproducibility and Provenance} \label{sec:repro}
+
+Frozen artifacts (sample registries, exposure audits, plan hashes, and
+experiment ledgers) are archived under \texttt{research/} and \texttt{runs/}.
+The reproduction guide in \texttt{README.md} distinguishes fully reproducible
+analyses (statistics, offline replay, figures, confusion matrices) from
+pipeline steps that require external model/API access.
+
+\end{document}

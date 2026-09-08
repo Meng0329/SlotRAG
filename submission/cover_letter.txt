@@ -1,0 +1,16 @@
+Dear Editor-in-Chief,
+
+We are submitting our manuscript, "SlotRAG: Budget-Feasible Physical Planning over Typed Evidence Plans for Multi-Hop Retrieval-Augmented Generation," for consideration as a regular paper in IEEE Transactions on Knowledge and Data Engineering (TKDE).
+
+Multi-hop retrieval-augmented generation (RAG) systems decompose complex questions into multiple evidence-acquisition steps. Under a hard global retrieval-call budget, a decomposition that is logically valid need not be physically executable: independent per-slot allocations can sum to exceed the budget, causing budget exhaustion before answer generation. This is an execution-layer problem in data engineering: the gap between a compiled evidence plan and its feasible materialization under resource constraints.
+
+This manuscript makes three contributions. First, it introduces typed evidence plans, a separation of logical evidence requirements (slots, joins, operators) from their physical materialization strategy, exposing structural properties for compile-time analysis. Second, it derives a compile-time budget-feasibility condition: a necessary condition for static budget exhaustion, confirmed against frozen matched-budget executions on 350 deep plans with perfect recall and 0.533 precision. Third, it develops a structure-sensitive dispatch rule that applies a budget-aware physical planner selectively, improving answer quality by 7.7 EM points on deep plans while protecting shallow plans from harm.
+
+We believe this work fits TKDE's scope in knowledge and data engineering: it addresses query execution and physical planning for a class of knowledge retrieval workloads, evaluates system behavior under a matched performance budget, and reports the statistical evidence honestly, including the limitation that independent shallow-regime confirmation was infeasible under the frozen protocol.
+
+The manuscript is original, is not under review elsewhere, and all authors have approved the submission. We have prepared source files, figures, a supplementary document, and a reproduction guide to support review.
+
+Thank you for considering this submission.
+
+Sincerely,
+The Authors
