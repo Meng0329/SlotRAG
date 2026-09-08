@@ -58,11 +58,11 @@ EM & 0.2486 & 0.2571 & $+$0.0086 \\
 Exact $p$ & \multicolumn{2}{c}{0.7428} \\
 \bottomrule
 \end{tabular}
-\caption{Chain vs.\ flat on 350 deep plans. The chain importance law yields a marginal, statistically insignificant accuracy improvement (exact McNemar $p = 0.743$).}
+\caption{Chain vs.\ flat on 350 deep plans. The chain importance law yields a marginal, statistically insignificant accuracy change (exact McNemar $p = 0.743$).}
 \label{tab:ablation}
 \end{table}
 
-\noindent The chain variant uses importance $\tau = 2(i+1) - 1$ for slot $i$ in the longest chain, giving downstream slots higher allocation priority. On deep plans, the chain law yields $\Delta$EM $= +0.0086$ ($p = 0.743$, 95\% CI includes zero). The accuracy improvement is not statistically significant. The final system uses flat for simplicity: a dependency-weighted allocator that is not significantly more accurate than a uniform one does not justify its additional conceptual complexity.
+\noindent The chain variant uses importance $\tau = 2(i+1) - 1$ for slot $i$ in the longest chain, giving downstream slots higher allocation priority. On deep plans, the chain law yields $\Delta$EM $= +0.0086$ ($p = 0.743$, 95\% CI includes zero). The accuracy change is not statistically significant. The final system uses flat for simplicity: the chain-specific importance weighting did not yield detectable accuracy gains over uniform weighting.
 
 \begin{figure}[t]
 \centering
@@ -90,7 +90,7 @@ $p$ & \multicolumn{2}{c}{$< 0.001$} \\
 \label{tab:shallow}
 \end{table}
 
-\noindent Flat allocation reduces EM by 2.10 points on shallow plans ($p < 0.001$), with the harm concentrated in 2WikiMultiHop ($\Delta$EM $= -0.045$ on hops-0 questions) and near-zero on HotpotQA and MuSiQue shallow strata. This exploratory finding motivates the gate: applying the budget-aware planner to shallow plans does not help on average and can harm quality.
+\noindent Flat allocation reduces EM by 2.10 points on shallow plans ($p < 0.001$), with the harm concentrated in 2WikiMultiHop ($\Delta$EM $= -0.045$ on hops-0 questions) and near-zero on HotpotQA and MuSiQue shallow strata (secondary analysis, Holm-corrected across dataset $\times$ hops subgroups). This exploratory finding, obtained under the evaluated permissive-budget allocation regime, motivates the gate: applying the budget-aware planner to shallow plans does not help on average and can harm quality.
 
 \begin{figure}[t]
 \centering
@@ -125,7 +125,7 @@ The independent shallow confirmation could not be executed. Zero answers were ge
 
 \subsection{Population-Level Effect}\label{sec:results:population}
 
-The confirmatory deep stratum constitutes approximately 5.4\% of the validation natural workload (350 / 6,494); the full deep-eligible stratum is 5.6\% (361 / 6,494). The population-level treatment effect of A' is:
+The confirmatory deep stratum constitutes 5.39\% of the validation natural workload (350 / 6,494). The population-level treatment effect of A' is:
 
 $\text{ATE}_{\text{pop}}(\text{A'}) = P(\text{eligible} \wedge \text{executable}) \times \text{ATE}_{\text{exec}} = 0.054 \times 0.0771 = +0.00416 \text{ EM/question}.$
 

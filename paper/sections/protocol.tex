@@ -2,7 +2,7 @@
 All experiments use the SlotRAG pipeline with a single LLM backend: Qwen3.5-9B for plan compilation and answer generation. Thinking mode is disabled. The hybrid retriever combines BM25 (sparse), dense embedding retrieval (Qwen3-Embedding-0.6B), and reciprocal rank fusion, followed by a cross-encoder reranker (bge-reranker-v2-m3).
 
 \paragraph{Matched budget.}
-All methods share one protocol: $\max\_\mathrm{steps}=8$, $\max\_\mathrm{retrieval\_calls}=8$, $\max\_\mathrm{llm\_calls}=96$. Budget-exceeded items score $0.0$. This is the \emph{confirmatory} budget; an earlier permissive exploratory trace (used for mechanism discovery) used higher limits and is explicitly labeled throughout.
+All methods share one protocol: $\max\_\mathrm{steps}=8$, $\max\_\mathrm{retrieval\_calls}=8$, $\max\_\mathrm{llm\_calls}=96$. Budget-exceeded items score $0.0$; because evaluation uses exact-match scoring, budget-exhausted executions without a final answer receive $\text{EM} = 0$. This is the \emph{confirmatory} budget; an earlier permissive exploratory trace (used for mechanism discovery) used higher limits and is explicitly labeled throughout.
 
 \paragraph{Benchmarks.}
 Three multi-hop benchmarks: HotpotQA \cite{hotpotqa} (diverse two-hop questions), 2WikiMultiHopQA \cite{2wikimultihop} (structured two-hop questions requiring bridging and comparison), and MuSiQue \cite{musique} (composite multi-hop questions spanning two to four hops). Primary metric: Exact Match (EM). Secondary: F1. Samples are drawn from the validation set (seed $2027$, stratified by structural depth).

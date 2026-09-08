@@ -1,4 +1,4 @@
-We address a systems problem in multi-hop RAG: a logically valid evidence decomposition need not be physically executable under a hard global retrieval budget. We formalize this as a budget-feasibility problem over typed evidence plans and make three contributions.
+We address a budget-feasibility bottleneck in a specific class of multi-hop RAG execution workloads: evidence plans compiled under a hard retrieval-call budget that may not compose into a physically executable allocation. We formalize this as a budget-feasibility problem over typed evidence plans and make three contributions.
 
 \paragraph{Typed evidence plans} separate multi-hop evidence requirements---slots, joins, operators---from their physical materialization, exposing typed couplings as a first-class object that enables compile-time analysis.
 
@@ -6,7 +6,7 @@ We address a systems problem in multi-hop RAG: a logically valid evidence decomp
 
 \paragraph{Structure-gated budget-feasible planning} applies a budget-aware flat optimizer selectively: on deep plans ($\texttt{structural\_hops} \geq 2$) with statically infeasible allocations, the planner improves answer quality by 7.7 EM points and eliminates all 146 budget-exhaustion events under the matched protocol ($p < 10^{-6}$). On shallow plans, the same optimizer can reduce answer quality; the gate protects these plans by retaining static execution.
 
-A dependency-sensitive importance law is ablated: it yields a marginal, statistically insignificant accuracy improvement over the uniform flat optimizer on deep plans ($p = 0.743$) and is therefore not part of the final method.
+A dependency-sensitive importance law is ablated: it yields a marginal, statistically insignificant accuracy change over the uniform flat optimizer on deep plans ($p = 0.743$) and is therefore not part of the final method.
 
 The independent shallow-regime confirmation was pre-registered but could not be executed because frozen shallow plan payloads were unavailable. The gate's benefit on the shallow regime is supported only by large-scale exploratory evidence; an independent matched-budget confirmation remains an open requirement.
 

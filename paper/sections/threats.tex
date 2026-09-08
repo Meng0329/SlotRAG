@@ -14,7 +14,7 @@ The shallow-regime harm and A' vs.\ always-flat improvement are established thro
 Slot plans are compiled by an LLM (Qwen3.5-9B) and validated through deterministic syntax checking. Different compilers or different calls may produce different plans for the same question, potentially changing the structural depth classification and the static allocation. The frozen protocol ensures that the same plan is used across all arms in paired comparisons, but the results are specific to this compiler's output distribution.
 
 \paragraph{Natural prevalence.}
-Deep eligible plans ($\texttt{hops} \geq 2$, physically executable) constitute approximately 5.6\% of the validation natural workload (361 / 6,494). The population-level effect is bounded by this prevalence. On workloads with a higher fraction of deep plans, the gate's value would increase proportionally; on workloads dominated by shallow plans, it would decrease.
+Deep eligible plans ($\texttt{hops} \geq 2$, physically executable) constitute approximately 5.39\% of the validation natural workload (350 / 6,494). The population-level effect is bounded by this prevalence. On workloads with a higher fraction of deep plans, the gate's value would increase proportionally; on workloads dominated by shallow plans, it would decrease.
 
 \paragraph{H-STRUCT-4 frozen-shallow unavailability.}
 The V1.2 frozen census persisted only plan hashes (not full SlotPlan JSON) for the 6,133 shallow questions. This is an infrastructure limitation, not a method limitation: the census was designed to support the deep-eligible confirmatory evaluation, and the shallow-payload gap was not anticipated as a blocker. A future V1.3 census that persists full payloads for all questions would enable the independent shallow confirmation.
